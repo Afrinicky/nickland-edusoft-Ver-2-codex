@@ -27,7 +27,7 @@ const COLUMNS = [
   { field: 'mother_contact',     label: "Mother's Contact", width: 130,  type: 'text' },
   { field: 'guardian_name',      label: "Guardian Name",    width: 160,  type: 'text' },
   { field: 'guardian_contact',   label: "Guardian Cont.",   width: 130,  type: 'text' },
-  { field: 'status',             label: 'Status',           width: 90,   type: 'enum',   values: ['Active', 'Inactive', 'Graduated'] },
+  { field: 'status',             label: 'Status',           width: 90,   type: 'enum',   values: ['Active', 'Inactive', 'Graduated', 'Transferred'] },
   { field: 'inactive_reason',    label: 'Reason',           width: 130,  type: 'text' },
   { field: 'admission_date',     label: 'Admission Date',   width: 120,  type: 'date' },
   { field: 'notes',              label: 'Notes',            width: 200,  type: 'text' },
@@ -90,7 +90,7 @@ export default function StudentsSheetTab() {
     setEditingValue('');
   }
 
-  async function commitEdit() {
+  async function commitEdit(valueOverride) {
     if (!activeCell) return;
     const row = rows[activeCell.rowIndex];
     if (!row) return;
@@ -98,7 +98,8 @@ export default function StudentsSheetTab() {
     const currentVal = activeCell.field === 'current_class_id'
       ? row.current_class_id
       : row[activeCell.field];
-    const newVal = editingValue === '' ? null : editingValue;
+    const valueToSave = valueOverride !== undefined ? valueOverride : editingValue;
+    const newVal = valueToSave === '' ? null : valueToSave;
 
     // Skip if unchanged
     if (String(currentVal || '') === String(newVal || '')) {
@@ -167,8 +168,11 @@ export default function StudentsSheetTab() {
           <select
             ref={inputRef}
             value={editingValue}
-            onChange={(e) => setEditingValue(e.target.value)}
-            onBlur={commitEdit}
+            onChange={(e) => {
+              setEditingValue(e.target.value);
+              commitEdit(e.target.value);
+            }}
+            onBlur={cancelEdit}
             onKeyDown={handleKeyDown}
             className="sheet-cell-editor"
             disabled={saving}
@@ -251,6 +255,7 @@ export default function StudentsSheetTab() {
             <option value="Active">Active</option>
             <option value="Inactive">Inactive</option>
             <option value="Graduated">Graduated</option>
+            <option value="Transferred">Transferred</option>
           </select>
           <input
             type="text"
