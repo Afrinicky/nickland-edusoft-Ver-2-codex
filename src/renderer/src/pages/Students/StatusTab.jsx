@@ -34,6 +34,19 @@ export default function StudentsStatusTab() {
     if (res.ok) showToast(`Class list PDF saved`);
   }
 
+
+  async function handleStatusChange(studentId, nextStatus) {
+    const res = await window.api.students.update(studentId, { status: nextStatus });
+    if (!res.ok) {
+      showToast('Status update failed', 'error');
+      return;
+    }
+    setStudents(prev => prev.map(s => (
+      s.id === studentId ? { ...s, status: nextStatus } : s
+    )));
+    showToast(`Student status saved as ${nextStatus}`, 'success');
+  }
+
   async function handleDownload() {
     const res = await window.api.app.showSaveDialog({
       title: 'Save students as Excel',
@@ -102,7 +115,19 @@ export default function StudentsStatusTab() {
                 <td>{s.gender}</td>
                 <td>{s.age}</td>
                 <td>{s.father_contact || s.mother_contact || s.guardian_contact || '—'}</td>
-                <td><span className="badge badge-success">{s.status}</span></td>
+                <td onClick={e => e.stopPropagation()}>
+                  <select
+                    className="select"
+                    value={s.status || 'Active'}
+                    onChange={e => handleStatusChange(s.id, e.target.value)}
+                    style={{ maxWidth: 130 }}
+                  >
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                    <option value="Graduated">Graduated</option>
+                    <option value="Transferred">Transferred</option>
+                  </select>
+                </td>
               </tr>
             ))}
             {students.length === 0 && (

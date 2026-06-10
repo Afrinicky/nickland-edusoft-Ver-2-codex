@@ -24,7 +24,7 @@ const FIELD_MAP = {
   guardian_name:      { col: 'guardian_name',      type: 'text' },
   guardian_contact:   { col: 'guardian_contact',   type: 'text' },
   current_class_id:   { col: 'current_class_id',   type: 'fk' },
-  status:             { col: 'status',             type: 'enum', values: ['Active', 'Inactive', 'Graduated'] },
+  status:             { col: 'status',             type: 'enum', values: ['Active', 'Inactive', 'Graduated', 'Transferred'] },
   inactive_reason:    { col: 'inactive_reason',    type: 'text' },
   admission_date:     { col: 'admission_date',     type: 'date' },
   notes:              { col: 'notes',              type: 'text' },

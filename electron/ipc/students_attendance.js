@@ -164,20 +164,30 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db) {
     });
   });
 
-  // Mark a single day for a student; appends to existing reason if absent.
+  // Mark a single day for a student. Update existing rows first so already-marked
+  // attendance can be changed even in older databases that may contain duplicates.
   ipcMain.handle('students:register-mark', (_e, { studentId, date, status, reason, markedBy, termId }) => {
     const existing = db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?')
       .get(studentId, date);
-    let notes = reason || null;
-    db.prepare(`
-      INSERT INTO student_attendance (student_id, date, status, marked_by, term_id, notes)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT (student_id, date) DO UPDATE SET
-        status = excluded.status,
-        marked_by = excluded.marked_by,
-        notes = CASE WHEN excluded.status = 'absent' THEN excluded.notes ELSE NULL END
-    `).run(studentId, date, status, markedBy || null, termId || null, notes);
-    return { ok: true };
+    const notes = status === 'absent' ? (reason || existing?.notes || null) : null;
+
+    const update = db.prepare(`
+      UPDATE student_attendance
+      SET status = ?,
+          marked_by = ?,
+          term_id = ?,
+          notes = ?
+      WHERE student_id = ? AND date = ?
+    `).run(status, markedBy || null, termId || null, notes, studentId, date);
+
+    if (update.changes === 0) {
+      db.prepare(`
+        INSERT INTO student_attendance (student_id, date, status, marked_by, term_id, notes)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(studentId, date, status, markedBy || null, termId || null, notes);
+    }
+
+    return { ok: true, updated: update.changes > 0 };
   });
 
   // Save just the absence reason for a student on a date
