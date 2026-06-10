@@ -167,30 +167,6 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
     });
   });
 
-
-  // ── Attendance Register export (current class/week view) ───────────────
-  ipcMain.handle('students:export-attendance-register-excel', async (_e, { classId, dates, termId, savePath }) => {
-    try {
-      if (!savePath) return { ok: false, error: 'No save path selected' };
-      const register = getWeeklyRegisterExportData(db, classId, dates, termId);
-      await exportAttendanceRegisterExcel(register, savePath);
-      return { ok: true, path: savePath, count: register.rows.length };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('students:export-attendance-register-pdf', async (_e, { classId, dates, termId, savePath }) => {
-    try {
-      if (!savePath) return { ok: false, error: 'No save path selected' };
-      const register = getWeeklyRegisterExportData(db, classId, dates, termId);
-      await exportAttendanceRegisterPdf(register, savePath, getResourcePath);
-      return { ok: true, path: savePath, count: register.rows.length };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
   // Mark a single day for a student. Update existing rows first so already-marked
   // attendance can be changed even in older databases that may contain duplicates.
   ipcMain.handle('students:register-mark', (_e, { studentId, date, status, reason, markedBy, termId }) => {
