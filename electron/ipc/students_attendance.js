@@ -1,7 +1,10 @@
 // Nickland Edusoft — Student Attendance & Events IPC
 // Copyright © 2026 Nickland Sales. All rights reserved.
+const fs = require('fs');
+const path = require('path');
+const ExcelJS = require('exceljs');
 
-module.exports = function registerStudentAttendanceHandlers(ipcMain, db) {
+module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDataPath, getResourcePath) {
 
   // ── Attendance: list for a student in a term ──────────
   ipcMain.handle('students:list-attendance', (_e, { studentId, termId }) => {
@@ -200,3 +203,235 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db) {
     return { ok: true };
   });
 };
+
+
+function getSetting(db, key, fallback = '') {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row?.value || fallback;
+}
+
+function getWeeklyRegisterExportData(db, classId, dates, termId) {
+  if (!classId || !Array.isArray(dates) || dates.length === 0) {
+    throw new Error('Class and dates are required for attendance export');
+  }
+
+  const classRow = db.prepare('SELECT id, name, short_code FROM class_groups WHERE id = ?').get(classId);
+  if (!classRow) throw new Error('Class not found');
+
+  const term = termId
+    ? db.prepare('SELECT * FROM terms WHERE id = ?').get(termId)
+    : db.prepare('SELECT * FROM terms WHERE is_current = 1').get();
+
+  const students = db.prepare(`
+    SELECT id, index_number, surname, first_name, other_names
+    FROM students
+    WHERE current_class_id = ? AND status = 'Active'
+    ORDER BY surname, first_name
+  `).all(classId);
+
+  const placeholders = dates.map(() => '?').join(',');
+  const rows = students.map((student, index) => {
+    const records = db.prepare(`
+      SELECT date, status, notes FROM student_attendance
+      WHERE student_id = ? AND date IN (${placeholders})
+    `).all(student.id, ...dates);
+    const attendance = Object.fromEntries(records.map(r => [r.date, r]));
+    return {
+      no: index + 1,
+      indexNumber: student.index_number || '',
+      name: [student.surname, student.first_name, student.other_names].filter(Boolean).join(' '),
+      attendance,
+      presentCount: dates.filter(date => attendance[date]?.status === 'present').length,
+      absenceReasons: records
+        .filter(r => r.status === 'absent' && r.notes)
+        .map(r => `${formatDateLabel(r.date)}: ${r.notes}`)
+        .join('\n'),
+    };
+  });
+
+  return {
+    schoolName: getSetting(db, 'school_name', 'Nickland Edusoft'),
+    schoolMotto: getSetting(db, 'school_motto', ''),
+    schoolAddress: getSetting(db, 'school_address', ''),
+    logoPath: getSetting(db, 'school_logo_path', ''),
+    className: classRow.name || classRow.short_code || `Class ${classId}`,
+    termLabel: term?.name || term?.label || term?.term_name || 'Current Term',
+    dates,
+    rows,
+  };
+}
+
+function formatDateLabel(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+function statusLabel(status) {
+  if (!status) return '';
+  const labels = { present: 'Present', absent: 'Absent', late: 'Late', excused: 'Excused' };
+  return labels[status] || String(status).replace(/_/g, ' ');
+}
+
+function ensureOutputDir(savePath) {
+  const dir = path.dirname(savePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+async function exportAttendanceRegisterExcel(register, savePath) {
+  ensureOutputDir(savePath);
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Nickland Edusoft';
+  wb.created = new Date();
+  const ws = wb.addWorksheet('Attendance Register');
+  const dateRange = `${formatDateLabel(register.dates[0])} - ${formatDateLabel(register.dates[register.dates.length - 1])}`;
+  const totalColumns = 5 + register.dates.length;
+
+  ws.mergeCells(1, 1, 1, totalColumns);
+  ws.getCell(1, 1).value = register.schoolName;
+  ws.getCell(1, 1).font = { size: 16, bold: true };
+  ws.getCell(1, 1).alignment = { horizontal: 'center' };
+  if (register.schoolMotto) {
+    ws.mergeCells(2, 1, 2, totalColumns);
+    ws.getCell(2, 1).value = register.schoolMotto;
+    ws.getCell(2, 1).alignment = { horizontal: 'center' };
+  }
+  ws.mergeCells(3, 1, 3, totalColumns);
+  ws.getCell(3, 1).value = `Attendance Register - ${register.className}`;
+  ws.getCell(3, 1).font = { bold: true, size: 13 };
+  ws.getCell(3, 1).alignment = { horizontal: 'center' };
+  ws.mergeCells(4, 1, 4, totalColumns);
+  ws.getCell(4, 1).value = `Term: ${register.termLabel}    Date Range: ${dateRange}`;
+  ws.getCell(4, 1).alignment = { horizontal: 'center' };
+
+  const headers = ['#', 'Index No.', 'Name', ...register.dates.map(formatDateLabel), 'Total Present', 'Absence Reasons'];
+  ws.addRow([]);
+  const headerRow = ws.addRow(headers);
+  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B3A6B' } };
+  headerRow.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+
+  for (const row of register.rows) {
+    ws.addRow([
+      row.no,
+      row.indexNumber,
+      row.name,
+      ...register.dates.map(date => statusLabel(row.attendance[date]?.status)),
+      `${row.presentCount}/${register.dates.length}`,
+      row.absenceReasons,
+    ]);
+  }
+
+  ws.columns.forEach((col, idx) => {
+    if (idx === 0) col.width = 6;
+    else if (idx === 1) col.width = 16;
+    else if (idx === 2) col.width = 28;
+    else if (idx >= 3 && idx < 3 + register.dates.length) col.width = 13;
+    else col.width = idx === 3 + register.dates.length ? 14 : 30;
+  });
+  ws.eachRow((row, rowNumber) => {
+    if (rowNumber >= 6) {
+      row.alignment = { vertical: 'middle', wrapText: true };
+      row.eachCell(cell => { cell.border = thinBorder(); });
+    }
+  });
+  ws.views = [{ state: 'frozen', ySplit: 6 }];
+
+  await wb.xlsx.writeFile(savePath);
+}
+
+function thinBorder() {
+  return {
+    top: { style: 'thin', color: { argb: 'FFD9DEE8' } },
+    left: { style: 'thin', color: { argb: 'FFD9DEE8' } },
+    bottom: { style: 'thin', color: { argb: 'FFD9DEE8' } },
+    right: { style: 'thin', color: { argb: 'FFD9DEE8' } },
+  };
+}
+
+async function exportAttendanceRegisterPdf(register, savePath, getResourcePath) {
+  ensureOutputDir(savePath);
+  const html = buildAttendanceRegisterHtml(register, getResourcePath);
+  await htmlToPdf(html, savePath);
+}
+
+function logoDataUri(register, getResourcePath) {
+  const fallback = typeof getResourcePath === 'function' ? getResourcePath('logo.png') : '';
+  const logoPath = register.logoPath || fallback;
+  if (!logoPath || !fs.existsSync(logoPath)) return '';
+  const ext = path.extname(logoPath).slice(1).toLowerCase() || 'png';
+  return `data:image/${ext};base64,${fs.readFileSync(logoPath).toString('base64')}`;
+}
+
+function buildAttendanceRegisterHtml(register, getResourcePath) {
+  const dateRange = `${formatDateLabel(register.dates[0])} - ${formatDateLabel(register.dates[register.dates.length - 1])}`;
+  const logo = logoDataUri(register, getResourcePath);
+  const dateHeaders = register.dates.map(date => `<th>${escapeHtml(formatDateLabel(date))}</th>`).join('');
+  const rows = register.rows.map(row => `
+    <tr>
+      <td class="num">${row.no}</td>
+      <td>${escapeHtml(row.indexNumber)}</td>
+      <td class="name">${escapeHtml(row.name)}</td>
+      ${register.dates.map(date => `<td class="status ${escapeHtml(row.attendance[date]?.status || '')}">${escapeHtml(statusLabel(row.attendance[date]?.status))}</td>`).join('')}
+      <td class="num"><strong>${row.presentCount}/${register.dates.length}</strong></td>
+      <td class="notes">${escapeHtml(row.absenceReasons).replace(/\n/g, '<br>')}</td>
+    </tr>
+  `).join('');
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  @page { size: A4 landscape; margin: 10mm; }
+  body { font-family: Arial, sans-serif; color: #111827; }
+  .header { display: flex; align-items: center; justify-content: center; gap: 18px; text-align: center; border-bottom: 3px solid #1B3A6B; padding-bottom: 8px; margin-bottom: 10px; }
+  .logo { width: 58px; height: 58px; object-fit: contain; }
+  h1 { margin: 0; color: #1B3A6B; font-size: 22px; letter-spacing: .5px; }
+  .motto { color: #9A6B00; font-style: italic; margin-top: 2px; }
+  .meta { text-align: center; margin: 8px 0 12px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 10px; }
+  th { background: #1B3A6B; color: #fff; padding: 6px 4px; border: 1px solid #d9dee8; }
+  td { border: 1px solid #d9dee8; padding: 5px 4px; vertical-align: top; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .num, .status { text-align: center; white-space: nowrap; }
+  .name { min-width: 150px; }
+  .notes { min-width: 160px; }
+  .present { color: #15803D; font-weight: 700; }
+  .absent { color: #B91C1C; font-weight: 700; }
+</style></head><body>
+  <div class="header">
+    ${logo ? `<img class="logo" src="${logo}" alt="School logo">` : ''}
+    <div>
+      <h1>${escapeHtml(register.schoolName)}</h1>
+      ${register.schoolMotto ? `<div class="motto">${escapeHtml(register.schoolMotto)}</div>` : ''}
+      ${register.schoolAddress ? `<div>${escapeHtml(register.schoolAddress)}</div>` : ''}
+    </div>
+  </div>
+  <div class="meta"><strong>Attendance Register</strong> &nbsp; | &nbsp; Class: ${escapeHtml(register.className)} &nbsp; | &nbsp; Term: ${escapeHtml(register.termLabel)} &nbsp; | &nbsp; Date Range: ${escapeHtml(dateRange)}</div>
+  <table>
+    <thead><tr><th>#</th><th>Index No.</th><th>Name</th>${dateHeaders}<th>Total Present</th><th>Absence Reasons</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</body></html>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function htmlToPdf(html, outPath) {
+  const { BrowserWindow } = require('electron');
+  const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
+  await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  const data = await win.webContents.printToPDF({
+    pageSize: 'A4',
+    landscape: true,
+    printBackground: true,
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+  });
+  fs.writeFileSync(outPath, data);
+  win.close();
+}
