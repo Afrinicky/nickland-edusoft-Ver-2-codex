@@ -69,6 +69,11 @@ export default function AttendanceRegister() {
     for (const r of rows) all[r.student_id] = new Set(dates);
     setSelected(all);
   }
+  function selectDate(date) {
+    const oneDate = {};
+    for (const r of rows) oneDate[r.student_id] = new Set([date]);
+    setSelected(oneDate);
+  }
   function deselectAll() { setSelected({}); }
 
   async function markSelected(status) {
@@ -183,6 +188,15 @@ export default function AttendanceRegister() {
                         {dates.map(d => (
                           <th key={d} className="register-date-header">
                             <div className="register-date-vertical">{fmtDayLabel(d)}</div>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs no-print"
+                              onClick={() => selectDate(d)}
+                              title={`Select all students for ${fmtDayLabel(d)}`}
+                              style={{ marginTop: 6, padding: '2px 4px', fontSize: 10 }}
+                            >
+                              All
+                            </button>
                           </th>
                         ))}
                         <th style={{ minWidth: 70 }} className="text-center">Total</th>

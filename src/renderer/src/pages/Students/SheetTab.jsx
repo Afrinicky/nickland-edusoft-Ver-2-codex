@@ -90,7 +90,7 @@ export default function StudentsSheetTab() {
     setEditingValue('');
   }
 
-  async function commitEdit() {
+  async function commitEdit(valueOverride) {
     if (!activeCell) return;
     const row = rows[activeCell.rowIndex];
     if (!row) return;
@@ -98,7 +98,8 @@ export default function StudentsSheetTab() {
     const currentVal = activeCell.field === 'current_class_id'
       ? row.current_class_id
       : row[activeCell.field];
-    const newVal = editingValue === '' ? null : editingValue;
+    const valueToSave = valueOverride !== undefined ? valueOverride : editingValue;
+    const newVal = valueToSave === '' ? null : valueToSave;
 
     // Skip if unchanged
     if (String(currentVal || '') === String(newVal || '')) {
@@ -167,8 +168,11 @@ export default function StudentsSheetTab() {
           <select
             ref={inputRef}
             value={editingValue}
-            onChange={(e) => setEditingValue(e.target.value)}
-            onBlur={commitEdit}
+            onChange={(e) => {
+              setEditingValue(e.target.value);
+              commitEdit(e.target.value);
+            }}
+            onBlur={cancelEdit}
             onKeyDown={handleKeyDown}
             className="sheet-cell-editor"
             disabled={saving}
