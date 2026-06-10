@@ -1,0 +1,69 @@
+NICKLAND EDUSOFT — END USER LICENSE AGREEMENT (EULA)
+Copyright © 2026 Nickland Sales. All rights reserved.
+
+This software product ("Nickland Edusoft") is the proprietary property of Nickland
+Sales. By installing, copying, or otherwise using this software, the licensee
+("School" or "End User") agrees to be bound by the terms of this Agreement.
+
+1. GRANT OF LICENSE
+   Nickland Sales grants the licensee a non-exclusive, non-transferable license
+   to install and use one (1) copy of the Software on one (1) school premises,
+   subject to the terms herein.
+
+2. RESTRICTIONS
+   The licensee shall NOT:
+   (a) copy, distribute, sub-license, sell, rent, or lease the Software;
+   (b) reverse engineer, decompile, or disassemble the Software;
+   (c) modify, adapt, or create derivative works based on the Software;
+   (d) remove or alter any proprietary notices, labels, or marks.
+
+3. OWNERSHIP
+   The Software is licensed, not sold. Nickland Sales retains all right, title,
+   and interest, including all intellectual property rights, in and to the
+   Software. This Agreement does not transfer any ownership rights.
+
+4. DATA OWNERSHIP
+   The licensee retains full ownership of all data entered into the Software
+   (student records, financial records, etc.). Nickland Sales claims no rights
+   over this data and shall not access it without the licensee's explicit consent.
+
+5. DATA PROTECTION (Ghana Data Protection Act, 2012 — Act 843)
+   The Software is designed to assist the licensee in complying with the
+   Data Protection Act. The licensee remains responsible for lawful processing
+   of personal data, including obtaining consent and providing data subject
+   rights.
+
+6. COMPLIANCE FRAMEWORK
+   This Software is designed in alignment with:
+   • Ghana Ministry of Education (MoE) data standards
+   • Ghana Education Service (GES) reporting requirements
+   • Ghana Revenue Authority (GRA) PAYE and tax remittance formats
+   • SSNIT contribution requirements
+   • International best practices for school information systems
+
+7. SUPPORT & UPDATES
+   Updates and support are provided per the terms of the active service
+   agreement between Nickland Sales and the licensee.
+
+8. WARRANTY DISCLAIMER
+   The Software is provided "AS IS" without warranty of any kind, express or
+   implied, including but not limited to the warranties of merchantability,
+   fitness for a particular purpose, and non-infringement.
+
+9. LIMITATION OF LIABILITY
+   In no event shall Nickland Sales be liable for any indirect, incidental,
+   special, exemplary, or consequential damages arising out of the use of or
+   inability to use the Software.
+
+10. TERMINATION
+    This Agreement may be terminated by Nickland Sales if the licensee
+    breaches any of its terms. Upon termination, the licensee must cease all
+    use of the Software and uninstall all copies.
+
+11. GOVERNING LAW
+    This Agreement shall be governed by the laws of the Republic of Ghana.
+    Any disputes shall be resolved in the courts of Ghana.
+
+For licensing inquiries, support, or other matters, contact Nickland Sales.
+
+— End of License Agreement —

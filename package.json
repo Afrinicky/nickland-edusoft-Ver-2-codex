@@ -1,0 +1,72 @@
+{
+  "name": "nickland-edusoft",
+  "version": "2.0.0",
+  "description": "Nickland Edusoft — School Management System by Nickland Sales",
+  "main": "electron/main.js",
+  "author": "Nickland Sales",
+  "license": "Proprietary",
+  "scripts": {
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on http://localhost:5173 && electron .",
+    "dev": "concurrently \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "build:renderer": "vite build",
+    "build": "npm run build:renderer && electron-builder",
+    "build:win": "npm run build:renderer && electron-builder --win",
+    "rebuild": "electron-rebuild -f -w better-sqlite3"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.0.0",
+    "bcryptjs": "^2.4.3",
+    "docx": "^9.0.2",
+    "docxtemplater": "^3.50.0",
+    "pizzip": "^3.1.7",
+    "exceljs": "^4.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0",
+    "zustand": "^5.0.0",
+    "dayjs": "^1.11.13",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0",
+    "electron-rebuild": "^3.2.9",
+    "vite": "^5.4.0",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "com.nicklandsales.edusoft",
+    "productName": "Nickland Edusoft",
+    "copyright": "Copyright © 2026 Nickland Sales. All rights reserved.",
+    "directories": {
+      "output": "dist-app",
+      "buildResources": "resources"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "resources/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      { "from": "resources", "to": "resources" }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico",
+      "artifactName": "Nickland-Edusoft-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Nickland Edusoft"
+    }
+  }
+}
