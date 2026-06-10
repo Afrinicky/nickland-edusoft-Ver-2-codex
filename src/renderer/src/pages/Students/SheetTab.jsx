@@ -27,7 +27,7 @@ const COLUMNS = [
   { field: 'mother_contact',     label: "Mother's Contact", width: 130,  type: 'text' },
   { field: 'guardian_name',      label: "Guardian Name",    width: 160,  type: 'text' },
   { field: 'guardian_contact',   label: "Guardian Cont.",   width: 130,  type: 'text' },
-  { field: 'status',             label: 'Status',           width: 90,   type: 'enum',   values: ['Active', 'Inactive', 'Graduated'] },
+  { field: 'status',             label: 'Status',           width: 90,   type: 'enum',   values: ['Active', 'Inactive', 'Graduated', 'Transferred'] },
   { field: 'inactive_reason',    label: 'Reason',           width: 130,  type: 'text' },
   { field: 'admission_date',     label: 'Admission Date',   width: 120,  type: 'date' },
   { field: 'notes',              label: 'Notes',            width: 200,  type: 'text' },
@@ -255,6 +255,7 @@ export default function StudentsSheetTab() {
             <option value="Active">Active</option>
             <option value="Inactive">Inactive</option>
             <option value="Graduated">Graduated</option>
+            <option value="Transferred">Transferred</option>
           </select>
           <input
             type="text"

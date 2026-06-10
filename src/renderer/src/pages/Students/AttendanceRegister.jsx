@@ -64,6 +64,30 @@ export default function AttendanceRegister() {
   function isSelected(studentId, date) {
     return (selected[studentId] || new Set()).has(date);
   }
+  function isRowSelected(studentId) {
+    const set = selected[studentId] || new Set();
+    return dates.length > 0 && dates.every(date => set.has(date));
+  }
+  function isEverythingSelected() {
+    return rows.length > 0 && rows.every(row => isRowSelected(row.student_id));
+  }
+  function toggleRow(studentId) {
+    setSelected(prev => {
+      const next = { ...prev };
+      const set = new Set(prev[studentId] || []);
+      const fullySelected = dates.every(date => set.has(date));
+      if (fullySelected) {
+        delete next[studentId];
+      } else {
+        next[studentId] = new Set(dates);
+      }
+      return next;
+    });
+  }
+  function toggleAllRows() {
+    if (isEverythingSelected()) deselectAll();
+    else selectAll();
+  }
   function selectAll() {
     const all = {};
     for (const r of rows) all[r.student_id] = new Set(dates);
@@ -182,7 +206,15 @@ export default function AttendanceRegister() {
                   <table className="sheet-table register-table">
                     <thead>
                       <tr>
-                        <th className="sheet-row-num-header">#</th>
+                        <th className="sheet-row-num-header">
+                          <input
+                            type="checkbox"
+                            checked={isEverythingSelected()}
+                            onChange={toggleAllRows}
+                            title="Select all students for all dates"
+                          />
+                        </th>
+                        <th className="sheet-row-num-header" style={{ left: 36 }}>#</th>
                         <th style={{ minWidth: 90 }}>Index No.</th>
                         <th style={{ minWidth: 160 }}>Name</th>
                         {dates.map(d => (
@@ -208,7 +240,15 @@ export default function AttendanceRegister() {
                         const absentDates = studentAbsentDates(row);
                         return (
                           <tr key={row.student_id}>
-                            <td className="sheet-row-num">{i + 1}</td>
+                            <td className="sheet-row-num">
+                              <input
+                                type="checkbox"
+                                checked={isRowSelected(row.student_id)}
+                                onChange={() => toggleRow(row.student_id)}
+                                title={`Select all dates for ${row.surname}, ${row.first_name}`}
+                              />
+                            </td>
+                            <td className="sheet-row-num" style={{ left: 36 }}>{i + 1}</td>
                             <td className="sheet-cell" style={{ fontFamily: 'monospace', fontSize: 11 }}>{row.index_number}</td>
                             <td className="sheet-cell"><strong>{row.surname}</strong>, {row.first_name}</td>
                             {dates.map(d => {
