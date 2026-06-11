@@ -89,7 +89,7 @@ app.whenReady().then(async () => {
   // Register all IPC handlers
   registerAuthHandlers(ipcMain, db);
   registerDashboardHandlers(ipcMain, db);
-  registerStudentAttendanceHandlers(ipcMain, db);
+  registerStudentAttendanceHandlers(ipcMain, db, userDataPath, getResourcePath);
   registerStudentsSheetHandlers(ipcMain, db);
   registerAcademicsHandlers(ipcMain, db);
   registerFeesExtraHandlers(ipcMain, db);

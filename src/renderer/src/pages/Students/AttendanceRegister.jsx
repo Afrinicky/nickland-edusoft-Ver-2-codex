@@ -19,6 +19,18 @@ function weekDates(weekStart) {
     return fmtISO(d);
   });
 }
+function dateRange(startIso, endIso) {
+  const start = new Date(`${startIso}T00:00:00`);
+  const end = new Date(`${endIso}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [];
+  const out = [];
+  const d = new Date(start);
+  while (d <= end) {
+    out.push(fmtISO(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 function fmtDayLabel(iso) {
   const d = new Date(iso);
@@ -27,12 +39,15 @@ function fmtDayLabel(iso) {
   const month = d.toLocaleString('en-GB', { month: 'short' });
   return `${day} ${date} ${month}`;
 }
+const INITIAL_EXPORT_DATES = weekDates(getWeekStart(fmtISO(new Date())));
 
 export default function AttendanceRegister() {
   const { classes, currentTerm, currentUser } = useStore();
   const showToast = useStore(s => s.showToast);
   const [classId, setClassId] = useState('');
   const [anchorDate, setAnchorDate] = useState(fmtISO(new Date()));
+  const [exportStartDate, setExportStartDate] = useState(INITIAL_EXPORT_DATES[0]);
+  const [exportEndDate, setExportEndDate] = useState(INITIAL_EXPORT_DATES[4]);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   // selectedDays: { studentId: Set(dateISO) } — which day-cells are ticked
@@ -40,6 +55,7 @@ export default function AttendanceRegister() {
   // reasonInputs: { 'studentId|date': text }
   const [reasonInputs, setReasonInputs] = useState({});
   const [savingReason, setSavingReason] = useState(null);
+  const [exporting, setExporting] = useState(null);
 
   const weekStart = getWeekStart(anchorDate);
   const dates = weekDates(weekStart);
@@ -64,10 +80,39 @@ export default function AttendanceRegister() {
   function isSelected(studentId, date) {
     return (selected[studentId] || new Set()).has(date);
   }
+  function isRowSelected(studentId) {
+    const set = selected[studentId] || new Set();
+    return dates.length > 0 && dates.every(date => set.has(date));
+  }
+  function isEverythingSelected() {
+    return rows.length > 0 && rows.every(row => isRowSelected(row.student_id));
+  }
+  function toggleRow(studentId) {
+    setSelected(prev => {
+      const next = { ...prev };
+      const set = new Set(prev[studentId] || []);
+      const fullySelected = dates.every(date => set.has(date));
+      if (fullySelected) {
+        delete next[studentId];
+      } else {
+        next[studentId] = new Set(dates);
+      }
+      return next;
+    });
+  }
+  function toggleAllRows() {
+    if (isEverythingSelected()) deselectAll();
+    else selectAll();
+  }
   function selectAll() {
     const all = {};
     for (const r of rows) all[r.student_id] = new Set(dates);
     setSelected(all);
+  }
+  function selectDate(date) {
+    const oneDate = {};
+    for (const r of rows) oneDate[r.student_id] = new Set([date]);
+    setSelected(oneDate);
   }
   function deselectAll() { setSelected({}); }
 
@@ -115,6 +160,52 @@ export default function AttendanceRegister() {
     setAnchorDate(fmtISO(d));
   }
 
+  function safeFilePart(value) {
+    return String(value || 'attendance')
+      .replace(/[^a-z0-9_-]+/gi, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 80) || 'attendance';
+  }
+
+  async function exportRegister(format) {
+    if (!classId) {
+      showToast('Select a class before exporting the attendance register', 'warning');
+      return;
+    }
+    const exportDates = dateRange(exportStartDate, exportEndDate);
+    if (exportDates.length === 0) {
+      showToast('Choose a valid export date range. Export To cannot be before Export From.', 'warning');
+      return;
+    }
+    const currentClass = classes.find(c => String(c.id) === String(classId));
+    const ext = format === 'excel' ? 'xlsx' : 'pdf';
+    const label = `${safeFilePart(currentClass?.name || 'class')}_${exportDates[0]}_${exportDates[exportDates.length - 1]}`;
+    const res = await window.api.app.showSaveDialog({
+      title: `Export Attendance Register as ${format === 'excel' ? 'Excel' : 'PDF'}`,
+      defaultPath: `attendance_register_${label}.${ext}`,
+      filters: [{ name: format === 'excel' ? 'Excel Workbook' : 'PDF Document', extensions: [ext] }],
+    });
+    if (res.canceled || !res.filePath) return;
+
+    setExporting(format);
+    try {
+      const payload = { classId, dates: exportDates, termId: currentTerm?.id, savePath: res.filePath };
+      const out = format === 'excel'
+        ? await window.api.students.exportAttendanceRegisterExcel(payload)
+        : await window.api.students.exportAttendanceRegisterPdf(payload);
+
+      if (!out.ok) {
+        showToast(out.error || 'Attendance register export failed', 'error');
+        return;
+      }
+      showToast(`Attendance register exported to ${ext.toUpperCase()}`, 'success');
+    } catch (err) {
+      showToast(err?.message || 'Attendance register export failed', 'error');
+    } finally {
+      setExporting(null);
+    }
+  }
+
   // For each student, find which dates they were absent (to show reason cell)
   function studentAbsentDates(row) {
     return dates.filter(d => row.attendance[d]?.status === 'absent');
@@ -130,7 +221,6 @@ export default function AttendanceRegister() {
               Tick the day cells, then mark Present or Absent. Reasons for absence are kept on each student's profile.
             </div>
           </div>
-          <button className="btn btn-outline btn-sm" onClick={() => window.print()}>🖨 Print Register</button>
         </div>
         <div className="form-row" style={{ marginTop: 14, alignItems: 'flex-end' }}>
           <div className="form-group">
@@ -152,6 +242,33 @@ export default function AttendanceRegister() {
             <label>Week of</label>
             <div style={{ fontWeight: 600, padding: '8px 0' }}>
               {fmtDayLabel(dates[0])} – {fmtDayLabel(dates[4])}
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Export From</label>
+            <input type="date" value={exportStartDate} onChange={e => setExportStartDate(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label>Export To</label>
+            <input type="date" value={exportEndDate} onChange={e => setExportEndDate(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label>Export</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => exportRegister('excel')}
+                disabled={!classId || exporting}
+              >
+                {exporting === 'excel' ? 'Exporting…' : '📊 Export Excel'}
+              </button>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={() => exportRegister('pdf')}
+                disabled={!classId || exporting}
+              >
+                {exporting === 'pdf' ? 'Exporting…' : '📄 Export PDF'}
+              </button>
             </div>
           </div>
         </div>
@@ -177,12 +294,29 @@ export default function AttendanceRegister() {
                   <table className="sheet-table register-table">
                     <thead>
                       <tr>
-                        <th className="sheet-row-num-header">#</th>
+                        <th className="sheet-row-num-header">
+                          <input
+                            type="checkbox"
+                            checked={isEverythingSelected()}
+                            onChange={toggleAllRows}
+                            title="Select all students for all dates"
+                          />
+                        </th>
+                        <th className="sheet-row-num-header" style={{ left: 36 }}>#</th>
                         <th style={{ minWidth: 90 }}>Index No.</th>
                         <th style={{ minWidth: 160 }}>Name</th>
                         {dates.map(d => (
                           <th key={d} className="register-date-header">
                             <div className="register-date-vertical">{fmtDayLabel(d)}</div>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs no-print"
+                              onClick={() => selectDate(d)}
+                              title={`Select all students for ${fmtDayLabel(d)}`}
+                              style={{ marginTop: 6, padding: '2px 4px', fontSize: 10 }}
+                            >
+                              All
+                            </button>
                           </th>
                         ))}
                         <th style={{ minWidth: 70 }} className="text-center">Total</th>
@@ -194,7 +328,15 @@ export default function AttendanceRegister() {
                         const absentDates = studentAbsentDates(row);
                         return (
                           <tr key={row.student_id}>
-                            <td className="sheet-row-num">{i + 1}</td>
+                            <td className="sheet-row-num">
+                              <input
+                                type="checkbox"
+                                checked={isRowSelected(row.student_id)}
+                                onChange={() => toggleRow(row.student_id)}
+                                title={`Select all dates for ${row.surname}, ${row.first_name}`}
+                              />
+                            </td>
+                            <td className="sheet-row-num" style={{ left: 36 }}>{i + 1}</td>
                             <td className="sheet-cell" style={{ fontFamily: 'monospace', fontSize: 11 }}>{row.index_number}</td>
                             <td className="sheet-cell"><strong>{row.surname}</strong>, {row.first_name}</td>
                             {dates.map(d => {
