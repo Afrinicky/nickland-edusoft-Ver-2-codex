@@ -331,9 +331,18 @@ function registerScoresHandlers(ipcMain, db) {
     return { ok: true };
   });
 
-  // ═══ WHONET-style Exams Scores (all subjects, one sheet) ═══
+  // ═══ WHONET-style Exams Scores (all mapped subjects, one sheet) ═══
   ipcMain.handle('scores:exam-sheet', (_e, { classId, termId }) => {
-    const subjects = db.prepare("SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name").all();
+    let subjects = db.prepare(`
+      SELECT s.id, s.name, s.code
+      FROM subjects s
+      JOIN class_subjects cs ON cs.subject_id = s.id
+      WHERE cs.class_group_id = ? AND s.is_active = 1
+      ORDER BY s.name
+    `).all(classId);
+    if (subjects.length === 0) {
+      subjects = db.prepare("SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name").all();
+    }
     const students = db.prepare(`
       SELECT id, index_number, surname, first_name, other_names
       FROM students WHERE current_class_id = ? AND status = 'Active'
