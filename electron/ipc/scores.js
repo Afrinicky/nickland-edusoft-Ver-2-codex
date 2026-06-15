@@ -376,6 +376,135 @@ function registerScoresHandlers(ipcMain, db) {
     return { ok: true };
   });
 
+
+
+  // ═══ Assessment Compilation (foundation sheet; existing tables only) ═══
+  ipcMain.handle('scores:assessment-compilation-sheet', (_e, { classId, termId }) => {
+    let subjects = db.prepare(`
+      SELECT s.id, s.name, s.code
+      FROM subjects s
+      JOIN class_subjects cs ON cs.subject_id = s.id
+      WHERE cs.class_group_id = ? AND s.is_active = 1
+      ORDER BY s.name
+    `).all(classId);
+    const usedFallbackSubjects = subjects.length === 0;
+    if (usedFallbackSubjects) {
+      subjects = db.prepare('SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name').all();
+    }
+
+    const students = db.prepare(`
+      SELECT id, index_number, surname, first_name, other_names
+      FROM students
+      WHERE current_class_id = ? AND status = 'Active'
+      ORDER BY surname, first_name
+    `).all(classId);
+
+    const { classWeight, examWeight } = getWeights();
+    const rows = students.map(st => {
+      const subjectScores = {};
+      const recs = db.prepare(`
+        SELECT subject_id, class_score, exam_score, total_score
+        FROM scores
+        WHERE student_id = ? AND term_id = ?
+      `).all(st.id, termId);
+      for (const r of recs) {
+        subjectScores[r.subject_id] = {
+          class_score: r.class_score ?? '',
+          exam_score: r.exam_score ?? '',
+          total_score: r.total_score ?? 0,
+        };
+      }
+      const summary = db.prepare(`
+        SELECT days_present, total_days, conduct_traits, learner_interests,
+               learner_talents, teacher_remarks, total_score_all,
+               average_score, class_rank, number_on_roll
+        FROM student_term_summary
+        WHERE student_id = ? AND term_id = ?
+      `).get(st.id, termId) || {};
+      return {
+        student_id: st.id,
+        index_number: st.index_number,
+        surname: st.surname,
+        first_name: st.first_name,
+        other_names: st.other_names,
+        subject_scores: subjectScores,
+        summary,
+      };
+    });
+
+    return {
+      subjects,
+      students: rows,
+      used_fallback_subjects: usedFallbackSubjects,
+      class_weight: classWeight,
+      exam_weight: examWeight,
+    };
+  });
+
+  ipcMain.handle('scores:save-assessment-compilation', (_e, { classId, termId, students }) => {
+    try {
+      const tx = db.transaction(() => {
+        const upsertScore = db.prepare(`
+          INSERT INTO scores (student_id, term_id, subject_id, class_score, exam_score, total_score)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(student_id, term_id, subject_id) DO UPDATE SET
+            class_score = excluded.class_score,
+            exam_score = excluded.exam_score,
+            total_score = excluded.total_score
+        `);
+        const upsertSummary = db.prepare(`
+          INSERT INTO student_term_summary (
+            student_id, term_id, class_group_id, total_score_all, average_score,
+            class_rank, number_on_roll, conduct_traits, learner_interests,
+            learner_talents, teacher_remarks, days_present, total_days
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(student_id, term_id) DO UPDATE SET
+            class_group_id = excluded.class_group_id,
+            total_score_all = excluded.total_score_all,
+            average_score = excluded.average_score,
+            class_rank = excluded.class_rank,
+            number_on_roll = excluded.number_on_roll,
+            conduct_traits = excluded.conduct_traits,
+            learner_interests = excluded.learner_interests,
+            learner_talents = excluded.learner_talents,
+            teacher_remarks = excluded.teacher_remarks,
+            days_present = excluded.days_present,
+            total_days = excluded.total_days
+        `);
+
+        for (const st of (students || [])) {
+          for (const sub of (st.subjects || [])) {
+            upsertScore.run(
+              st.student_id, termId, sub.subject_id,
+              parseFloat(sub.class_score) || 0,
+              parseFloat(sub.exam_score) || 0,
+              parseFloat(sub.total_score) || 0
+            );
+          }
+          const summary = st.summary || {};
+          upsertSummary.run(
+            st.student_id, termId, classId,
+            parseFloat(st.total_score_all) || 0,
+            parseFloat(st.average_score) || 0,
+            st.class_rank || null,
+            st.number_on_roll || null,
+            summary.conduct_traits || '',
+            summary.learner_interests || '',
+            summary.learner_talents || '',
+            summary.teacher_remarks || '',
+            summary.days_present === '' ? null : (parseInt(summary.days_present, 10) || 0),
+            summary.total_days === '' ? null : (parseInt(summary.total_days, 10) || 0)
+          );
+        }
+      });
+      tx();
+      return { ok: true };
+    } catch (err) {
+      console.warn(`[scores:save-assessment-compilation] failed: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
   // ═══ End of Term Results (class+exam combined) ═══
   ipcMain.handle('scores:end-of-term', (_e, { classId, termId }) => {
     const subjects = db.prepare("SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name").all();
