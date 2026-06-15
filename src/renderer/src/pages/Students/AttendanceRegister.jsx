@@ -172,14 +172,9 @@ export default function AttendanceRegister() {
       showToast('Select a class before exporting the attendance register', 'warning');
       return;
     }
-    const exportDates = dateRange(exportStartDate, exportEndDate);
-    if (exportDates.length === 0) {
-      showToast('Choose a valid export date range. Export To cannot be before Export From.', 'warning');
-      return;
-    }
     const currentClass = classes.find(c => String(c.id) === String(classId));
     const ext = format === 'excel' ? 'xlsx' : 'pdf';
-    const label = `${safeFilePart(currentClass?.name || 'class')}_${exportDates[0]}_${exportDates[exportDates.length - 1]}`;
+    const label = `${safeFilePart(currentClass?.name || 'class')}_${dates[0]}_${dates[dates.length - 1]}`;
     const res = await window.api.app.showSaveDialog({
       title: `Export Attendance Register as ${format === 'excel' ? 'Excel' : 'PDF'}`,
       defaultPath: `attendance_register_${label}.${ext}`,
@@ -189,7 +184,7 @@ export default function AttendanceRegister() {
 
     setExporting(format);
     try {
-      const payload = { classId, dates: exportDates, termId: currentTerm?.id, savePath: res.filePath };
+      const payload = { classId, dates, termId: currentTerm?.id, savePath: res.filePath };
       const out = format === 'excel'
         ? await window.api.students.exportAttendanceRegisterExcel(payload)
         : await window.api.students.exportAttendanceRegisterPdf(payload);
@@ -220,6 +215,22 @@ export default function AttendanceRegister() {
             <div className="text-sm text-muted">
               Tick the day cells, then mark Present or Absent. Reasons for absence are kept on each student's profile.
             </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => exportRegister('excel')}
+              disabled={!classId || exporting}
+            >
+              {exporting === 'excel' ? 'Exporting…' : '📊 Export Excel'}
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => exportRegister('pdf')}
+              disabled={!classId || exporting}
+            >
+              {exporting === 'pdf' ? 'Exporting…' : '📄 Export PDF'}
+            </button>
           </div>
         </div>
         <div className="form-row" style={{ marginTop: 14, alignItems: 'flex-end' }}>

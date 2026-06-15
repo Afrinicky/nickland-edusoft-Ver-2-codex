@@ -9,6 +9,7 @@ export default function ClassScoresTab() {
   const { classes, currentTerm } = useStore();
   const showToast = useStore(s => s.showToast);
   const [subjects, setSubjects] = useState([]);
+  const [availableSubjects, setAvailableSubjects] = useState([]);
   const [classId, setClassId] = useState('');
   const [subjectId, setSubjectId] = useState('');
   const [sheet, setSheet] = useState(null);
@@ -18,8 +19,32 @@ export default function ClassScoresTab() {
   const [savingAll, setSavingAll] = useState(false);
 
   useEffect(() => {
-    (async () => setSubjects(await window.api.scores.listSubjects()))();
+    (async () => {
+      const allSubjects = await window.api.scores.listSubjects();
+      setSubjects(allSubjects);
+      setAvailableSubjects(allSubjects);
+    })();
   }, []);
+
+  useEffect(() => {
+    if (!classId) {
+      setAvailableSubjects(subjects);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const mappedSubjects = await window.api.settings.getClassSubjects(classId);
+      const nextSubjects = mappedSubjects.length > 0 ? mappedSubjects : subjects;
+      if (cancelled) return;
+      setAvailableSubjects(nextSubjects);
+      if (subjectId && !nextSubjects.some(s => String(s.id) === String(subjectId))) {
+        setSubjectId('');
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [classId, subjects, subjectId]);
 
   async function loadSheet() {
     if (!classId || !subjectId || !currentTerm) { setSheet(null); return; }
@@ -108,7 +133,7 @@ export default function ClassScoresTab() {
             <label>Subject</label>
             <select value={subjectId} onChange={e => setSubjectId(e.target.value)}>
               <option value="">— Select Subject —</option>
-              {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {availableSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </div>
           <div className="form-group">

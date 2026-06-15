@@ -167,30 +167,6 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
     });
   });
 
-
-  // ── Attendance Register export (current class/week view) ───────────────
-  ipcMain.handle('students:export-attendance-register-excel', async (_e, { classId, dates, termId, savePath }) => {
-    try {
-      if (!savePath) return { ok: false, error: 'No save path selected' };
-      const register = getWeeklyRegisterExportData(db, classId, dates, termId);
-      await exportAttendanceRegisterExcel(register, savePath);
-      return { ok: true, path: savePath, count: register.rows.length };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('students:export-attendance-register-pdf', async (_e, { classId, dates, termId, savePath }) => {
-    try {
-      if (!savePath) return { ok: false, error: 'No save path selected' };
-      const register = getWeeklyRegisterExportData(db, classId, dates, termId);
-      await exportAttendanceRegisterPdf(register, savePath, getResourcePath);
-      return { ok: true, path: savePath, count: register.rows.length };
-    } catch (err) {
-      return { ok: false, error: err.message };
-    }
-  });
-
   // Mark a single day for a student. Update existing rows first so already-marked
   // attendance can be changed even in older databases that may contain duplicates.
   ipcMain.handle('students:register-mark', (_e, { studentId, date, status, reason, markedBy, termId }) => {
@@ -266,7 +242,6 @@ function getWeeklyRegisterExportData(db, classId, dates, termId) {
       name: [student.surname, student.first_name, student.other_names].filter(Boolean).join(' '),
       attendance,
       presentCount: dates.filter(date => attendance[date]?.status === 'present').length,
-      markedCount: dates.filter(date => attendance[date]?.status).length,
       absenceReasons: records
         .filter(r => r.status === 'absent' && r.notes)
         .map(r => `${formatDateLabel(r.date)}: ${r.notes}`)
@@ -329,7 +304,7 @@ async function exportAttendanceRegisterExcel(register, savePath) {
   ws.getCell(4, 1).value = `Term: ${register.termLabel}    Date Range: ${dateRange}`;
   ws.getCell(4, 1).alignment = { horizontal: 'center' };
 
-  const headers = ['#', 'Index No.', 'Name', ...register.dates.map(formatDateLabel), 'Present / Marked', 'Absence Reasons'];
+  const headers = ['#', 'Index No.', 'Name', ...register.dates.map(formatDateLabel), 'Total Present', 'Absence Reasons'];
   ws.addRow([]);
   const headerRow = ws.addRow(headers);
   headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -342,7 +317,7 @@ async function exportAttendanceRegisterExcel(register, savePath) {
       row.indexNumber,
       row.name,
       ...register.dates.map(date => statusLabel(row.attendance[date]?.status)),
-      `${row.presentCount}/${row.markedCount}`,
+      `${row.presentCount}/${register.dates.length}`,
       row.absenceReasons,
     ]);
   }
@@ -398,7 +373,7 @@ function buildAttendanceRegisterHtml(register, getResourcePath) {
       <td>${escapeHtml(row.indexNumber)}</td>
       <td class="name">${escapeHtml(row.name)}</td>
       ${register.dates.map(date => `<td class="status ${escapeHtml(row.attendance[date]?.status || '')}">${escapeHtml(statusLabel(row.attendance[date]?.status))}</td>`).join('')}
-      <td class="num"><strong>${row.presentCount}/${row.markedCount}</strong></td>
+      <td class="num"><strong>${row.presentCount}/${register.dates.length}</strong></td>
       <td class="notes">${escapeHtml(row.absenceReasons).replace(/\n/g, '<br>')}</td>
     </tr>
   `).join('');
@@ -432,7 +407,7 @@ function buildAttendanceRegisterHtml(register, getResourcePath) {
   </div>
   <div class="meta"><strong>Attendance Register</strong> &nbsp; | &nbsp; Class: ${escapeHtml(register.className)} &nbsp; | &nbsp; Term: ${escapeHtml(register.termLabel)} &nbsp; | &nbsp; Date Range: ${escapeHtml(dateRange)}</div>
   <table>
-    <thead><tr><th>#</th><th>Index No.</th><th>Name</th>${dateHeaders}<th>Present / Marked</th><th>Absence Reasons</th></tr></thead>
+    <thead><tr><th>#</th><th>Index No.</th><th>Name</th>${dateHeaders}<th>Total Present</th><th>Absence Reasons</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </body></html>`;
