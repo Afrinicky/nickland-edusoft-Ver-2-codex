@@ -47,6 +47,7 @@ jobs:
         shell: cmd
 
       - name: Upload installer as workflow artifact
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: nickland-edusoft-windows
@@ -54,7 +55,7 @@ jobs:
             dist-app/*.exe
             dist-app/*.blockmap
             dist-app/latest.yml
-          retention-days: 30
+          retention-days: 1
           if-no-files-found: error
 
       - name: Create GitHub Release (only on tags v*)
