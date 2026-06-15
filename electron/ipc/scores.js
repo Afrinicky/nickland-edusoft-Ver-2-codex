@@ -442,61 +442,15 @@ function registerScoresHandlers(ipcMain, db) {
   });
 
   ipcMain.handle('scores:save-assessment-compilation', (_e, { classId, termId, students }) => {
-    if (!classId || !termId) return { ok: false, error: 'Class and term are required.' };
-    const { classWeight, examWeight } = getWeights();
-    const bands = db.prepare('SELECT * FROM grading_bands ORDER BY min_score DESC').all();
-    function remark(score) {
-      for (const b of bands) {
-        if (score >= b.min_score && score <= b.max_score) return b.remark;
-      }
-      return '';
-    }
-    function asNumber(value, label, min, max) {
-      if (value === '' || value == null) return 0;
-      const n = Number(value);
-      if (!Number.isFinite(n) || n < min || n > max) {
-        throw new Error(`${label} must be between ${min} and ${max}.`);
-      }
-      return Math.round(n * 100) / 100;
-    }
-    function asDayCount(value, label) {
-      if (value === '' || value == null) return null;
-      const n = Number(value);
-      if (!Number.isInteger(n) || n < 0) throw new Error(`${label} must be a whole number of days.`);
-      return n;
-    }
-
     try {
       const tx = db.transaction(() => {
         const upsertScore = db.prepare(`
-          INSERT INTO scores (student_id, term_id, subject_id, class_score, exam_score, total_score, grade_remark)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO scores (student_id, term_id, subject_id, class_score, exam_score, total_score)
+          VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(student_id, term_id, subject_id) DO UPDATE SET
             class_score = excluded.class_score,
             exam_score = excluded.exam_score,
-            total_score = excluded.total_score,
-            grade_remark = excluded.grade_remark
-        `);
-        const upsertCompiledAssessment = db.prepare(`
-          INSERT INTO assessment_scores (assessment_column_id, student_id, marks)
-          VALUES (?, ?, ?)
-          ON CONFLICT(assessment_column_id, student_id) DO UPDATE SET marks = excluded.marks
-        `);
-        const findAssessmentColumns = db.prepare(`
-          SELECT id FROM assessment_columns
-          WHERE class_group_id = ? AND subject_id = ? AND term_id = ?
-          ORDER BY display_order, id
-        `);
-        const findCompiledAssessmentColumn = db.prepare(`
-          SELECT id FROM assessment_columns
-          WHERE class_group_id = ? AND subject_id = ? AND term_id = ?
-            AND assessment_type = 'Assessment Compilation'
-          ORDER BY id
-          LIMIT 1
-        `);
-        const createCompiledAssessmentColumn = db.prepare(`
-          INSERT INTO assessment_columns (class_group_id, subject_id, term_id, assessment_type, max_marks, display_order)
-          VALUES (?, ?, ?, 'Assessment Compilation', ?, 999)
+            total_score = excluded.total_score
         `);
         const upsertSummary = db.prepare(`
           INSERT INTO student_term_summary (
@@ -518,72 +472,28 @@ function registerScoresHandlers(ipcMain, db) {
             total_days = excluded.total_days
         `);
 
-        const prepared = (students || []).map(st => {
-          let totalAll = 0;
-          let subjectCount = 0;
-          const subjects = (st.subjects || []).map(sub => {
-            const classScore = asNumber(sub.class_score, 'Class score', 0, classWeight);
-            const examScore = asNumber(sub.exam_score, 'Exam score', 0, 100);
-            const examConverted = Math.round((examScore / 100) * examWeight * 100) / 100;
-            const totalScore = Math.round((classScore + examConverted) * 100) / 100;
-            if (totalScore > 0) {
-              totalAll += totalScore;
-              subjectCount += 1;
-            }
-            return { subject_id: sub.subject_id, classScore, examScore, totalScore };
-          });
-          const summary = st.summary || {};
-          const daysPresent = asDayCount(summary.days_present, 'Attendance Present');
-          const totalDays = asDayCount(summary.total_days, 'Attendance Total');
-          if (daysPresent != null && totalDays != null && totalDays > 0 && daysPresent > totalDays) {
-            throw new Error('Attendance Present cannot exceed Attendance Total.');
-          }
-          return {
-            student_id: st.student_id,
-            subjects,
-            totalAll: Math.round(totalAll * 100) / 100,
-            average: subjectCount ? Math.round((totalAll / subjectCount) * 100) / 100 : 0,
-            summary,
-            daysPresent,
-            totalDays,
-          };
-        });
-
-        const ranked = [...prepared].sort((a, b) => b.average - a.average);
-        const rankByStudent = new Map(ranked.map((row, idx) => [row.student_id, row.average > 0 ? idx + 1 : null]));
-
-        for (const st of prepared) {
-          for (const sub of st.subjects) {
+        for (const st of (students || [])) {
+          for (const sub of (st.subjects || [])) {
             upsertScore.run(
               st.student_id, termId, sub.subject_id,
-              sub.classScore, sub.examScore, sub.totalScore, remark(sub.totalScore)
+              parseFloat(sub.class_score) || 0,
+              parseFloat(sub.exam_score) || 0,
+              parseFloat(sub.total_score) || 0
             );
-
-            // Class Scores stores editable assessment marks in assessment_scores.
-            // Only seed a compilation column when the subject has no assessment
-            // columns yet; if a teacher already built a detailed class-score
-            // sheet, do not overwrite or redistribute those component marks.
-            const existingCols = findAssessmentColumns.all(classId, sub.subject_id, termId);
-            const compiledCol = findCompiledAssessmentColumn.get(classId, sub.subject_id, termId);
-            if (compiledCol) {
-              upsertCompiledAssessment.run(compiledCol.id, st.student_id, sub.classScore);
-            } else if (existingCols.length === 0) {
-              const col = createCompiledAssessmentColumn.run(classId, sub.subject_id, termId, classWeight);
-              upsertCompiledAssessment.run(col.lastInsertRowid, st.student_id, sub.classScore);
-            }
           }
+          const summary = st.summary || {};
           upsertSummary.run(
             st.student_id, termId, classId,
-            st.totalAll,
-            st.average,
-            rankByStudent.get(st.student_id),
-            prepared.length,
-            st.summary.conduct_traits || '',
-            st.summary.learner_interests || '',
-            st.summary.learner_talents || '',
-            st.summary.teacher_remarks || '',
-            st.daysPresent,
-            st.totalDays
+            parseFloat(st.total_score_all) || 0,
+            parseFloat(st.average_score) || 0,
+            st.class_rank || null,
+            st.number_on_roll || null,
+            summary.conduct_traits || '',
+            summary.learner_interests || '',
+            summary.learner_talents || '',
+            summary.teacher_remarks || '',
+            summary.days_present === '' ? null : (parseInt(summary.days_present, 10) || 0),
+            summary.total_days === '' ? null : (parseInt(summary.total_days, 10) || 0)
           );
         }
       });

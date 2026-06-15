@@ -91,54 +91,8 @@ export default function AssessmentCompilationTab() {
     return rows;
   }, [sheet, inputs]);
 
-  function validateSheet() {
-    if (!classId || !termId) return 'Select both Class and Term before saving.';
-    for (const row of computedRows) {
-      for (const sub of sheet.subjects) {
-        const classValue = inputs[`${row.student_id}|class|${sub.id}`];
-        const examValue = inputs[`${row.student_id}|exam|${sub.id}`];
-        if (classValue !== '' && (Number.isNaN(Number(classValue)) || Number(classValue) < 0 || Number(classValue) > sheet.class_weight)) {
-          return `Class score for ${row.surname}, ${row.first_name} in ${sub.name} must be between 0 and ${sheet.class_weight}.`;
-        }
-        if (examValue !== '' && (Number.isNaN(Number(examValue)) || Number(examValue) < 0 || Number(examValue) > 100)) {
-          return `Exam score for ${row.surname}, ${row.first_name} in ${sub.name} must be between 0 and 100.`;
-        }
-      }
-      for (const field of ['days_present', 'total_days']) {
-        const value = inputs[`${row.student_id}|summary|${field}`];
-        if (value !== '' && (Number.isNaN(Number(value)) || Number(value) < 0 || !Number.isInteger(Number(value)))) {
-          return `${field === 'days_present' ? 'Attendance Present' : 'Attendance Total'} for ${row.surname}, ${row.first_name} must be a whole number of days.`;
-        }
-      }
-      const present = Number(inputs[`${row.student_id}|summary|days_present`] || 0);
-      const total = Number(inputs[`${row.student_id}|summary|total_days`] || 0);
-      if (present > total && total > 0) return `Attendance Present cannot exceed Attendance Total for ${row.surname}, ${row.first_name}.`;
-    }
-    return '';
-  }
-
-  async function loadSheet() {
-    if (!classId || !termId) { setSheet(null); return; }
-    setLoading(true);
-    const data = await window.api.scores.assessmentCompilationSheet({ classId, termId });
-    const seed = {};
-    for (const st of data.students) {
-      for (const sub of data.subjects) {
-        seed[`${st.student_id}|class|${sub.id}`] = st.subject_scores[sub.id]?.class_score ?? '';
-        seed[`${st.student_id}|exam|${sub.id}`] = st.subject_scores[sub.id]?.exam_score ?? '';
-      }
-      for (const [field] of summaryFields) seed[`${st.student_id}|summary|${field}`] = st.summary?.[field] ?? '';
-    }
-    setSheet(data);
-    setInputs(seed);
-    setDirty({});
-    setLoading(false);
-  }
-
   async function saveChanges() {
     if (!sheet) return;
-    const validationError = validateSheet();
-    if (validationError) { showToast(validationError, 'error'); return; }
     setSaving(true);
     const payload = { classId, termId, students: computedRows.map(row => ({
       student_id: row.student_id,
@@ -156,12 +110,8 @@ export default function AssessmentCompilationTab() {
     })) };
     const res = await window.api.scores.saveAssessmentCompilation(payload);
     setSaving(false);
-    if (res?.ok) {
-      showToast('Assessment compilation saved and recalculated', 'success');
-      await loadSheet();
-    } else {
-      showToast(res?.error || 'Could not save assessment compilation', 'error');
-    }
+    if (res?.ok) { setDirty({}); showToast('Assessment compilation saved', 'success'); }
+    else showToast(res?.error || 'Could not save assessment compilation', 'error');
   }
 
   const hasDirty = Object.values(dirty).some(Boolean);
