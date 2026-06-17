@@ -1,4 +1,7 @@
 // Scores IPC handlers — score entry, ranking, term summary.
+const ExcelJS = require('exceljs');
+const path = require('path');
+const fs = require('fs');
 function registerScoresHandlers(ipcMain, db) {
   ipcMain.handle('scores:list-subjects', () => {
     return db.prepare('SELECT * FROM subjects WHERE is_active = 1 ORDER BY name').all();
@@ -376,6 +379,145 @@ function registerScoresHandlers(ipcMain, db) {
     return { ok: true };
   });
 
+
+
+  // ═══ Assessment Compilation (foundation sheet; existing tables only) ═══
+  ipcMain.handle('scores:assessment-compilation-sheet', (_e, { classId, termId }) => {
+    let subjects = db.prepare(`
+      SELECT s.id, s.name, s.code
+      FROM subjects s
+      JOIN class_subjects cs ON cs.subject_id = s.id
+      WHERE cs.class_group_id = ? AND s.is_active = 1
+      ORDER BY s.name
+    `).all(classId);
+    const usedFallbackSubjects = subjects.length === 0;
+    if (usedFallbackSubjects) {
+      subjects = db.prepare('SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name').all();
+    }
+
+    const students = db.prepare(`
+      SELECT id, index_number, surname, first_name, other_names
+      FROM students
+      WHERE current_class_id = ? AND status = 'Active'
+      ORDER BY surname, first_name
+    `).all(classId);
+
+    const { classWeight, examWeight } = getWeights();
+    const rows = students.map(st => {
+      const subjectScores = {};
+      const recs = db.prepare(`
+        SELECT subject_id, class_score, exam_score, total_score
+        FROM scores
+        WHERE student_id = ? AND term_id = ?
+      `).all(st.id, termId);
+      for (const r of recs) {
+        subjectScores[r.subject_id] = {
+          class_score: r.class_score ?? '',
+          exam_score: r.exam_score == null ? '' : Math.round(((r.exam_score || 0) / 100) * examWeight * 100) / 100,
+          total_score: r.total_score ?? 0,
+        };
+      }
+      const summary = db.prepare(`
+        SELECT days_present, total_days, conduct_traits, learner_interests,
+               learner_talents, teacher_remarks, total_score_all,
+               average_score, class_rank, number_on_roll
+        FROM student_term_summary
+        WHERE student_id = ? AND term_id = ?
+      `).get(st.id, termId) || {};
+      return {
+        student_id: st.id,
+        index_number: st.index_number,
+        surname: st.surname,
+        first_name: st.first_name,
+        other_names: st.other_names,
+        subject_scores: subjectScores,
+        summary,
+      };
+    });
+
+    return {
+      subjects,
+      students: rows,
+      used_fallback_subjects: usedFallbackSubjects,
+      class_weight: classWeight,
+      exam_weight: examWeight,
+    };
+  });
+
+  ipcMain.handle('scores:save-assessment-compilation', (_e, payload) => {
+    return saveAssessmentCompilationPayload(db, payload, getWeights());
+  });
+
+  ipcMain.handle('scores:export-assessment-compilation', async (_e, { classId, termId, savePath }) => {
+    try {
+      if (!classId || !termId || !savePath) throw new Error('Class, term, and save path are required.');
+      const sheet = getAssessmentCompilationData(db, classId, termId, getWeights());
+      ensureOutputDir(savePath);
+      const wb = new ExcelJS.Workbook();
+      wb.creator = 'Nickland Edusoft';
+      wb.created = new Date();
+      const ws = wb.addWorksheet('Assessment Compilation');
+      ws.addRow(['Assessment Compilation']);
+      ws.addRow(['Class', sheet.class_name || '', 'Term', sheet.term_label || '', 'Class ID', classId, 'Term ID', termId]);
+      ws.addRow([]);
+
+      const header1 = ['Pos.', 'Index No.', 'Name'];
+      const header2 = ['', '', ''];
+      for (const sub of sheet.subjects) {
+        header1.push(sub.name, sub.name, sub.name);
+        header2.push(`Cls ${sheet.class_weight}%`, `Exam ${sheet.exam_weight}%`, 'Total 100%');
+      }
+      header1.push('Overall Total', 'Average', 'Position', 'Attendance Present', 'Days Opened', 'Conduct', 'Interest', 'Talent', "Teacher's Remarks");
+      header2.push('', '', '', '', '', '', '', '', '');
+      ws.addRow(header1);
+      ws.addRow(header2);
+
+      const ranked = computeCompilationRows(sheet);
+      for (const row of ranked) {
+        const out = [row.position || '', row.index_number || '', `${row.surname || ''}, ${row.first_name || ''}`.trim()];
+        for (const sub of sheet.subjects) {
+          const ps = row.perSubject[sub.id] || { class_score: 0, exam_score: 0, total: 0 };
+          out.push(ps.class_score, ps.exam_score, ps.total);
+        }
+        out.push(row.grand_total, row.average, row.position || '', row.summary?.days_present ?? '', row.summary?.total_days ?? '', row.summary?.conduct_traits || '', row.summary?.learner_interests || '', row.summary?.learner_talents || '', row.summary?.teacher_remarks || '');
+        ws.addRow(out);
+      }
+      ws.getRow(4).font = { bold: true, color: { argb: 'FF1B3A6B' } };
+      ws.getRow(5).font = { bold: true, color: { argb: 'FF1B3A6B' } };
+      ws.views = [{ state: 'frozen', ySplit: 5, xSplit: 3 }];
+      ws.columns.forEach((col, idx) => { col.width = idx === 2 ? 24 : idx < 3 ? 14 : 12; });
+      await wb.xlsx.writeFile(savePath);
+      return { ok: true, path: savePath, count: sheet.students.length };
+    } catch (err) {
+      console.warn(`[scores:export-assessment-compilation] failed: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('scores:import-assessment-compilation', async (_e, { classId, termId, filePath, commit }) => {
+    try {
+      if (!classId || !termId || !filePath) throw new Error('Class, term, and file are required.');
+      const sheet = getAssessmentCompilationData(db, classId, termId, getWeights());
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.getWorksheet('Assessment Compilation') || wb.worksheets[0];
+      if (!ws) throw new Error('No worksheet found in workbook.');
+      const parsed = parseAssessmentCompilationWorksheet(ws, sheet);
+      const validationErrors = validateAssessmentCompilationRows(parsed.validRows, getWeights());
+      parsed.errors.push(...validationErrors);
+      if (validationErrors.length > 0) return { ok: false, error: validationErrors[0], validCount: parsed.validRows.length, errors: parsed.errors };
+      if (commit && parsed.validRows.length > 0) {
+        const payload = { classId, termId, students: parsed.validRows };
+        const saved = await saveAssessmentCompilationPayload(db, payload, getWeights());
+        if (!saved.ok) return saved;
+      }
+      return { ok: true, validCount: parsed.validRows.length, savedCount: commit ? parsed.validRows.length : 0, errors: parsed.errors };
+    } catch (err) {
+      console.warn(`[scores:import-assessment-compilation] failed: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
   // ═══ End of Term Results (class+exam combined) ═══
   ipcMain.handle('scores:end-of-term', (_e, { classId, termId }) => {
     const subjects = db.prepare("SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name").all();
@@ -407,6 +549,246 @@ function registerScoresHandlers(ipcMain, db) {
     rows.forEach((r, i) => { r.position = i + 1; });
     return { subjects, students: rows, class_weight: classWeight, exam_weight: examWeight };
   });
+}
+
+
+function getAssessmentCompilationData(db, classId, termId, weights) {
+  let subjects = db.prepare(`
+    SELECT s.id, s.name, s.code
+    FROM subjects s
+    JOIN class_subjects cs ON cs.subject_id = s.id
+    WHERE cs.class_group_id = ? AND s.is_active = 1
+    ORDER BY s.name
+  `).all(classId);
+  const usedFallbackSubjects = subjects.length === 0;
+  if (usedFallbackSubjects) subjects = db.prepare('SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name').all();
+  const classRow = db.prepare('SELECT name FROM class_groups WHERE id = ?').get(classId) || {};
+  const termRow = db.prepare('SELECT label FROM terms WHERE id = ?').get(termId) || {};
+  const students = db.prepare(`
+    SELECT id, index_number, surname, first_name, other_names
+    FROM students
+    WHERE current_class_id = ? AND status = 'Active'
+    ORDER BY surname, first_name
+  `).all(classId);
+  const rows = students.map(st => {
+    const subjectScores = {};
+    const recs = db.prepare(`
+      SELECT subject_id, class_score, exam_score, total_score
+      FROM scores
+      WHERE student_id = ? AND term_id = ?
+    `).all(st.id, termId);
+    for (const r of recs) {
+      subjectScores[r.subject_id] = {
+        class_score: r.class_score ?? '',
+        exam_score: r.exam_score == null ? '' : Math.round(((r.exam_score || 0) / 100) * weights.examWeight * 100) / 100,
+        total_score: r.total_score ?? 0,
+      };
+    }
+    const summary = db.prepare(`
+      SELECT days_present, total_days, conduct_traits, learner_interests,
+             learner_talents, teacher_remarks, total_score_all,
+             average_score, class_rank, number_on_roll
+      FROM student_term_summary
+      WHERE student_id = ? AND term_id = ?
+    `).get(st.id, termId) || {};
+    return {
+      student_id: st.id,
+      index_number: st.index_number,
+      surname: st.surname,
+      first_name: st.first_name,
+      other_names: st.other_names,
+      subject_scores: subjectScores,
+      summary,
+    };
+  });
+  return { subjects, students: rows, used_fallback_subjects: usedFallbackSubjects, class_weight: weights.classWeight, exam_weight: weights.examWeight, class_name: classRow.name, term_label: termRow.label };
+}
+
+function computeCompilationRows(sheet) {
+  const rows = sheet.students.map(st => {
+    const perSubject = {};
+    let grandTotal = 0;
+    let subjectCount = 0;
+    for (const sub of sheet.subjects) {
+      const classScore = Number(st.subject_scores[sub.id]?.class_score || 0);
+      const examScore = Number(st.subject_scores[sub.id]?.exam_score || 0);
+      const total = Math.round((classScore + examScore) * 100) / 100;
+      perSubject[sub.id] = { class_score: classScore, exam_score: examScore, total };
+      if (total > 0) { grandTotal += total; subjectCount += 1; }
+    }
+    return { ...st, perSubject, grand_total: Math.round(grandTotal * 100) / 100, average: subjectCount ? Math.round((grandTotal / subjectCount) * 100) / 100 : 0 };
+  });
+  [...rows].sort((a, b) => b.average - a.average).forEach((row, idx) => { row.position = row.average > 0 ? idx + 1 : ''; });
+  return rows;
+}
+
+function saveAssessmentCompilationPayload(db, { classId, termId, students }, weights) {
+  if (!classId || !termId) return { ok: false, error: 'Class and term are required.' };
+  const { classWeight, examWeight } = weights;
+  const bands = db.prepare('SELECT * FROM grading_bands ORDER BY min_score DESC').all();
+  function remark(score) { for (const b of bands) if (score >= b.min_score && score <= b.max_score) return b.remark; return ''; }
+  function asNumber(value, label, min, max) {
+    if (value === '' || value == null) return 0;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < min || n > max) throw new Error(`${label} must be between ${min} and ${max}.`);
+    return Math.round(n * 100) / 100;
+  }
+  function asDayCount(value, label) {
+    if (value === '' || value == null) return null;
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0) throw new Error(`${label} must be a whole number of days.`);
+    return n;
+  }
+  try {
+    const tx = db.transaction(() => {
+      const upsertScore = db.prepare(`
+        INSERT INTO scores (student_id, term_id, subject_id, class_score, exam_score, total_score, grade_remark)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(student_id, term_id, subject_id) DO UPDATE SET
+          class_score = excluded.class_score,
+          exam_score = excluded.exam_score,
+          total_score = excluded.total_score,
+          grade_remark = excluded.grade_remark
+      `);
+      const upsertCompiledAssessment = db.prepare(`
+        INSERT INTO assessment_scores (assessment_column_id, student_id, marks)
+        VALUES (?, ?, ?)
+        ON CONFLICT(assessment_column_id, student_id) DO UPDATE SET marks = excluded.marks
+      `);
+      const findAssessmentColumns = db.prepare(`SELECT id FROM assessment_columns WHERE class_group_id = ? AND subject_id = ? AND term_id = ? ORDER BY display_order, id`);
+      const findCompiledAssessmentColumn = db.prepare(`SELECT id FROM assessment_columns WHERE class_group_id = ? AND subject_id = ? AND term_id = ? AND assessment_type = 'Assessment Compilation' ORDER BY id LIMIT 1`);
+      const createCompiledAssessmentColumn = db.prepare(`INSERT INTO assessment_columns (class_group_id, subject_id, term_id, assessment_type, max_marks, display_order) VALUES (?, ?, ?, 'Assessment Compilation', ?, 999)`);
+      const upsertSummary = db.prepare(`
+        INSERT INTO student_term_summary (
+          student_id, term_id, class_group_id, total_score_all, average_score,
+          class_rank, number_on_roll, conduct_traits, learner_interests,
+          learner_talents, teacher_remarks, days_present, total_days
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(student_id, term_id) DO UPDATE SET
+          class_group_id = excluded.class_group_id,
+          total_score_all = excluded.total_score_all,
+          average_score = excluded.average_score,
+          class_rank = excluded.class_rank,
+          number_on_roll = excluded.number_on_roll,
+          conduct_traits = excluded.conduct_traits,
+          learner_interests = excluded.learner_interests,
+          learner_talents = excluded.learner_talents,
+          teacher_remarks = excluded.teacher_remarks,
+          days_present = excluded.days_present,
+          total_days = excluded.total_days
+      `);
+      const prepared = (students || []).map(st => {
+        let totalAll = 0, subjectCount = 0;
+        const subjects = (st.subjects || []).map(sub => {
+          const classScore = asNumber(sub.class_score, 'Class score', 0, classWeight);
+          const examConverted = asNumber(sub.exam_score, 'Exam score', 0, examWeight);
+          const examRaw = examWeight > 0 ? Math.round((examConverted / examWeight) * 100 * 100) / 100 : 0;
+          const totalScore = Math.round((classScore + examConverted) * 100) / 100;
+          if (totalScore > 0) { totalAll += totalScore; subjectCount += 1; }
+          return { subject_id: sub.subject_id, classScore, examRaw, totalScore };
+        });
+        const summary = st.summary || {};
+        const daysPresent = asDayCount(summary.days_present, 'Attendance Present');
+        const totalDays = asDayCount(summary.total_days, 'Attendance Total');
+        if (daysPresent != null && totalDays != null && totalDays > 0 && daysPresent > totalDays) throw new Error('Attendance Present cannot exceed Attendance Total.');
+        return { student_id: st.student_id, subjects, totalAll: Math.round(totalAll * 100) / 100, average: subjectCount ? Math.round((totalAll / subjectCount) * 100) / 100 : 0, summary, daysPresent, totalDays };
+      });
+      const ranked = [...prepared].sort((a, b) => b.average - a.average);
+      const rankByStudent = new Map(ranked.map((row, idx) => [row.student_id, row.average > 0 ? idx + 1 : null]));
+      for (const st of prepared) {
+        for (const sub of st.subjects) {
+          upsertScore.run(st.student_id, termId, sub.subject_id, sub.classScore, sub.examRaw, sub.totalScore, remark(sub.totalScore));
+          const existingCols = findAssessmentColumns.all(classId, sub.subject_id, termId);
+          const compiledCol = findCompiledAssessmentColumn.get(classId, sub.subject_id, termId);
+          if (compiledCol) upsertCompiledAssessment.run(compiledCol.id, st.student_id, sub.classScore);
+          else if (existingCols.length === 0) {
+            const col = createCompiledAssessmentColumn.run(classId, sub.subject_id, termId, classWeight);
+            upsertCompiledAssessment.run(col.lastInsertRowid, st.student_id, sub.classScore);
+          }
+        }
+        upsertSummary.run(st.student_id, termId, classId, st.totalAll, st.average, rankByStudent.get(st.student_id), prepared.length, st.summary.conduct_traits || '', st.summary.learner_interests || '', st.summary.learner_talents || '', st.summary.teacher_remarks || '', st.daysPresent, st.totalDays);
+      }
+    });
+    tx();
+    return { ok: true };
+  } catch (err) {
+    console.warn(`[scores:save-assessment-compilation] failed: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+}
+
+function parseAssessmentCompilationWorksheet(ws, sheet) {
+  const subjectsByName = new Map(sheet.subjects.map(s => [String(s.name).trim().toLowerCase(), s]));
+  const studentsByIndex = new Map(sheet.students.map(s => [String(s.index_number || '').trim().toLowerCase(), s]));
+  const headerRow = ws.getRow(4);
+  const subHeaderRow = ws.getRow(5);
+  const subjectColumns = [];
+  let activeSubject = null;
+  for (let col = 4; col <= ws.columnCount; col++) {
+    const name = String(headerRow.getCell(col).value || '').trim();
+    if (name) activeSubject = subjectsByName.get(name.toLowerCase()) || null;
+    const label = String(subHeaderRow.getCell(col).value || headerRow.getCell(col).value || '').trim().toLowerCase();
+    if (activeSubject && (label.startsWith('cls') || label.startsWith('exam'))) subjectColumns.push({ col, subject: activeSubject, type: label.startsWith('cls') ? 'class_score' : 'exam_score' });
+  }
+  const fixed = {};
+  headerRow.eachCell((cell, col) => { fixed[String(cell.value || '').trim().toLowerCase()] = col; });
+  const errors = [], validRows = [];
+  for (let r = 6; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const indexNumber = String(row.getCell(2).value || '').trim();
+    if (!indexNumber) continue;
+    const student = studentsByIndex.get(indexNumber.toLowerCase());
+    if (!student) { errors.push(`Row ${r}: student index number ${indexNumber} was not found in the selected class.`); continue; }
+    const subjects = sheet.subjects.map(sub => ({ subject_id: sub.id, class_score: '', exam_score: '' }));
+    for (const map of subjectColumns) {
+      const item = subjects.find(s => s.subject_id === map.subject.id);
+      if (item) item[map.type] = row.getCell(map.col).value ?? '';
+    }
+    const summary = {
+      days_present: row.getCell(fixed['attendance present'] || 0).value ?? '',
+      total_days: row.getCell(fixed['days opened'] || 0).value ?? '',
+      conduct_traits: row.getCell(fixed['conduct'] || 0).value ?? '',
+      learner_interests: row.getCell(fixed['interest'] || 0).value ?? '',
+      learner_talents: row.getCell(fixed['talent'] || 0).value ?? '',
+      teacher_remarks: row.getCell(fixed["teacher's remarks"] || 0).value ?? '',
+    };
+    validRows.push({ student_id: student.student_id, subjects, summary });
+  }
+  return { validRows, errors };
+}
+
+
+function validateAssessmentCompilationRows(rows, weights) {
+  const errors = [];
+  function checkNumber(value, label, min, max, rowNum) {
+    if (value === '' || value == null) return;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < min || n > max) errors.push(`Row ${rowNum}: ${label} must be between ${min} and ${max}.`);
+  }
+  (rows || []).forEach((row, idx) => {
+    const rowNum = idx + 6;
+    for (const sub of (row.subjects || [])) {
+      checkNumber(sub.class_score, 'Cls score', 0, weights.classWeight, rowNum);
+      checkNumber(sub.exam_score, 'Exam score', 0, weights.examWeight, rowNum);
+    }
+    const present = row.summary?.days_present;
+    const total = row.summary?.total_days;
+    for (const [value, label] of [[present, 'Attendance Present'], [total, 'Days Opened']]) {
+      if (value !== '' && value != null) {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 0) errors.push(`Row ${rowNum}: ${label} must be a whole number of days.`);
+      }
+    }
+    if (present !== '' && total !== '' && present != null && total != null && Number(present) > Number(total) && Number(total) > 0) {
+      errors.push(`Row ${rowNum}: Attendance Present cannot exceed Days Opened.`);
+    }
+  });
+  return errors;
+}
+
+function ensureOutputDir(savePath) {
+  const dir = path.dirname(savePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 function recomputeClassScore(db, classId, subjectId, termId, studentId, weights) {

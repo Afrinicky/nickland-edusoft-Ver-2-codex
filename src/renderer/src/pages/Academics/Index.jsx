@@ -7,6 +7,7 @@ import ExamScoresTab from './ExamScoresTab.jsx';
 import EndOfTermResultsTab from './EndOfTermResultsTab.jsx';
 import EndOfTermReportPanel from './EndOfTermReportPanel.jsx';
 import ExaminationsTab from './ExaminationsTab.jsx';
+import AssessmentCompilationTab from './AssessmentCompilationTab.jsx';
 
 const TABS = [
   { id: 'dashboard',     label: 'Academic Dashboard' },
@@ -14,6 +15,7 @@ const TABS = [
   { id: 'classscores',   label: 'Class Scores' },
   { id: 'examscores',    label: 'Exam Scores' },
   { id: 'results',       label: 'End of Term Results' },
+  { id: 'compilation',   label: 'Assessment Compilation' },
   { id: 'report',        label: 'End of Term Report' },
   { id: 'examinations',  label: 'Examinations' },
 ];
@@ -49,6 +51,7 @@ export default function AcademicsIndex() {
         {tab === 'examscores'   && <ExamScoresTab />}
         {tab === 'results'      && <EndOfTermResultsTab />}
         {tab === 'report'       && <EndOfTermReportPanel />}
+        {tab === 'compilation'  && <AssessmentCompilationTab />}
         {tab === 'examinations' && <ExaminationsTab />}
       </div>
     </div>
