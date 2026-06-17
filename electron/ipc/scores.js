@@ -413,7 +413,7 @@ function registerScoresHandlers(ipcMain, db) {
       for (const r of recs) {
         subjectScores[r.subject_id] = {
           class_score: r.class_score ?? '',
-          exam_score: r.exam_score == null ? '' : Math.round(((r.exam_score || 0) / 100) * examWeight * 100) / 100,
+          exam_score: r.exam_score ?? '',
           total_score: r.total_score ?? 0,
         };
       }
@@ -444,76 +444,66 @@ function registerScoresHandlers(ipcMain, db) {
     };
   });
 
-  ipcMain.handle('scores:save-assessment-compilation', (_e, payload) => {
-    return saveAssessmentCompilationPayload(db, payload, getWeights());
-  });
-
-  ipcMain.handle('scores:export-assessment-compilation', async (_e, { classId, termId, savePath }) => {
+  ipcMain.handle('scores:save-assessment-compilation', (_e, { classId, termId, students }) => {
     try {
-      if (!classId || !termId || !savePath) throw new Error('Class, term, and save path are required.');
-      const sheet = getAssessmentCompilationData(db, classId, termId, getWeights());
-      ensureOutputDir(savePath);
-      const wb = new ExcelJS.Workbook();
-      wb.creator = 'Nickland Edusoft';
-      wb.created = new Date();
-      const ws = wb.addWorksheet('Assessment Compilation');
-      ws.addRow(['Assessment Compilation']);
-      ws.addRow(['Class', sheet.class_name || '', 'Term', sheet.term_label || '', 'Class ID', classId, 'Term ID', termId]);
-      ws.addRow([]);
+      const tx = db.transaction(() => {
+        const upsertScore = db.prepare(`
+          INSERT INTO scores (student_id, term_id, subject_id, class_score, exam_score, total_score)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(student_id, term_id, subject_id) DO UPDATE SET
+            class_score = excluded.class_score,
+            exam_score = excluded.exam_score,
+            total_score = excluded.total_score
+        `);
+        const upsertSummary = db.prepare(`
+          INSERT INTO student_term_summary (
+            student_id, term_id, class_group_id, total_score_all, average_score,
+            class_rank, number_on_roll, conduct_traits, learner_interests,
+            learner_talents, teacher_remarks, days_present, total_days
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(student_id, term_id) DO UPDATE SET
+            class_group_id = excluded.class_group_id,
+            total_score_all = excluded.total_score_all,
+            average_score = excluded.average_score,
+            class_rank = excluded.class_rank,
+            number_on_roll = excluded.number_on_roll,
+            conduct_traits = excluded.conduct_traits,
+            learner_interests = excluded.learner_interests,
+            learner_talents = excluded.learner_talents,
+            teacher_remarks = excluded.teacher_remarks,
+            days_present = excluded.days_present,
+            total_days = excluded.total_days
+        `);
 
-      const header1 = ['Pos.', 'Index No.', 'Name'];
-      const header2 = ['', '', ''];
-      for (const sub of sheet.subjects) {
-        header1.push(sub.name, sub.name, sub.name);
-        header2.push(`Cls ${sheet.class_weight}%`, `Exam ${sheet.exam_weight}%`, 'Total 100%');
-      }
-      header1.push('Overall Total', 'Average', 'Position', 'Attendance Present', 'Days Opened', 'Conduct', 'Interest', 'Talent', "Teacher's Remarks");
-      header2.push('', '', '', '', '', '', '', '', '');
-      ws.addRow(header1);
-      ws.addRow(header2);
-
-      const ranked = computeCompilationRows(sheet);
-      for (const row of ranked) {
-        const out = [row.position || '', row.index_number || '', `${row.surname || ''}, ${row.first_name || ''}`.trim()];
-        for (const sub of sheet.subjects) {
-          const ps = row.perSubject[sub.id] || { class_score: 0, exam_score: 0, total: 0 };
-          out.push(ps.class_score, ps.exam_score, ps.total);
+        for (const st of (students || [])) {
+          for (const sub of (st.subjects || [])) {
+            upsertScore.run(
+              st.student_id, termId, sub.subject_id,
+              parseFloat(sub.class_score) || 0,
+              parseFloat(sub.exam_score) || 0,
+              parseFloat(sub.total_score) || 0
+            );
+          }
+          const summary = st.summary || {};
+          upsertSummary.run(
+            st.student_id, termId, classId,
+            parseFloat(st.total_score_all) || 0,
+            parseFloat(st.average_score) || 0,
+            st.class_rank || null,
+            st.number_on_roll || null,
+            summary.conduct_traits || '',
+            summary.learner_interests || '',
+            summary.learner_talents || '',
+            summary.teacher_remarks || '',
+            summary.days_present === '' ? null : (parseInt(summary.days_present, 10) || 0),
+            summary.total_days === '' ? null : (parseInt(summary.total_days, 10) || 0)
+          );
         }
-        out.push(row.grand_total, row.average, row.position || '', row.summary?.days_present ?? '', row.summary?.total_days ?? '', row.summary?.conduct_traits || '', row.summary?.learner_interests || '', row.summary?.learner_talents || '', row.summary?.teacher_remarks || '');
-        ws.addRow(out);
-      }
-      ws.getRow(4).font = { bold: true, color: { argb: 'FF1B3A6B' } };
-      ws.getRow(5).font = { bold: true, color: { argb: 'FF1B3A6B' } };
-      ws.views = [{ state: 'frozen', ySplit: 5, xSplit: 3 }];
-      ws.columns.forEach((col, idx) => { col.width = idx === 2 ? 24 : idx < 3 ? 14 : 12; });
-      await wb.xlsx.writeFile(savePath);
-      return { ok: true, path: savePath, count: sheet.students.length };
+      });
+      tx();
+      return { ok: true };
     } catch (err) {
-      console.warn(`[scores:export-assessment-compilation] failed: ${err.message}`);
-      return { ok: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('scores:import-assessment-compilation', async (_e, { classId, termId, filePath, commit }) => {
-    try {
-      if (!classId || !termId || !filePath) throw new Error('Class, term, and file are required.');
-      const sheet = getAssessmentCompilationData(db, classId, termId, getWeights());
-      const wb = new ExcelJS.Workbook();
-      await wb.xlsx.readFile(filePath);
-      const ws = wb.getWorksheet('Assessment Compilation') || wb.worksheets[0];
-      if (!ws) throw new Error('No worksheet found in workbook.');
-      const parsed = parseAssessmentCompilationWorksheet(ws, sheet);
-      const validationErrors = validateAssessmentCompilationRows(parsed.validRows, getWeights());
-      parsed.errors.push(...validationErrors);
-      if (validationErrors.length > 0) return { ok: false, error: validationErrors[0], validCount: parsed.validRows.length, errors: parsed.errors };
-      if (commit && parsed.validRows.length > 0) {
-        const payload = { classId, termId, students: parsed.validRows };
-        const saved = await saveAssessmentCompilationPayload(db, payload, getWeights());
-        if (!saved.ok) return saved;
-      }
-      return { ok: true, validCount: parsed.validRows.length, savedCount: commit ? parsed.validRows.length : 0, errors: parsed.errors };
-    } catch (err) {
-      console.warn(`[scores:import-assessment-compilation] failed: ${err.message}`);
+      console.warn(`[scores:save-assessment-compilation] failed: ${err.message}`);
       return { ok: false, error: err.message };
     }
   });
