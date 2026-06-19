@@ -508,6 +508,99 @@ function registerScoresHandlers(ipcMain, db) {
     }
   });
 
+  // ═══ Assessment Compilation — Excel export ═══
+  // Receives a fully computed grid (headers + rows) from the renderer so the
+  // exported sheet mirrors exactly what is shown on screen.
+  ipcMain.handle('scores:export-assessment-compilation', async (_e, { savePath, headers, rows, meta }) => {
+    try {
+      const cols = Array.isArray(headers) ? headers : [];
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Assessment Compilation');
+      let headerRowIdx = 1;
+
+      if (meta && (meta.className || meta.term)) {
+        ws.mergeCells(1, 1, 1, Math.max(1, cols.length));
+        const titleParts = [];
+        if (meta.className) titleParts.push(meta.className);
+        if (meta.term) titleParts.push(meta.term);
+        const titleCell = ws.getCell(1, 1);
+        titleCell.value = `Assessment Compilation — ${titleParts.join('  •  ')}`;
+        titleCell.font = { bold: true, size: 13, color: { argb: 'FF1B3A6B' } };
+        headerRowIdx = 3;
+      }
+
+      const headerRow = ws.getRow(headerRowIdx);
+      cols.forEach((h, i) => { headerRow.getCell(i + 1).value = h; });
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.eachCell({ includeEmpty: false }, c => {
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B3A6B' } };
+        c.alignment = { vertical: 'middle', wrapText: true };
+      });
+      ws.views = [{ state: 'frozen', xSplit: 3, ySplit: headerRowIdx }];
+
+      (rows || []).forEach(rowVals => {
+        const row = ws.addRow([]);
+        (rowVals || []).forEach((v, i) => {
+          row.getCell(i + 1).value = (v === '' || v === null || v === undefined) ? null : v;
+        });
+      });
+
+      cols.forEach((h, i) => {
+        const col = ws.getColumn(i + 1);
+        col.width = Math.min(28, Math.max(10, String(h || '').length + 2));
+      });
+
+      await wb.xlsx.writeFile(savePath);
+      return { ok: true, path: savePath, count: (rows || []).length };
+    } catch (err) {
+      console.warn(`[scores:export-assessment-compilation] failed: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  // ═══ Assessment Compilation — Excel import ═══
+  // Reads a workbook and returns the raw header row + data rows. The renderer
+  // maps editable columns back onto the in-memory sheet (nothing is persisted
+  // until the user saves), so matching is done by the "Index No." column.
+  ipcMain.handle('scores:import-assessment-compilation', async (_e, { filePath }) => {
+    try {
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.worksheets[0];
+      if (!ws) return { ok: false, error: 'No worksheet found in the selected file.' };
+
+      const wantHeader = 'index no.';
+      let headerRowIdx = -1;
+      let headers = [];
+      const scanLimit = Math.min(ws.rowCount || 0, 15);
+      for (let i = 1; i <= scanLimit; i++) {
+        const vals = ws.getRow(i).values;
+        const cells = vals.map(v => unwrapScoreCell(v));
+        if (cells.some(c => String(c == null ? '' : c).trim().toLowerCase() === wantHeader)) {
+          headerRowIdx = i;
+          headers = cells.slice(1).map(c => (c == null ? '' : String(c)));
+          break;
+        }
+      }
+      if (headerRowIdx === -1) {
+        return { ok: false, error: 'Could not find a header row containing "Index No." in the file.' };
+      }
+
+      const rows = [];
+      for (let i = headerRowIdx + 1; i <= ws.rowCount; i++) {
+        const vals = ws.getRow(i).values;
+        const arr = [];
+        for (let j = 1; j <= headers.length; j++) arr.push(unwrapScoreCell(vals[j]));
+        if (arr.every(v => v == null || v === '')) continue;
+        rows.push(arr);
+      }
+      return { ok: true, headers, rows };
+    } catch (err) {
+      console.warn(`[scores:import-assessment-compilation] failed: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
   // ═══ End of Term Results (class+exam combined) ═══
   ipcMain.handle('scores:end-of-term', (_e, { classId, termId }) => {
     const subjects = db.prepare("SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name").all();
@@ -610,6 +703,18 @@ function computeCompilationRows(sheet) {
   });
   [...rows].sort((a, b) => b.average - a.average).forEach((row, idx) => { row.position = row.average > 0 ? idx + 1 : ''; });
   return rows;
+}
+
+// Unwrap any value ExcelJS can return (strings, numbers, dates, rich text,
+// formula results, hyperlinks) into a plain primitive for import matching.
+function unwrapScoreCell(v) {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) return v;
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
+  if (v.richText && Array.isArray(v.richText)) return v.richText.map(rt => rt.text).join('');
+  if (v.result !== undefined) return unwrapScoreCell(v.result);
+  if (v.text !== undefined) return v.text;
+  return String(v);
 }
 
 function saveAssessmentCompilationPayload(db, { classId, termId, students }, weights) {
