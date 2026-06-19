@@ -142,7 +142,7 @@ export default function AssessmentCompilationTab() {
 
   // Text value of a cell (used for copy + export + display of editables).
   function cellText(col, row) {
-    if (col.cellKey) { const v = inputs[col.cellKey]; return v == null ? '' : String(v); }
+    if (col.cellKey) { const v = inputs[col.cellKey(row)]; return v == null ? '' : String(v); }
     if (col.copy) { const v = col.copy(row); return v == null ? '' : String(v); }
     const v = col.get(row);
     return v == null ? '' : String(v);
@@ -377,7 +377,7 @@ export default function AssessmentCompilationTab() {
   // ── Excel export / import ──
   function valueForExport(col, row) {
     if (col.cellKey) {
-      const v = inputs[col.cellKey];
+      const v = inputs[col.cellKey(row)];
       if (v === '' || v == null) return '';
       if (col.type === 'number') { const n = parseFloat(v); return Number.isNaN(n) ? v : n; }
       return v;
