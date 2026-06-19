@@ -1608,14 +1608,23 @@ function formatInstructions(text) {
 async function htmlToPdf(html, outPath) {
   const { BrowserWindow } = require('electron');
   const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
-  await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-  const data = await win.webContents.printToPDF({
-    pageSize: 'A4',
-    printBackground: true,
-    margins: { top: 0, bottom: 0, left: 0, right: 0 },
-  });
-  fs.writeFileSync(outPath, data);
-  win.close();
+  // Load via a temp file rather than a data: URL — large batches (whole class
+  // / multiple students) exceed Chromium's data-URL length limit and fail with
+  // ERR_INVALID_URL (-300).
+  const tmpPath = outPath + '.tmp.html';
+  try {
+    fs.writeFileSync(tmpPath, html, 'utf8');
+    await win.loadFile(tmpPath);
+    const data = await win.webContents.printToPDF({
+      pageSize: 'A4',
+      printBackground: true,
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    });
+    fs.writeFileSync(outPath, data);
+  } finally {
+    win.close();
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore cleanup errors */ }
+  }
   return outPath;
 }
 
