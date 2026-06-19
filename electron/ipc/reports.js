@@ -397,12 +397,18 @@ function enrichSummaryLive(db, studentId, termId, classGroupId, base) {
   }
 
   // --- days_present (per-student, doesn't need classGroupId) ---
+  // If no daily attendance rows exist for this student+term, keep the
+  // persisted term-summary value. This lets Assessment Compilation save a
+  // term-level attendance figure without fabricating dated register rows.
   try {
     const dp = db.prepare(`
-      SELECT COUNT(*) AS c FROM student_attendance
-      WHERE student_id = ? AND term_id = ? AND LOWER(status) = 'present'
+      SELECT
+        COUNT(*) AS marked_days,
+        SUM(CASE WHEN LOWER(status) = 'present' THEN 1 ELSE 0 END) AS present_days
+      FROM student_attendance
+      WHERE student_id = ? AND term_id = ?
     `).get(studentId, termId);
-    if (dp && typeof dp.c === 'number') out.days_present = dp.c;
+    if (dp && dp.marked_days > 0) out.days_present = dp.present_days || 0;
   } catch (err) {
     console.warn(`[reports/F8a] live days_present failed for student ${studentId}, term ${termId}: ${err.message}`);
   }
@@ -415,7 +421,7 @@ function enrichSummaryLive(db, studentId, termId, classGroupId, base) {
         JOIN students s ON s.id = sa.student_id
         WHERE sa.term_id = ? AND s.current_class_id = ? AND s.status = 'Active'
       `).get(termId, classGroupId);
-      if (td && typeof td.c === 'number') out.total_days = td.c;
+      if (td && typeof td.c === 'number' && td.c > 0) out.total_days = td.c;
     } catch (err) {
       console.warn(`[reports/F8a] live total_days failed for class ${classGroupId}, term ${termId}: ${err.message}`);
     }
