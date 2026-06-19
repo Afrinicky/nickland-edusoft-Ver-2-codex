@@ -1577,6 +1577,43 @@ tr:hover td { background: var(--surface-2); }
   position: sticky;
 }
 
+/* Excel-like grid (Assessment Compilation) */
+.ac-grid:focus { outline: none; }
+.ac-grid .ac-cell { user-select: none; }
+.ac-col-header { cursor: pointer; }
+.ac-corner { cursor: pointer; }
+.ac-row-num { cursor: pointer; }
+.ac-cell-selected { background: rgba(27, 58, 107, 0.10) !important; }
+.ac-cell-active {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  z-index: 2;
+}
+.ac-cell-active.ac-cell-selected { background: rgba(27, 58, 107, 0.06) !important; }
+.ac-cell-dirty::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.ac-cell-editing { padding: 0 !important; }
+.ac-cell-editor {
+  width: 100%;
+  box-sizing: border-box;
+  border: 2px solid var(--primary);
+  outline: none;
+  background: var(--surface-1);
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--fg);
+  padding: 5px 8px;
+  margin: 0;
+}
+
 /* Editor inputs */
 .sheet-cell-editor {
   width: 100%;
