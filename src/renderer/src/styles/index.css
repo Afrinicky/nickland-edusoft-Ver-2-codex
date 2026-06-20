@@ -1600,6 +1600,22 @@ tr:hover td { background: var(--surface-2); }
   border-radius: 50%;
   background: var(--success);
 }
+.ac-exammax-input {
+  width: 44px;
+  padding: 1px 3px;
+  margin-left: 2px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  text-align: center;
+  font-family: 'Courier New', monospace;
+  cursor: text;
+}
+.ac-exammax-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(27,58,107,0.12);
+}
 .ac-cell-editing { padding: 0 !important; }
 .ac-cell-editor {
   width: 100%;

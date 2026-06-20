@@ -47,7 +47,7 @@ export default function EndOfTermResultsTab() {
           <div>
             <div className="section-title">End of Term Results</div>
             <div className="text-sm text-muted">
-              Combined results: Class ({data?.class_weight || 40}%) + Exam ({data?.exam_weight || 60}%) per subject.
+              Combined results: each subject's Class score + converted Exam score, using its own weights (Settings → Subjects).
             </div>
           </div>
           <button className="btn btn-outline btn-sm" onClick={() => window.print()}>🖨 Print Results</button>
@@ -105,8 +105,8 @@ export default function EndOfTermResultsTab() {
                     <tr>
                       {data.subjects.map(sub => (
                         <React.Fragment key={sub.id}>
-                          <th className="exam-sub-col text-xs">Cls<br/>{data.class_weight}%</th>
-                          <th className="exam-sub-col text-xs">Exam<br/>{data.exam_weight}%</th>
+                          <th className="exam-sub-col text-xs">Cls<br/>{sub.class_weight_pct ?? 40}%</th>
+                          <th className="exam-sub-col text-xs">Exam<br/>{sub.exam_weight_pct ?? 60}%</th>
                           <th className="exam-sub-col exam-converted-col text-xs">Total<br/>100%</th>
                         </React.Fragment>
                       ))}

@@ -444,6 +444,21 @@ CREATE TABLE IF NOT EXISTS class_score_components (
   FOREIGN KEY (term_id) REFERENCES terms(id)
 );
 
+-- Per class+subject+term exam raw maximum (e.g. an exam marked out of 150).
+-- The exam raw mark stored in scores.exam_score is converted to the subject's
+-- exam_weight_pct using this maximum. Defaults to 100 when unset.
+CREATE TABLE IF NOT EXISTS subject_exam_max (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  class_group_id INTEGER NOT NULL,
+  subject_id INTEGER NOT NULL,
+  term_id INTEGER NOT NULL,
+  max_marks REAL NOT NULL DEFAULT 100,
+  UNIQUE (class_group_id, subject_id, term_id),
+  FOREIGN KEY (class_group_id) REFERENCES class_groups(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+  FOREIGN KEY (term_id) REFERENCES terms(id)
+);
+
 -- WHONET-style assessment columns: per class+subject+term, configurable
 -- assessment types (Assignment, Quiz, Class Test, Mid-Sem Exams) each with
 -- its own max-marks. Teacher can add/remove columns.

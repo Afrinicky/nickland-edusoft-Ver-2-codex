@@ -13,7 +13,11 @@ export default function Subjects() {
   useEffect(() => { refresh(); }, []);
 
   async function save() {
-    await window.api.settings.saveSubject(editing);
+    const res = await window.api.settings.saveSubject(editing);
+    // Recompute every stored score for this subject so the new class/exam
+    // weights take effect across all sheets in real time.
+    const subjectId = res?.id || editing.id;
+    if (subjectId) { try { await window.api.scores.recomputeSubject(subjectId); } catch { /* non-fatal */ } }
     setEditing(null); refresh(); showToast('Subject saved');
   }
   async function remove(id) {

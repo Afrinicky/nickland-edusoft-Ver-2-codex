@@ -41,10 +41,13 @@ export default function ExamScoresTab() {
     const keys = Object.keys(dirty).filter(k => dirty[k]);
     if (keys.length === 0) { showToast('No changes to save', 'info'); return; }
     setSavingAll(true);
+    const maxBySubject = {};
+    for (const s of (sheet?.subjects || [])) maxBySubject[s.id] = s.exam_max || 100;
     for (const key of keys) {
       const [studentId, subjectId] = key.split('|').map(Number);
       let examScore = parseFloat(inputs[key]) || 0;
-      if (examScore > 100) examScore = 100;
+      const mx = maxBySubject[subjectId] || 100;
+      if (examScore > mx) examScore = mx;
       await window.api.scores.saveExamMark({ studentId, subjectId, termId: currentTerm.id, examScore });
     }
     setSavingAll(false);
@@ -61,7 +64,7 @@ export default function ExamScoresTab() {
           <div>
             <div className="section-title">Exam Scores</div>
             <div className="text-sm text-muted">
-              Enter each subject's exam mark out of 100. Each converts to {sheet?.exam_weight || 60}% of the final grade.
+              Enter each subject's raw exam mark out of its set maximum. Each converts to that subject's exam weight. Raw maximums are set on the Assessment Compilation sheet; weights in Settings → Subjects.
             </div>
           </div>
           <button className="btn btn-outline btn-sm" onClick={() => window.print()}>🖨 Print</button>
@@ -111,8 +114,8 @@ export default function ExamScoresTab() {
                       <tr>
                         {sheet.subjects.map(sub => (
                           <React.Fragment key={sub.id}>
-                            <th className="exam-sub-col">Exam<br/><span className="text-xs">/100</span></th>
-                            <th className="exam-sub-col exam-converted-col">{sheet.exam_weight}%</th>
+                            <th className="exam-sub-col">Exam<br/><span className="text-xs">/{sub.exam_max ?? 100}</span></th>
+                            <th className="exam-sub-col exam-converted-col">{sub.exam_weight_pct ?? 60}%</th>
                           </React.Fragment>
                         ))}
                       </tr>
@@ -126,11 +129,12 @@ export default function ExamScoresTab() {
                           {sheet.subjects.map(sub => {
                             const key = `${st.student_id}|${sub.id}`;
                             const raw = parseFloat(inputs[key]) || 0;
-                            const converted = Math.round((Math.min(raw, 100) / 100) * sheet.exam_weight * 100) / 100;
+                            const max = sub.exam_max || 100;
+                            const converted = max > 0 ? Math.round((Math.min(raw, max) / max) * (sub.exam_weight_pct ?? 60) * 100) / 100 : 0;
                             return (
                               <React.Fragment key={sub.id}>
                                 <td className="sheet-cell assessment-cell">
-                                  <input type="number" min="0" max="100" step="0.5"
+                                  <input type="number" min="0" max={max} step="0.5"
                                     value={inputs[key] ?? ''}
                                     onChange={e => setScore(st.student_id, sub.id, e.target.value)}
                                     className={'assessment-mark-input' + (dirty[key] ? ' dirty' : '')}
@@ -151,7 +155,7 @@ export default function ExamScoresTab() {
               </div>
 
               <div className="sheet-help no-print" style={{ marginTop: 12 }}>
-                <strong>How to use:</strong> Enter each exam mark out of 100 · The {sheet.exam_weight}% column converts automatically · Click <strong>Save Changes</strong> (green) to persist · This sheet holds exam scores only — class scores are on the Class Scores tab · The {100 - sheet.exam_weight}/{sheet.exam_weight} split is set in Settings → Grading.
+                <strong>How to use:</strong> Enter each subject's raw exam mark out of its maximum (shown in the header) · The weight% column converts automatically · Click <strong>Save Changes</strong> (green) to persist · This sheet holds exam scores only — class scores are on the Class Scores tab · Raw maximums are set on the Assessment Compilation sheet; class/exam weights per subject in Settings → Subjects.
               </div>
             </>
           )

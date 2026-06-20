@@ -189,10 +189,14 @@ async function generateReportCards(db, userDataPath, getResourcePath, params) {
     `).get(s.id);
     if (!report) continue;
     const scores = db.prepare(`
-      SELECT sc.*, sub.name AS subject_name
+      SELECT sc.*, sub.name AS subject_name,
+             sub.class_weight_pct, sub.exam_weight_pct,
+             COALESCE(sem.max_marks, 100) AS exam_max
       FROM scores sc JOIN subjects sub ON sub.id = sc.subject_id
+      LEFT JOIN subject_exam_max sem
+        ON sem.subject_id = sc.subject_id AND sem.term_id = sc.term_id AND sem.class_group_id = ?
       WHERE sc.student_id = ? AND sc.term_id = ? ORDER BY sub.name
-    `).all(s.id, termId);
+    `).all(report.current_class_id, s.id, termId);
     const filteredScores = filterScoresByClassMapping(db, report.current_class_id, scores);
     const summary = db.prepare(
       'SELECT * FROM student_term_summary WHERE student_id = ? AND term_id = ?'
@@ -443,10 +447,18 @@ function reportCardHtml(header, student, scores, summary, term, signatures) {
   ).toUpperCase().replace(/\s+/g, ' ').trim();
 
   // Score rows. Numbers rounded to integers (the template uses whole marks).
+  // The EXAM column shows the WEIGHTED exam contribution (raw exam_score
+  // converted to exam_weight_pct using the subject's exam max), so that
+  // CLASS + EXAM always equals TOTAL on the card.
   const safeScores = scores || [];
+  const examWeighted = sc => {
+    const max = Number(sc.exam_max) || 100;
+    const w = Number(sc.exam_weight_pct ?? 60);
+    return max > 0 ? Math.round(((sc.exam_score || 0) / max) * w * 100) / 100 : 0;
+  };
   const scoreRows = safeScores.map(sc => {
     const cls = sc.class_score ?? 0;
-    const exm = sc.exam_score ?? 0;
+    const exm = examWeighted(sc);
     const tot = sc.total_score ?? (cls + exm);
     const remark = sc.grade_remark || remarkForTotal(tot);
     return `<tr>
@@ -464,7 +476,15 @@ function reportCardHtml(header, student, scores, summary, term, signatures) {
     : '';
 
   const totalClass = safeScores.reduce((s, x) => s + (x.class_score || 0), 0);
-  const totalExam  = safeScores.reduce((s, x) => s + (x.exam_score  || 0), 0);
+  const totalExam  = safeScores.reduce((s, x) => s + examWeighted(x), 0);
+
+  // Column headers reflect the per-subject weights. When every shown subject
+  // shares the same weight, the exact percentage is displayed; otherwise a
+  // generic label is used (subjects on this card use differing weights).
+  const classWeights = new Set(safeScores.map(x => Number(x.class_weight_pct ?? 40)));
+  const examWeights  = new Set(safeScores.map(x => Number(x.exam_weight_pct ?? 60)));
+  const classHeader = classWeights.size === 1 ? `CLASS (${[...classWeights][0]}%)` : 'CLASS';
+  const examHeader  = examWeights.size === 1 ? `EXAM (${[...examWeights][0]}%)` : 'EXAM';
   const totalAll   = summary?.total_score_all || safeScores.reduce((s, x) => s + (x.total_score || 0), 0);
   const avgScore   = summary?.average_score ?? (safeScores.length ? totalAll / safeScores.length : 0);
   const avgRemark  = safeScores.length > 0 ? remarkForTotal(avgScore) : '';
@@ -514,8 +534,8 @@ function reportCardHtml(header, student, scores, summary, term, signatures) {
         <thead>
           <tr>
             <th class="rc-h-subj">SUBJECT</th>
-            <th class="rc-h-num">CLASS (40%)</th>
-            <th class="rc-h-num">EXAM (60%)</th>
+            <th class="rc-h-num">${escapeHtml(classHeader)}</th>
+            <th class="rc-h-num">${escapeHtml(examHeader)}</th>
             <th class="rc-h-num">TOTAL</th>
             <th class="rc-h-remark">REMARKS</th>
           </tr>

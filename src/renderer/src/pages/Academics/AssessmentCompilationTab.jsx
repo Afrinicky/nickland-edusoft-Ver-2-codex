@@ -20,7 +20,9 @@ const ordinal = n => {
 };
 
 const isEditable = col => col && (col.type === 'number' || col.type === 'text');
-const exportLabel = col => (col.subLabel ? `${col.label} ${col.subLabel}` : col.label);
+// Stable header used for Excel export/import matching (independent of the
+// dynamic on-screen denominators like "/40" or "/150").
+const exportLabel = col => col.exportName || (col.subLabel ? `${col.label} ${col.subLabel}` : col.label);
 
 export default function AssessmentCompilationTab() {
   const { classes, currentTerm } = useStore();
@@ -33,6 +35,8 @@ export default function AssessmentCompilationTab() {
   const [dirty, setDirty] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Per-subject exam raw maximum, editable on the sheet (e.g. exam out of 150).
+  const [examMax, setExamMax] = useState({}); // { [subjectId]: number }
 
   // ── Excel-like selection / editing state ───────────────
   // sel = { ar, ac, fr, fc } — anchor row/col + focus row/col (focus = active cell)
@@ -62,13 +66,17 @@ export default function AssessmentCompilationTab() {
       const seed = {};
       for (const st of data.students) {
         for (const sub of data.subjects) {
+          // class_score is stored weighted; exam_score is the RAW exam mark.
           seed[`${st.student_id}|class|${sub.id}`] = st.subject_scores[sub.id]?.class_score ?? '';
           seed[`${st.student_id}|exam|${sub.id}`] = st.subject_scores[sub.id]?.exam_score ?? '';
         }
         for (const [field] of summaryFields) seed[`${st.student_id}|summary|${field}`] = st.summary?.[field] ?? '';
       }
+      const maxSeed = {};
+      for (const sub of data.subjects) maxSeed[sub.id] = sub.exam_max ?? 100;
       setSheet(data);
       setInputs(seed);
+      setExamMax(maxSeed);
       setDirty({});
       setSel(null);
       setEditing(null);
@@ -98,25 +106,42 @@ export default function AssessmentCompilationTab() {
     });
   }
 
+  // Editable exam raw maximum (per subject). Typing updates the live preview;
+  // blur persists it (and recomputes totals on every other sheet).
+  function changeExamMax(subjectId, value) {
+    setExamMax(prev => ({ ...prev, [subjectId]: value }));
+  }
+  async function persistExamMax(subjectId) {
+    const raw = Number(examMax[subjectId]);
+    const val = Number.isFinite(raw) && raw > 0 ? raw : 100;
+    if (val !== Number(examMax[subjectId])) setExamMax(prev => ({ ...prev, [subjectId]: val }));
+    try { await window.api.scores.setExamMax({ classId, subjectId, termId, maxMarks: val }); }
+    catch { /* persisted again on Save */ }
+  }
+
   const computedRows = useMemo(() => {
     if (!sheet) return [];
     const rows = sheet.students.map(st => {
       const subjectTotals = {};
+      const subjectExam = {}; // converted (weighted) exam score per subject
       let overall = 0;
       let count = 0;
       for (const sub of sheet.subjects) {
+        const examWeight = Number(sub.exam_weight_pct ?? 60);
+        const max = Number(examMax[sub.id] ?? sub.exam_max ?? 100) || 100;
         const cls = parseFloat(inputs[`${st.student_id}|class|${sub.id}`]) || 0;
         const examRaw = parseFloat(inputs[`${st.student_id}|exam|${sub.id}`]) || 0;
-        const examConverted = round2((examRaw / 100) * sheet.exam_weight);
+        const examConverted = round2((examRaw / max) * examWeight);
         const total = round2(cls + examConverted);
+        subjectExam[sub.id] = examConverted;
         subjectTotals[sub.id] = total;
         if (total > 0) { overall += total; count += 1; }
       }
-      return { ...st, subjectTotals, overall: round2(overall), average: count ? round2(overall / count) : 0 };
+      return { ...st, subjectExam, subjectTotals, overall: round2(overall), average: count ? round2(overall / count) : 0 };
     });
     [...rows].sort((a, b) => b.average - a.average).forEach((r, idx) => { r.position = idx + 1; });
     return rows;
-  }, [sheet, inputs]);
+  }, [sheet, inputs, examMax]);
 
   // ── Column model — single source of truth for rendering, copy/paste,
   //    export and import. Order mirrors the original on-screen layout. ──
@@ -127,9 +152,28 @@ export default function AssessmentCompilationTab() {
     cols.push({ id: 'student', label: 'Student', type: 'readonly', minWidth: 180, get: r => `${r.surname}, ${r.first_name}`, render: r => <><strong>{r.surname}</strong>, {r.first_name}</> });
     cols.push({ id: 'days_present', label: 'Attendance Present', type: 'number', minWidth: 100, cellKey: r => `${r.student_id}|summary|days_present` });
     cols.push({ id: 'total_days', label: 'Attendance Total', type: 'number', minWidth: 100, cellKey: r => `${r.student_id}|summary|total_days` });
-    for (const sub of sheet.subjects) cols.push({ id: `class:${sub.id}`, label: sub.name, subLabel: 'Class Raw', type: 'number', step: '0.5', min: '0', minWidth: 95, cellKey: r => `${r.student_id}|class|${sub.id}` });
-    for (const sub of sheet.subjects) cols.push({ id: `exam:${sub.id}`, label: sub.name, subLabel: 'Exam Raw', type: 'number', step: '0.5', min: '0', max: '100', minWidth: 95, cellKey: r => `${r.student_id}|exam|${sub.id}` });
-    for (const sub of sheet.subjects) cols.push({ id: `total:${sub.id}`, label: sub.name, subLabel: 'Total', type: 'readonly', center: true, bold: true, minWidth: 90, get: r => r.subjectTotals[sub.id] });
+    // Per subject: Class score (out of class weight), Exam raw (out of an
+    // editable maximum), the converted Exam score, and the subject Total.
+    for (const sub of sheet.subjects) {
+      const cw = Number(sub.class_weight_pct ?? 40);
+      const ew = Number(sub.exam_weight_pct ?? 60);
+      const max = Number(examMax[sub.id] ?? sub.exam_max ?? 100) || 100;
+      cols.push({ id: `class:${sub.id}`, label: sub.name, subLabel: `Class /${cw}`, exportName: `${sub.name} Class Score`, type: 'number', step: '0.5', min: '0', max: String(cw), minWidth: 95, cellKey: r => `${r.student_id}|class|${sub.id}` });
+      cols.push({
+        id: `exam:${sub.id}`, label: sub.name, subLabel: `Exam /${max}`, exportName: `${sub.name} Exam Raw`,
+        type: 'number', step: '0.5', min: '0', minWidth: 110, cellKey: r => `${r.student_id}|exam|${sub.id}`,
+        headRender: () => <>{sub.name}<br /><span className="text-xs">Exam /
+          <input type="number" min="1" step="1" className="ac-exammax-input"
+            value={examMax[sub.id] ?? 100}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => e.stopPropagation()}
+            onChange={e => changeExamMax(sub.id, e.target.value)}
+            onBlur={() => persistExamMax(sub.id)}
+          /></span></>,
+      });
+      cols.push({ id: `examscore:${sub.id}`, label: sub.name, subLabel: `Exam ${ew}%`, exportName: `${sub.name} Exam Score`, type: 'readonly', center: true, minWidth: 90, get: r => r.subjectExam[sub.id] });
+      cols.push({ id: `total:${sub.id}`, label: sub.name, subLabel: 'Total', exportName: `${sub.name} Total`, type: 'readonly', center: true, bold: true, minWidth: 90, get: r => r.subjectTotals[sub.id] });
+    }
     cols.push({ id: 'overall', label: 'Overall', type: 'readonly', center: true, bold: true, get: r => r.overall });
     cols.push({ id: 'average', label: 'Average', type: 'readonly', center: true, bold: true, get: r => r.average });
     cols.push({ id: 'position', label: 'Position', type: 'readonly', center: true, get: r => ordinal(r.position), copy: r => r.position });
@@ -138,7 +182,7 @@ export default function AssessmentCompilationTab() {
     cols.push({ id: 'learner_talents', label: 'Learner Talents', type: 'text', minWidth: 160, cellKey: r => `${r.student_id}|summary|learner_talents` });
     cols.push({ id: 'teacher_remarks', label: "Teacher's Remarks", type: 'text', minWidth: 160, cellKey: r => `${r.student_id}|summary|teacher_remarks` });
     return cols;
-  }, [sheet]);
+  }, [sheet, examMax]);
 
   // Text value of a cell (used for copy + export + display of editables).
   function cellText(col, row) {
@@ -354,20 +398,26 @@ export default function AssessmentCompilationTab() {
   async function saveChanges() {
     if (!sheet) return;
     setSaving(true);
-    const payload = { classId, termId, students: computedRows.map(row => ({
-      student_id: row.student_id,
-      total_score_all: row.overall,
-      average_score: row.average,
-      class_rank: row.position,
-      number_on_roll: computedRows.length,
-      subjects: sheet.subjects.map(sub => ({
-        subject_id: sub.id,
-        class_score: parseFloat(inputs[`${row.student_id}|class|${sub.id}`]) || 0,
-        exam_score: parseFloat(inputs[`${row.student_id}|exam|${sub.id}`]) || 0,
-        total_score: row.subjectTotals[sub.id] || 0,
+    const examMaxPayload = {};
+    for (const sub of sheet.subjects) {
+      const v = Number(examMax[sub.id]);
+      examMaxPayload[sub.id] = Number.isFinite(v) && v > 0 ? v : 100;
+    }
+    const payload = {
+      classId, termId,
+      examMax: examMaxPayload,
+      // The backend recomputes each subject total, the grand total, average
+      // and rank from these raw inputs so every sheet stays consistent.
+      students: computedRows.map(row => ({
+        student_id: row.student_id,
+        subjects: sheet.subjects.map(sub => ({
+          subject_id: sub.id,
+          class_score: parseFloat(inputs[`${row.student_id}|class|${sub.id}`]) || 0,
+          exam_raw: parseFloat(inputs[`${row.student_id}|exam|${sub.id}`]) || 0,
+        })),
+        summary: Object.fromEntries(summaryFields.map(([field]) => [field, inputs[`${row.student_id}|summary|${field}`] ?? ''])),
       })),
-      summary: Object.fromEntries(summaryFields.map(([field]) => [field, inputs[`${row.student_id}|summary|${field}`] ?? ''])),
-    })) };
+    };
     const res = await window.api.scores.saveAssessmentCompilation(payload);
     setSaving(false);
     if (res?.ok) { setDirty({}); showToast('Assessment compilation saved', 'success'); }
@@ -534,7 +584,9 @@ export default function AssessmentCompilationTab() {
                       onMouseDown={e => { e.preventDefault(); selectColumn(c); }}
                       title="Click to select column"
                     >
-                      {col.label}{col.subLabel ? <><br /><span className="text-xs">{col.subLabel}</span></> : null}
+                      {col.headRender
+                        ? col.headRender()
+                        : <>{col.label}{col.subLabel ? <><br /><span className="text-xs">{col.subLabel}</span></> : null}</>}
                     </th>
                   ))}
                 </tr>
@@ -550,7 +602,7 @@ export default function AssessmentCompilationTab() {
             </table>
           </div>
         </div>
-        <div className="sheet-help no-print" style={{ marginTop: 12 }}><strong>Tips:</strong> click a cell to select, drag or Shift+Click to select a range, click a header to select a whole column, Ctrl/Cmd+C / V to copy &amp; paste, Delete to clear, double-click or just start typing to edit. <strong>Editable:</strong> attendance, subject class &amp; exam raw, conduct, interests, talents, remarks. <strong>Locked:</strong> identity, subject totals, overall, average, position.</div>
+        <div className="sheet-help no-print" style={{ marginTop: 12 }}><strong>Tips:</strong> click a cell to select, drag or Shift+Click to select a range, click a header to select a whole column, Ctrl/Cmd+C / V to copy &amp; paste, Delete to clear, double-click or just start typing to edit. Set each subject's <strong>Exam /max</strong> in its header (e.g. an exam out of 150). <strong>Editable:</strong> attendance, each subject's Class score (out of its weight) &amp; raw Exam mark, conduct, interests, talents, remarks. <strong>Auto-computed:</strong> Exam score (raw converted to the exam weight), subject Total, overall, average, position. Weights are set per subject in Settings → Subjects.</div>
       </>}
   </div>;
 }

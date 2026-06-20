@@ -301,7 +301,7 @@ function registerScoresHandlers(ipcMain, db) {
     `).all(classId);
     const colIds = columns.map(c => c.id);
     const totalMax = columns.reduce((s, c) => s + c.max_marks, 0);
-    const { classWeight } = getWeights();
+    const { classWeight } = getSubjectWeights(db, subjectId);
     const rows = students.map(st => {
       const marks = {};
       if (colIds.length) {
@@ -330,7 +330,7 @@ function registerScoresHandlers(ipcMain, db) {
       ON CONFLICT (assessment_column_id, student_id) DO UPDATE SET marks = excluded.marks
     `).run(columnId, studentId, marks || 0);
     const col = db.prepare('SELECT class_group_id, subject_id, term_id FROM assessment_columns WHERE id = ?').get(columnId);
-    if (col) recomputeClassScore(db, col.class_group_id, col.subject_id, col.term_id, studentId, getWeights());
+    if (col) recomputeClassScore(db, col.class_group_id, col.subject_id, col.term_id, studentId);
     return { ok: true };
   });
 
@@ -351,14 +351,20 @@ function registerScoresHandlers(ipcMain, db) {
       FROM students WHERE current_class_id = ? AND status = 'Active'
       ORDER BY surname, first_name
     `).all(classId);
-    const { examWeight } = getWeights();
+    // Per-subject weight + exam raw maximum (single source of truth).
+    const subjectMeta = subjects.map(sub => {
+      const { examWeight } = getSubjectWeights(db, sub.id);
+      return { ...sub, exam_weight_pct: examWeight, exam_max: getExamMax(db, classId, sub.id, termId) };
+    });
     const rows = students.map(st => {
       const examScores = {};
       const recs = db.prepare("SELECT subject_id, exam_score FROM scores WHERE student_id = ? AND term_id = ?").all(st.id, termId);
       for (const r of recs) examScores[r.subject_id] = r.exam_score;
       const converted = {};
-      for (const sub of subjects) {
-        converted[sub.id] = Math.round(((examScores[sub.id] || 0) / 100) * examWeight * 100) / 100;
+      for (const sub of subjectMeta) {
+        converted[sub.id] = sub.exam_max > 0
+          ? Math.round(((examScores[sub.id] || 0) / sub.exam_max) * sub.exam_weight_pct * 100) / 100
+          : 0;
       }
       return {
         student_id: st.id, index_number: st.index_number,
@@ -366,7 +372,7 @@ function registerScoresHandlers(ipcMain, db) {
         exam_scores: examScores, converted_scores: converted,
       };
     });
-    return { subjects, students: rows, exam_weight: examWeight };
+    return { subjects: subjectMeta, students: rows };
   });
 
   ipcMain.handle('scores:save-exam-mark', (_e, { studentId, subjectId, termId, examScore }) => {
@@ -375,8 +381,38 @@ function registerScoresHandlers(ipcMain, db) {
       VALUES (?, ?, ?, ?)
       ON CONFLICT (student_id, term_id, subject_id) DO UPDATE SET exam_score = excluded.exam_score
     `).run(studentId, termId, subjectId, examScore || 0);
-    recomputeTotal(db, studentId, subjectId, termId, getWeights());
+    recomputeTotal(db, studentId, subjectId, termId);
     return { ok: true };
+  });
+
+  // Set the exam raw maximum for a class+subject+term (editable on the
+  // Assessment Compilation sheet). Persisting it recomputes every affected
+  // total so the change is reflected on all other sheets.
+  ipcMain.handle('scores:set-exam-max', (_e, { classId, subjectId, termId, maxMarks }) => {
+    try {
+      const val = setExamMax(db, classId, subjectId, termId, maxMarks);
+      const students = db.prepare("SELECT id FROM students WHERE current_class_id = ? AND status = 'Active'").all(classId);
+      const tx = db.transaction(() => {
+        for (const st of students) recomputeTotal(db, st.id, subjectId, termId);
+      });
+      tx();
+      return { ok: true, max_marks: val };
+    } catch (err) {
+      console.warn(`[scores:set-exam-max] failed: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  // Recompute all stored scores for a subject after its weights change in
+  // Settings, so the new weighting reflects everywhere in real time.
+  ipcMain.handle('scores:recompute-subject', (_e, { subjectId }) => {
+    try {
+      const n = recomputeSubjectScores(db, subjectId);
+      return { ok: true, count: n };
+    } catch (err) {
+      console.warn(`[scores:recompute-subject] failed: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
   });
 
 
@@ -402,7 +438,19 @@ function registerScoresHandlers(ipcMain, db) {
       ORDER BY surname, first_name
     `).all(classId);
 
-    const { classWeight, examWeight } = getWeights();
+    // Per-subject weights + exam raw maximum. class_score is stored weighted
+    // (out of class_weight_pct); exam_score is stored as the RAW exam mark
+    // (out of exam_max) so the sheet can show both the raw entry and its
+    // conversion to exam_weight_pct.
+    const subjectMeta = subjects.map(sub => {
+      const { classWeight, examWeight } = getSubjectWeights(db, sub.id);
+      return {
+        ...sub,
+        class_weight_pct: classWeight,
+        exam_weight_pct: examWeight,
+        exam_max: getExamMax(db, classId, sub.id, termId),
+      };
+    });
     const rows = students.map(st => {
       const subjectScores = {};
       const recs = db.prepare(`
@@ -436,24 +484,30 @@ function registerScoresHandlers(ipcMain, db) {
     });
 
     return {
-      subjects,
+      subjects: subjectMeta,
       students: rows,
       used_fallback_subjects: usedFallbackSubjects,
-      class_weight: classWeight,
-      exam_weight: examWeight,
     };
   });
 
-  ipcMain.handle('scores:save-assessment-compilation', (_e, { classId, termId, students }) => {
+  ipcMain.handle('scores:save-assessment-compilation', (_e, { classId, termId, students, examMax }) => {
     try {
+      const studentList = students || [];
       const tx = db.transaction(() => {
+        // 1. Persist any edited exam raw maxima first, so total recomputation
+        //    below uses the new denominators.
+        if (examMax && typeof examMax === 'object') {
+          for (const [subjectId, max] of Object.entries(examMax)) {
+            setExamMax(db, classId, Number(subjectId), termId, max);
+          }
+        }
+
         const upsertScore = db.prepare(`
-          INSERT INTO scores (student_id, term_id, subject_id, class_score, exam_score, total_score)
-          VALUES (?, ?, ?, ?, ?, ?)
+          INSERT INTO scores (student_id, term_id, subject_id, class_score, exam_score)
+          VALUES (?, ?, ?, ?, ?)
           ON CONFLICT(student_id, term_id, subject_id) DO UPDATE SET
             class_score = excluded.class_score,
-            exam_score = excluded.exam_score,
-            total_score = excluded.total_score
+            exam_score = excluded.exam_score
         `);
         const upsertSummary = db.prepare(`
           INSERT INTO student_term_summary (
@@ -475,28 +529,50 @@ function registerScoresHandlers(ipcMain, db) {
             total_days = excluded.total_days
         `);
 
-        for (const st of (students || [])) {
+        // 2. Store class score (weighted) + exam raw, then recompute the
+        //    canonical per-subject total so it matches every other sheet.
+        const agg = [];
+        for (const st of studentList) {
           for (const sub of (st.subjects || [])) {
             upsertScore.run(
               st.student_id, termId, sub.subject_id,
               parseFloat(sub.class_score) || 0,
-              parseFloat(sub.exam_score) || 0,
-              parseFloat(sub.total_score) || 0
+              parseFloat(sub.exam_raw) || 0
             );
+            recomputeTotal(db, st.student_id, sub.subject_id, termId);
           }
-          const summary = st.summary || {};
+          // 3. Aggregate the freshly-recomputed totals for this student.
+          let grand = 0, count = 0;
+          for (const sub of (st.subjects || [])) {
+            const row = db.prepare('SELECT total_score FROM scores WHERE student_id = ? AND term_id = ? AND subject_id = ?')
+              .get(st.student_id, termId, sub.subject_id);
+            const total = row?.total_score || 0;
+            if (total > 0) { grand += total; count += 1; }
+          }
+          agg.push({
+            student_id: st.student_id,
+            grand: Math.round(grand * 100) / 100,
+            average: count ? Math.round((grand / count) * 100) / 100 : 0,
+            summary: st.summary || {},
+          });
+        }
+
+        // 4. Rank by average (highest first) and persist the summary rows.
+        const ranked = [...agg].sort((a, b) => b.average - a.average);
+        const rankById = new Map();
+        ranked.forEach((r, i) => rankById.set(r.student_id, r.average > 0 ? i + 1 : null));
+        for (const a of agg) {
+          const summary = a.summary;
           upsertSummary.run(
-            st.student_id, termId, classId,
-            parseFloat(st.total_score_all) || 0,
-            parseFloat(st.average_score) || 0,
-            st.class_rank || null,
-            st.number_on_roll || null,
+            a.student_id, termId, classId,
+            a.grand, a.average,
+            rankById.get(a.student_id), agg.length,
             summary.conduct_traits || '',
             summary.learner_interests || '',
             summary.learner_talents || '',
             summary.teacher_remarks || '',
-            summary.days_present === '' ? null : (parseInt(summary.days_present, 10) || 0),
-            summary.total_days === '' ? null : (parseInt(summary.total_days, 10) || 0)
+            summary.days_present === '' || summary.days_present == null ? null : (parseInt(summary.days_present, 10) || 0),
+            summary.total_days === '' || summary.total_days == null ? null : (parseInt(summary.total_days, 10) || 0)
           );
         }
       });
@@ -608,15 +684,24 @@ function registerScoresHandlers(ipcMain, db) {
       SELECT id, index_number, surname, first_name FROM students
       WHERE current_class_id = ? AND status = 'Active' ORDER BY surname, first_name
     `).all(classId);
-    const { classWeight, examWeight } = getWeights();
+    // Per-subject weights + exam raw maximum.
+    const subjectMeta = subjects.map(sub => {
+      const { classWeight, examWeight } = getSubjectWeights(db, sub.id);
+      return {
+        ...sub,
+        class_weight_pct: classWeight,
+        exam_weight_pct: examWeight,
+        exam_max: getExamMax(db, classId, sub.id, termId),
+      };
+    });
     const rows = students.map(st => {
       const perSubject = {};
       let grandTotal = 0, subjectCount = 0;
-      for (const sub of subjects) {
+      for (const sub of subjectMeta) {
         const sc = db.prepare("SELECT class_score, exam_score, total_score FROM scores WHERE student_id = ? AND term_id = ? AND subject_id = ?").get(st.id, termId, sub.id);
         const classScore = sc?.class_score || 0;
         const examScore = sc?.exam_score || 0;
-        const examConverted = Math.round((examScore / 100) * examWeight * 100) / 100;
+        const examConverted = sub.exam_max > 0 ? Math.round((examScore / sub.exam_max) * sub.exam_weight_pct * 100) / 100 : 0;
         const total = Math.round((classScore + examConverted) * 100) / 100;
         perSubject[sub.id] = { class_score: classScore, exam_converted: examConverted, total };
         if (total > 0) { grandTotal += total; subjectCount++; }
@@ -630,7 +715,7 @@ function registerScoresHandlers(ipcMain, db) {
     });
     rows.sort((a, b) => b.average - a.average);
     rows.forEach((r, i) => { r.position = i + 1; });
-    return { subjects, students: rows, class_weight: classWeight, exam_weight: examWeight };
+    return { subjects: subjectMeta, students: rows };
   });
 }
 
@@ -886,7 +971,44 @@ function ensureOutputDir(savePath) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-function recomputeClassScore(db, classId, subjectId, termId, studentId, weights) {
+// ── Per-subject weighting helpers (single source of truth) ──
+// Weights live on the subjects row (class_weight_pct / exam_weight_pct). The
+// exam raw maximum lives per class+subject+term in subject_exam_max (default
+// 100). All score conversions across the app derive from these.
+function getSubjectWeights(db, subjectId) {
+  const r = db.prepare('SELECT class_weight_pct, exam_weight_pct FROM subjects WHERE id = ?').get(subjectId);
+  return {
+    classWeight: Number(r?.class_weight_pct ?? 40),
+    examWeight: Number(r?.exam_weight_pct ?? 60),
+  };
+}
+
+function getExamMax(db, classId, subjectId, termId) {
+  if (!classId) return 100;
+  const r = db.prepare(
+    'SELECT max_marks FROM subject_exam_max WHERE class_group_id = ? AND subject_id = ? AND term_id = ?'
+  ).get(classId, subjectId, termId);
+  const m = Number(r?.max_marks);
+  return Number.isFinite(m) && m > 0 ? m : 100;
+}
+
+function setExamMax(db, classId, subjectId, termId, maxMarks) {
+  const m = Number(maxMarks);
+  const val = Number.isFinite(m) && m > 0 ? m : 100;
+  db.prepare(`
+    INSERT INTO subject_exam_max (class_group_id, subject_id, term_id, max_marks)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT (class_group_id, subject_id, term_id) DO UPDATE SET max_marks = excluded.max_marks
+  `).run(classId, subjectId, termId, val);
+  return val;
+}
+
+function studentClassId(db, studentId) {
+  const s = db.prepare('SELECT current_class_id FROM students WHERE id = ?').get(studentId);
+  return s?.current_class_id ?? null;
+}
+
+function recomputeClassScore(db, classId, subjectId, termId, studentId) {
   const cols = db.prepare(`
     SELECT id, max_marks FROM assessment_columns
     WHERE class_group_id = ? AND subject_id = ? AND term_id = ?
@@ -897,21 +1019,44 @@ function recomputeClassScore(db, classId, subjectId, termId, studentId, weights)
     const m = db.prepare('SELECT marks FROM assessment_scores WHERE assessment_column_id = ? AND student_id = ?').get(c.id, studentId);
     raw += (m?.marks || 0);
   }
-  const classScore = totalMax > 0 ? Math.round((raw / totalMax) * weights.classWeight * 100) / 100 : 0;
+  const { classWeight } = getSubjectWeights(db, subjectId);
+  const classScore = totalMax > 0 ? Math.round((raw / totalMax) * classWeight * 100) / 100 : 0;
   db.prepare(`
     INSERT INTO scores (student_id, term_id, subject_id, class_score)
     VALUES (?, ?, ?, ?)
     ON CONFLICT (student_id, term_id, subject_id) DO UPDATE SET class_score = excluded.class_score
   `).run(studentId, termId, subjectId, classScore);
-  recomputeTotal(db, studentId, subjectId, termId, weights);
+  recomputeTotal(db, studentId, subjectId, termId);
 }
 
-function recomputeTotal(db, studentId, subjectId, termId, weights) {
+function recomputeTotal(db, studentId, subjectId, termId) {
   const sc = db.prepare("SELECT class_score, exam_score FROM scores WHERE student_id = ? AND term_id = ? AND subject_id = ?").get(studentId, termId, subjectId);
   if (!sc) return;
-  const examConverted = Math.round(((sc.exam_score || 0) / 100) * weights.examWeight * 100) / 100;
+  const { examWeight } = getSubjectWeights(db, subjectId);
+  const examMax = getExamMax(db, studentClassId(db, studentId), subjectId, termId);
+  const examConverted = examMax > 0 ? Math.round(((sc.exam_score || 0) / examMax) * examWeight * 100) / 100 : 0;
   const total = Math.round(((sc.class_score || 0) + examConverted) * 100) / 100;
   db.prepare('UPDATE scores SET total_score = ? WHERE student_id = ? AND term_id = ? AND subject_id = ?').run(total, studentId, termId, subjectId);
+}
+
+// Recompute every stored score for a subject after its weights change, so the
+// change propagates everywhere. Class scores backed by assessment columns are
+// rescaled; manually entered class scores are left as-is (only the total is
+// refreshed). Exam totals always follow the new exam weight.
+function recomputeSubjectScores(db, subjectId) {
+  const rows = db.prepare('SELECT DISTINCT student_id, term_id FROM scores WHERE subject_id = ?').all(subjectId);
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      const classId = studentClassId(db, r.student_id);
+      const hasColumns = classId && db.prepare(
+        'SELECT 1 FROM assessment_columns WHERE class_group_id = ? AND subject_id = ? AND term_id = ? LIMIT 1'
+      ).get(classId, subjectId, r.term_id);
+      if (hasColumns) recomputeClassScore(db, classId, subjectId, r.term_id, r.student_id);
+      else recomputeTotal(db, r.student_id, subjectId, r.term_id);
+    }
+  });
+  tx();
+  return rows.length;
 }
 
 module.exports = registerScoresHandlers;
