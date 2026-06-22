@@ -365,6 +365,16 @@ const api = {
     saveTemplate:      (data)                => ipcRenderer.invoke('notifications:save-template', data),
   },
 
+  // ── Backup / Restore / Factory Reset ──────────────────
+  backup: {
+    getInfo:           ()                    => ipcRenderer.invoke('backup:get-info'),
+    list:              ()                    => ipcRenderer.invoke('backup:list'),
+    create:            ()                    => ipcRenderer.invoke('backup:create'),
+    restore:           (backupPath)          => ipcRenderer.invoke('backup:restore', backupPath),
+    factoryReset:      (data)                => ipcRenderer.invoke('backup:factory-reset', data),
+    openFolder:        ()                    => ipcRenderer.invoke('backup:open-folder'),
+  },
+
   // ── App-level ─────────────────────────────────────────
   app: {
     getPaths:          ()                    => ipcRenderer.invoke('app:get-paths'),
