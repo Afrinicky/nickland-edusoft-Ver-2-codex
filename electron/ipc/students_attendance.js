@@ -202,6 +202,30 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
     `).run(studentId, date, markedBy || null, termId || null, reason || null);
     return { ok: true };
   });
+
+  // ── Export attendance register (Excel) ────────────────
+  // Uses the separate export date range (passed as a contiguous `dates` array)
+  // — independent of the marking grid's week selector.
+  ipcMain.handle('students:export-attendance-register-excel', async (_e, { classId, dates, termId, savePath }) => {
+    try {
+      const register = getWeeklyRegisterExportData(db, classId, dates, termId);
+      await exportAttendanceRegisterExcel(register, savePath);
+      return { ok: true, path: savePath };
+    } catch (err) {
+      return { ok: false, error: err?.message || 'Excel export failed' };
+    }
+  });
+
+  // ── Export attendance register (PDF) ──────────────────
+  ipcMain.handle('students:export-attendance-register-pdf', async (_e, { classId, dates, termId, savePath }) => {
+    try {
+      const register = getWeeklyRegisterExportData(db, classId, dates, termId);
+      await exportAttendanceRegisterPdf(register, savePath, getResourcePath);
+      return { ok: true, path: savePath };
+    } catch (err) {
+      return { ok: false, error: err?.message || 'PDF export failed' };
+    }
+  });
 };
 
 
@@ -242,6 +266,7 @@ function getWeeklyRegisterExportData(db, classId, dates, termId) {
       name: [student.surname, student.first_name, student.other_names].filter(Boolean).join(' '),
       attendance,
       presentCount: dates.filter(date => attendance[date]?.status === 'present').length,
+      absentCount: dates.filter(date => attendance[date]?.status === 'absent').length,
       absenceReasons: records
         .filter(r => r.status === 'absent' && r.notes)
         .map(r => `${formatDateLabel(r.date)}: ${r.notes}`)
@@ -273,6 +298,20 @@ function statusLabel(status) {
   return labels[status] || String(status).replace(/_/g, ' ');
 }
 
+// Excel cell value for a day: present → "yes", absent → "no", otherwise blank.
+function excelMark(status) {
+  if (status === 'present') return 'yes';
+  if (status === 'absent') return 'no';
+  return '';
+}
+
+// PDF cell glyph for a day: present → ✓, absent → ✗, otherwise blank.
+function pdfMark(status) {
+  if (status === 'present') return '✓';
+  if (status === 'absent') return '✗';
+  return '';
+}
+
 function ensureOutputDir(savePath) {
   const dir = path.dirname(savePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -285,7 +324,7 @@ async function exportAttendanceRegisterExcel(register, savePath) {
   wb.created = new Date();
   const ws = wb.addWorksheet('Attendance Register');
   const dateRange = `${formatDateLabel(register.dates[0])} - ${formatDateLabel(register.dates[register.dates.length - 1])}`;
-  const totalColumns = 5 + register.dates.length;
+  const totalColumns = 6 + register.dates.length;
 
   ws.mergeCells(1, 1, 1, totalColumns);
   ws.getCell(1, 1).value = register.schoolName;
@@ -304,7 +343,7 @@ async function exportAttendanceRegisterExcel(register, savePath) {
   ws.getCell(4, 1).value = `Term: ${register.termLabel}    Date Range: ${dateRange}`;
   ws.getCell(4, 1).alignment = { horizontal: 'center' };
 
-  const headers = ['#', 'Index No.', 'Name', ...register.dates.map(formatDateLabel), 'Total Present', 'Absence Reasons'];
+  const headers = ['#', 'Index No.', 'Name', ...register.dates.map(formatDateLabel), 'Total Present', 'Total Absent', 'Absence Reasons'];
   ws.addRow([]);
   const headerRow = ws.addRow(headers);
   headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -316,18 +355,23 @@ async function exportAttendanceRegisterExcel(register, savePath) {
       row.no,
       row.indexNumber,
       row.name,
-      ...register.dates.map(date => statusLabel(row.attendance[date]?.status)),
-      `${row.presentCount}/${register.dates.length}`,
+      ...register.dates.map(date => excelMark(row.attendance[date]?.status)),
+      row.presentCount,
+      row.absentCount,
       row.absenceReasons,
     ]);
   }
 
+  const firstDateCol = 3;                                  // 0-based index of first date column
+  const totalPresentCol = firstDateCol + register.dates.length;
   ws.columns.forEach((col, idx) => {
     if (idx === 0) col.width = 6;
     else if (idx === 1) col.width = 16;
     else if (idx === 2) col.width = 28;
-    else if (idx >= 3 && idx < 3 + register.dates.length) col.width = 13;
-    else col.width = idx === 3 + register.dates.length ? 14 : 30;
+    else if (idx >= firstDateCol && idx < totalPresentCol) col.width = 11;
+    else if (idx === totalPresentCol) col.width = 14;       // Total Present
+    else if (idx === totalPresentCol + 1) col.width = 14;   // Total Absent
+    else col.width = 30;                                    // Absence Reasons
   });
   ws.eachRow((row, rowNumber) => {
     if (rowNumber >= 6) {
@@ -372,8 +416,9 @@ function buildAttendanceRegisterHtml(register, getResourcePath) {
       <td class="num">${row.no}</td>
       <td>${escapeHtml(row.indexNumber)}</td>
       <td class="name">${escapeHtml(row.name)}</td>
-      ${register.dates.map(date => `<td class="status ${escapeHtml(row.attendance[date]?.status || '')}">${escapeHtml(statusLabel(row.attendance[date]?.status))}</td>`).join('')}
-      <td class="num"><strong>${row.presentCount}/${register.dates.length}</strong></td>
+      ${register.dates.map(date => `<td class="status ${escapeHtml(row.attendance[date]?.status || '')}">${pdfMark(row.attendance[date]?.status)}</td>`).join('')}
+      <td class="num"><strong>${row.presentCount}</strong></td>
+      <td class="num"><strong>${row.absentCount}</strong></td>
       <td class="notes">${escapeHtml(row.absenceReasons).replace(/\n/g, '<br>')}</td>
     </tr>
   `).join('');
@@ -407,7 +452,7 @@ function buildAttendanceRegisterHtml(register, getResourcePath) {
   </div>
   <div class="meta"><strong>Attendance Register</strong> &nbsp; | &nbsp; Class: ${escapeHtml(register.className)} &nbsp; | &nbsp; Term: ${escapeHtml(register.termLabel)} &nbsp; | &nbsp; Date Range: ${escapeHtml(dateRange)}</div>
   <table>
-    <thead><tr><th>#</th><th>Index No.</th><th>Name</th>${dateHeaders}<th>Total Present</th><th>Absence Reasons</th></tr></thead>
+    <thead><tr><th>#</th><th>Index No.</th><th>Name</th>${dateHeaders}<th>Total Present</th><th>Total Absent</th><th>Absence Reasons</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </body></html>`;
