@@ -33,8 +33,9 @@ function registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath) {
     ).get(studentId, termId);
     const enriched = enrichSummaryLive(db, studentId, termId, student.current_class_id, summary);
     const signatures = resolveReportSignatures(db);
+    const examWeight = getExamWeight(db);
 
-    const inner = reportCardHtml(header, student, filteredScores, enriched, term, signatures);
+    const inner = reportCardHtml(header, student, filteredScores, enriched, term, signatures, examWeight);
     const styles = baseStyles() + reportCardStyles(header);
     return {
       ok: true,
@@ -180,6 +181,7 @@ async function generateReportCards(db, userDataPath, getResourcePath, params) {
     JOIN academic_years ay ON ay.id = t.academic_year_id WHERE t.id = ?
   `).get(termId);
   const signatures = resolveReportSignatures(db);
+  const examWeight = getExamWeight(db);
 
   const pages = [];
   for (const s of students) {
@@ -199,7 +201,7 @@ async function generateReportCards(db, userDataPath, getResourcePath, params) {
     ).get(s.id, termId);
     const enriched = enrichSummaryLive(db, s.id, termId, report.current_class_id, summary);
     // Always push a page — per #15 the architecture must show even without entries
-    pages.push(reportCardHtml(header, report, filteredScores, enriched, term, signatures));
+    pages.push(reportCardHtml(header, report, filteredScores, enriched, term, signatures, examWeight));
   }
 
   if (pages.length === 0) {
@@ -270,6 +272,19 @@ function remarkForTotal(t) {
 // Read everything the report card needs from settings in a single call.
 // No name fields — captions are fixed strings (PROPRIETOR / HEAD TEACHER)
 // per the user's removal of the explicit name line.
+// Exam weight (the "60%" portion) as configured in settings. Mirrors
+// getWeights() in scores.js so the report card converts raw exam marks the
+// exact same way recomputeTotal() did when the totals were stored.
+function getExamWeight(db) {
+  try {
+    const r = db.prepare("SELECT value FROM settings WHERE key = 'exam_weight_pct'").get();
+    const w = parseFloat(r?.value);
+    return Number.isFinite(w) ? w : 60;
+  } catch {
+    return 60;
+  }
+}
+
 function resolveReportSignatures(db) {
   const get = (k, d = '') => {
     const r = db.prepare("SELECT value FROM settings WHERE key = ?").get(k);
@@ -431,7 +446,7 @@ function enrichSummaryLive(db, studentId, termId, classGroupId, base) {
 }
 
 // Render one student's terminal report as a single .page block.
-function reportCardHtml(header, student, scores, summary, term, signatures) {
+function reportCardHtml(header, student, scores, summary, term, signatures, examWeight = 60) {
   const sig = signatures || {};
   const fullName = `${student.surname || ''} ${student.first_name || ''} ${student.other_names || ''}`
     .replace(/\s+/g, ' ').trim().toUpperCase();
@@ -443,11 +458,19 @@ function reportCardHtml(header, student, scores, summary, term, signatures) {
   ).toUpperCase().replace(/\s+/g, ' ').trim();
 
   // Score rows. Numbers rounded to integers (the template uses whole marks).
-  const safeScores = scores || [];
-  const scoreRows = safeScores.map(sc => {
+  //
+  // IMPORTANT: `class_score` is already the converted 40% mark, but
+  // `exam_score` is stored RAW (out of 100). The "EXAM (60%)" column must show
+  // the CONVERTED mark, not the raw one, and CLASS + EXAM must equal TOTAL.
+  // We convert the raw exam mark with the configured exam weight (the same
+  // formula recomputeTotal() uses) and rebuild the total from the two columns
+  // shown, so the arithmetic on the page always tallies.
+  const rows = scores || [];
+  const convertExam = raw => Math.round(((Number(raw) || 0) / 100) * examWeight * 100) / 100;
+  const scoreRows = rows.map(sc => {
     const cls = sc.class_score ?? 0;
-    const exm = sc.exam_score ?? 0;
-    const tot = sc.total_score ?? (cls + exm);
+    const exm = convertExam(sc.exam_score);
+    const tot = cls + exm;
     const remark = sc.grade_remark || remarkForTotal(tot);
     return `<tr>
       <td class="rc-subj">${escapeHtml(sc.subject_name || '')}</td>
@@ -459,15 +482,15 @@ function reportCardHtml(header, student, scores, summary, term, signatures) {
   }).join('');
 
   // Even with zero scores, the layout must still render (per #15).
-  const placeholderRow = safeScores.length === 0
+  const placeholderRow = rows.length === 0
     ? `<tr><td colspan="5" class="rc-placeholder">No scores recorded yet — enter Class and Exam scores to populate this section.</td></tr>`
     : '';
 
-  const totalClass = safeScores.reduce((s, x) => s + (x.class_score || 0), 0);
-  const totalExam  = safeScores.reduce((s, x) => s + (x.exam_score  || 0), 0);
-  const totalAll   = summary?.total_score_all || safeScores.reduce((s, x) => s + (x.total_score || 0), 0);
-  const avgScore   = summary?.average_score ?? (safeScores.length ? totalAll / safeScores.length : 0);
-  const avgRemark  = safeScores.length > 0 ? remarkForTotal(avgScore) : '';
+  const totalClass = rows.reduce((s, x) => s + (x.class_score || 0), 0);
+  const totalExam  = rows.reduce((s, x) => s + convertExam(x.exam_score), 0);
+  const totalAll   = totalClass + totalExam;
+  const avgScore   = summary?.average_score ?? (rows.length ? totalAll / rows.length : 0);
+  const avgRemark  = rows.length > 0 ? remarkForTotal(avgScore) : '';
 
   // Signature blocks. Each one only renders when its toggle is ON AND its
   // file exists on disk. When neither renders, the whole right column is
