@@ -293,7 +293,10 @@ function TermBlock({ term }) {
                 <tr key={i}>
                   <td>{s.subject_name}</td>
                   <td>{s.class_score?.toFixed(1) || '—'}</td>
-                  <td>{s.exam_score?.toFixed(1) || '—'}</td>
+                  {/* exam_score is stored RAW (out of 100); the total already
+                      folds in the converted exam mark. Show the converted mark
+                      (total - class) so Class + Exam = Total on the row. */}
+                  <td>{s.total_score != null ? ((s.total_score - (s.class_score ?? 0))).toFixed(1) : '—'}</td>
                   <td><strong>{s.total_score?.toFixed(1) || '—'}</strong></td>
                   <td><span className="badge badge-muted">{s.grade_remark || '—'}</span></td>
                 </tr>

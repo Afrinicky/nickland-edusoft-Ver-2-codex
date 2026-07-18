@@ -464,7 +464,12 @@ function AcademicsView({ student }) {
               <tr key={s.id}>
                 <td>{s.subject_name}</td>
                 <td className="text-right">{s.class_score?.toFixed(1)}</td>
-                <td className="text-right">{s.exam_score?.toFixed(1)}</td>
+                {/* exam_score is stored RAW (out of 100). The "Exam (60%)"
+                    column must show the converted mark that was added into the
+                    total: total = class + convertedExam, so convertedExam =
+                    total - class. Deriving it this way guarantees the row adds
+                    up (Class + Exam = Total). */}
+                <td className="text-right">{(((s.total_score ?? 0) - (s.class_score ?? 0))).toFixed(1)}</td>
                 <td className="text-right bold">{s.total_score?.toFixed(1)}</td>
                 <td><span className="badge badge-muted">{s.grade_remark}</span></td>
               </tr>
