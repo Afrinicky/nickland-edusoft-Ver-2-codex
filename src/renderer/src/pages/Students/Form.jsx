@@ -6,7 +6,9 @@ import PhotoUploader from '../../components/PhotoUploader.jsx';
 
 export default function StudentForm({ student, onSaved, onCancel }) {
   const classes = useStore(s => s.classes);
+  const showToast = useStore(s => s.showToast);
   const [data, setData] = useState(() => student ? sanitizeForForm(student) : {
+    index_number: '',
     surname: '', first_name: '', other_names: '', gender: 'Male', denomination: '',
     age: '', date_of_birth: '', place_of_birth: '', place_of_residence: '',
     father_name: '', father_contact: '', mother_name: '', mother_contact: '',
@@ -32,12 +34,15 @@ export default function StudentForm({ student, onSaved, onCancel }) {
     let result;
     if (student && student.id) {
       result = await window.api.students.update(student.id, data);
+      setSaving(false);
+      if (result && result.ok === false) { showToast(result.error || 'Update failed', 'error'); return; }
       onSaved(student.id);
     } else {
       result = await window.api.students.create(data);
+      setSaving(false);
+      if (result && result.ok === false) { showToast(result.error || 'Could not add student', 'error'); return; }
       onSaved(result.id);
     }
-    setSaving(false);
   }
 
   return (
@@ -102,12 +107,23 @@ export default function StudentForm({ student, onSaved, onCancel }) {
       <h4 style={{ fontSize: 13, color: 'var(--muted)', marginTop: 16, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
         Class
       </h4>
-      <Field label="Class *">
-        <select className="select" value={data.current_class_id || ''} onChange={e => set('current_class_id', parseInt(e.target.value))}>
-          <option value="">Choose class…</option>
-          {classes.map(c => <option key={c.id} value={c.id ?? ''}>{c.name}</option>)}
-        </select>
-      </Field>
+      <div className="form-row">
+        <Field label="Class *">
+          <select className="select" value={data.current_class_id || ''} onChange={e => set('current_class_id', parseInt(e.target.value))}>
+            <option value="">Choose class…</option>
+            {classes.map(c => <option key={c.id} value={c.id ?? ''}>{c.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Index number">
+          <input
+            className="input"
+            style={{ fontFamily: 'monospace' }}
+            value={data.index_number || ''}
+            onChange={e => set('index_number', e.target.value)}
+            placeholder={student ? '' : 'Leave blank to auto-assign'}
+          />
+        </Field>
+      </div>
 
       <h4 style={{ fontSize: 13, color: 'var(--muted)', marginTop: 16, marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
         Parents / Guardian

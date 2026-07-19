@@ -5,6 +5,7 @@ const ExcelJS = require('exceljs');
 const {
   getAdmissionYear,
   formatIndexNumber,
+  parseIndexNumber,
   getSchoolAbbreviation,
   getNextRollNumber,
   setNextRollNumber,
@@ -69,31 +70,53 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
   });
 
   ipcMain.handle('students:create', (_e, data) => {
-    return createStudentInternal(db, data);
+    try {
+      const idx = data && data.index_number != null ? String(data.index_number).trim() : '';
+      if (idx) {
+        const dup = db.prepare('SELECT id FROM students WHERE index_number = ?').get(idx);
+        if (dup) return { ok: false, error: `Index number "${idx}" is already used by another student.` };
+      }
+      return createStudentInternal(db, data);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   });
 
   ipcMain.handle('students:update', (_e, { id, data }) => {
-    const fields = [
-      'surname', 'first_name', 'other_names', 'gender', 'denomination', 'date_of_birth',
-      'age', 'place_of_birth', 'place_of_residence', 'street_address', 'house_number',
-      'digital_address', 'nhis_number', 'father_name', 'father_contact', 'mother_name',
-      'mother_contact', 'guardian_name', 'guardian_contact', 'current_class_id',
-      'status', 'inactive_reason', 'admission_date', 'notes', 'index_number',
-    ];
-    const setClauses = [];
-    const params = [];
-    for (const f of fields) {
-      if (data[f] !== undefined) {
-        setClauses.push(`${f} = ?`);
-        params.push(data[f]);
+    try {
+      const fields = [
+        'surname', 'first_name', 'other_names', 'gender', 'denomination', 'date_of_birth',
+        'age', 'place_of_birth', 'place_of_residence', 'street_address', 'house_number',
+        'digital_address', 'nhis_number', 'father_name', 'father_contact', 'mother_name',
+        'mother_contact', 'guardian_name', 'guardian_contact', 'current_class_id',
+        'status', 'inactive_reason', 'admission_date', 'notes', 'index_number',
+      ];
+      // Guard the UNIQUE index_number so a clash returns a friendly message
+      // instead of a raw SQL constraint error.
+      if (data.index_number !== undefined) {
+        const idx = data.index_number != null ? String(data.index_number).trim() : '';
+        if (idx) {
+          const dup = db.prepare('SELECT id FROM students WHERE index_number = ? AND id != ?').get(idx, id);
+          if (dup) return { ok: false, error: `Index number "${idx}" is already used by another student.` };
+        }
       }
+      const setClauses = [];
+      const params = [];
+      for (const f of fields) {
+        if (data[f] !== undefined) {
+          setClauses.push(`${f} = ?`);
+          params.push(data[f] === '' ? null : data[f]);
+        }
+      }
+      if (setClauses.length === 0) return { ok: true };
+      params.push(id);
+      db.prepare(
+        `UPDATE students SET ${setClauses.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+      ).run(...params);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
     }
-    if (setClauses.length === 0) return { ok: true };
-    params.push(id);
-    db.prepare(
-      `UPDATE students SET ${setClauses.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(...params);
-    return { ok: true };
   });
 
   ipcMain.handle('students:delete', (_e, id) => {
@@ -122,9 +145,26 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
     return generateAllMissingIds(db);
   });
 
-  // Bulk upload from Excel
+  // Bulk upload from Excel (legacy one-shot path — still fixed to honor
+  // provided index numbers and never drop rows silently).
   ipcMain.handle('students:bulk-upload', async (_e, filePath) => {
     return await bulkUploadFromExcel(db, filePath);
+  });
+
+  // Phase 1 of the safe import: parse + validate the sheet and return a full,
+  // row-by-row preview. NOTHING is written to the database here. Every row is
+  // returned — including ones with problems — so the user can review and fix
+  // them before committing.
+  ipcMain.handle('students:bulk-preview', async (_e, filePath) => {
+    return await bulkPreviewFromExcel(db, filePath);
+  });
+
+  // Phase 2 of the safe import: commit the (possibly user-edited) rows. Each row
+  // is inserted/updated independently so a single bad row can never roll back or
+  // drop the others. Rows that still fail validation are returned so the user can
+  // fix and retry — no student is ever silently lost.
+  ipcMain.handle('students:bulk-commit', (_e, { rows }) => {
+    return bulkCommitRows(db, rows || []);
   });
 
   // Bulk download to Excel
@@ -158,12 +198,25 @@ function createStudentInternal(db, data) {
   const currentYear = yearMatch ? parseInt(yearMatch[1], 10) + 1 : new Date().getFullYear();
   // We use the LATER year (e.g. 2026 in "2025/2026") as "this year" for new admissions starting in Jan.
 
-  const admissionYear = data.admission_year || getAdmissionYear(classRow.short_code, currentYear);
+  let admissionYear = data.admission_year || getAdmissionYear(classRow.short_code, currentYear);
 
-  // Use provided index/roll or generate next
-  let rollNumber = data.roll_number;
-  let indexNumber = data.index_number;
-  if (!rollNumber || !indexNumber) {
+  // Index number policy:
+  //   • If an index number is supplied (from an import sheet or manual entry),
+  //     honor it EXACTLY — never regenerate or overwrite it. We only derive the
+  //     admission year from it for record-keeping. roll_number is left NULL for
+  //     manually-indexed students because roll_number is UNIQUE and deriving it
+  //     from an arbitrary index could collide with the auto-allocation counter.
+  //   • If no index number is supplied, auto-assign the next sequential one and
+  //     advance the shared roll counter.
+  let rollNumber = data.roll_number || null;
+  let indexNumber = (data.index_number != null && String(data.index_number).trim() !== '')
+    ? String(data.index_number).trim()
+    : null;
+
+  if (indexNumber) {
+    const parsed = parseIndexNumber(indexNumber);
+    if (parsed) admissionYear = parsed.year;
+  } else {
     rollNumber = getNextRollNumber(db);
     const prefix = getSchoolAbbreviation(db);
     indexNumber = formatIndexNumber(prefix, admissionYear, rollNumber);
@@ -331,37 +384,65 @@ function generateAllMissingIds(db) {
   return { ok: true, generated: missing.length };
 }
 
-async function bulkUploadFromExcel(db, filePath) {
+// ═══════════════════════════════════════════════════════════════════════
+// SHARED IMPORT HELPERS (used by legacy bulk-upload, preview, and commit)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Fields we read from a sheet / accept from the review grid.
+const IMPORT_FIELDS = [
+  'surname', 'first_name', 'other_names', 'gender', 'denomination', 'age',
+  'date_of_birth', 'place_of_birth', 'place_of_residence',
+  'father_name', 'father_contact', 'mother_name', 'mother_contact',
+  'guardian_name', 'guardian_contact', 'street_address', 'house_number',
+  'digital_address', 'nhis_number', 'index_number', 'admission_date', 'notes',
+];
+
+// Fields copied onto an existing student during an UPDATE (index_number is
+// handled separately — an existing index is never overwritten with a blank).
+const UPDATABLE_FIELDS = [
+  'surname', 'first_name', 'other_names', 'gender', 'denomination',
+  'date_of_birth', 'place_of_birth', 'place_of_residence',
+  'street_address', 'house_number', 'digital_address', 'nhis_number',
+  'father_name', 'father_contact', 'mother_name', 'mother_contact',
+  'guardian_name', 'guardian_contact', 'current_class_id',
+  'admission_date', 'notes',
+];
+
+function buildClassMap(db) {
+  const classes = db.prepare('SELECT id, short_code FROM class_groups').all();
+  const cMap = {};
+  for (const c of classes) cMap[String(c.short_code).toUpperCase()] = c.id;
+  return cMap;
+}
+
+// Resolve a raw CLASS cell (e.g. "5", "BS5", "KG1") to a class id, or null.
+function resolveClassId(cMap, classRaw) {
+  const raw = String(classRaw || '').trim().toUpperCase();
+  if (!raw) return null;
+  return cMap[raw] || cMap[`BS${raw}`] || cMap[`KG${raw}`] || null;
+}
+
+// Read every data row from the sheet into a plain object. Nothing is written.
+async function readStudentSheet(filePath) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
   const ws = wb.worksheets[0];
+  if (!ws) throw new Error('The Excel file has no worksheets.');
   const headerRow = ws.getRow(1).values;
   const headerIdx = {};
   headerRow.forEach((h, i) => {
     if (h) headerIdx[String(unwrapCell(h)).trim().toUpperCase()] = i;
   });
 
-  const classes = db.prepare('SELECT id, short_code FROM class_groups').all();
-  const cMap = {};
-  for (const c of classes) cMap[c.short_code.toUpperCase()] = c.id;
-
-  let imported = 0, updated = 0, skipped = 0, duplicates = 0;
-  const errors = [];
-
+  const rows = [];
   ws.eachRow({ includeEmpty: false }, (row, idx) => {
     if (idx === 1) return;
     const vals = row.values;
-
-    // Robust cell value extraction — handles strings, numbers, dates,
-    // rich text objects, formula results, hyperlinks, and ExcelJS cell objects.
     const get = (key) => {
       const i = headerIdx[String(key).toUpperCase()];
       if (i === undefined) return null;
       return unwrapCell(vals[i]);
     };
-
-    // Read & normalize ALL fields up front (each in its own try/catch so a
-    // single bad cell doesn't lose the entire row)
     const safeGet = (key, transform = (v) => v) => {
       try {
         const raw = get(key);
@@ -370,7 +451,9 @@ async function bulkUploadFromExcel(db, filePath) {
         return null;
       }
     };
-
+    // Keep the RAW date-of-birth text too, so we can flag values we couldn't
+    // parse instead of silently discarding them.
+    const dobRaw = safeGet('DATE OF BIRTH', String);
     const data = {
       surname:            safeGet('SURNAME', String),
       first_name:         safeGet('FIRST NAME', String),
@@ -382,8 +465,6 @@ async function bulkUploadFromExcel(db, filePath) {
                             return safeGet('GENDER', String) || safeGet('SEX', String) || '';
                           })(),
       denomination:       safeGet('DENOMINATION', String),
-      // Age is NOT stored — derived from DOB. We accept it from Excel
-      // only as a fallback for students without DOB.
       age:                safeGet('AGE', (v) => parseInt(v, 10) || null),
       date_of_birth:      safeGet('DATE OF BIRTH', toIsoDate),
       place_of_birth:     safeGet('PLACE OF BIRTH', String),
@@ -402,95 +483,279 @@ async function bulkUploadFromExcel(db, filePath) {
       admission_date:     safeGet('ADMISSION DATE', toIsoDate),
       notes:              safeGet('NOTES', String),
     };
+    if (data.index_number) data.index_number = String(data.index_number).trim();
+    rows.push({
+      rowNumber: idx,
+      data,
+      classRaw: safeGet('CLASS', String) || '',
+      dobRaw,
+    });
+  });
+  return rows;
+}
 
-    // Class lookup
-    const classRaw = (safeGet('CLASS', String) || '').trim().toUpperCase();
-    const classId = cMap[classRaw] || cMap[`BS${classRaw}`] || cMap[`KG${classRaw}`] || null;
-    if (!classId && !data.index_number) {
-      skipped++;
-      errors.push(`Row ${idx}: class "${classRaw}" not found and no index number provided`);
-      return;
+// Find the existing student a row refers to. THE KEY RULE: if the row carries
+// an index number, we match ONLY by that index. A distinct index number always
+// means a distinct student, so we never fall back to name matching (that is what
+// used to collapse two same-named students — e.g. twins — into one record).
+function resolveExistingStudent(db, data) {
+  const idx = data.index_number ? String(data.index_number).trim() : '';
+  if (idx) {
+    return db.prepare(
+      'SELECT id, index_number, surname, first_name FROM students WHERE index_number = ?'
+    ).get(idx) || null;
+  }
+  if (data.surname && data.first_name) {
+    if (data.date_of_birth) {
+      const m = db.prepare(`
+        SELECT id, index_number, surname, first_name FROM students
+        WHERE LOWER(surname) = LOWER(?) AND LOWER(first_name) = LOWER(?) AND date_of_birth = ?
+      `).get(data.surname, data.first_name, data.date_of_birth);
+      if (m) return m;
     }
-    data.current_class_id = classId;
+    if (data.current_class_id) {
+      const m = db.prepare(`
+        SELECT id, index_number, surname, first_name FROM students
+        WHERE LOWER(surname) = LOWER(?) AND LOWER(first_name) = LOWER(?) AND current_class_id = ?
+      `).get(data.surname, data.first_name, data.current_class_id);
+      if (m) return m;
+    }
+  }
+  return null;
+}
 
-    // Minimum requirement: at least a surname OR first name
-    if (!data.surname && !data.first_name) {
-      skipped++;
-      errors.push(`Row ${idx}: no name provided`);
-      return;
+// Apply an in-place UPDATE to an existing student. Only non-empty fields are
+// written (we never blank out existing data). A blank index is never applied,
+// so an existing student's index number can never be wiped by an import.
+function applyStudentUpdate(db, existingId, data) {
+  const setClauses = [];
+  const params = [];
+  for (const f of UPDATABLE_FIELDS) {
+    if (data[f] !== null && data[f] !== undefined && data[f] !== '') {
+      setClauses.push(`${f} = ?`);
+      params.push(data[f]);
     }
+  }
+  // Allow an explicit index-number change from the review grid (uniqueness is
+  // validated before we get here), but only when a value is actually provided.
+  if (data.index_number && String(data.index_number).trim() !== '') {
+    setClauses.push('index_number = ?');
+    params.push(String(data.index_number).trim());
+  }
+  if (setClauses.length === 0) return false;
+  params.push(existingId);
+  db.prepare(
+    `UPDATE students SET ${setClauses.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).run(...params);
+  return true;
+}
 
-    // DUPLICATE DETECTION — three strategies:
-    //   1. If row has an index_number, match by that.
-    //   2. Otherwise, match by (surname + first_name + DOB) if DOB exists.
-    //   3. Otherwise, match by (surname + first_name + current_class_id).
-    let existing = null;
-    if (data.index_number) {
-      existing = db.prepare('SELECT id FROM students WHERE index_number = ?').get(data.index_number);
+// Validate a single resolved row. Returns an array of issues:
+//   { level: 'error' | 'warning', field, message }
+// 'error' blocks the commit for that row; 'warning' is informational only.
+function validateStudentRow(db, { data, classId, existing, rowNumber }, seenIndex) {
+  const issues = [];
+  const idx = data.index_number ? String(data.index_number).trim() : '';
+
+  if (!data.surname && !data.first_name) {
+    issues.push({ level: 'error', field: 'surname', message: 'No name — enter a surname or first name.' });
+  }
+  if (!existing && !classId) {
+    issues.push({ level: 'error', field: 'current_class_id', message: 'Class not recognised — choose a class for this new student.' });
+  }
+  // A date-of-birth value that was typed but could not be parsed.
+  if (!data.date_of_birth && data.dobRaw && String(data.dobRaw).trim() !== '') {
+    issues.push({ level: 'error', field: 'date_of_birth', message: `Date of birth "${data.dobRaw}" is not a valid date (use DD/MM/YYYY).` });
+  }
+  if (idx) {
+    // Duplicate index inside the same sheet.
+    if (seenIndex && seenIndex.has(idx)) {
+      issues.push({ level: 'error', field: 'index_number', message: `Index number "${idx}" appears more than once in this file (also on row ${seenIndex.get(idx)}).` });
     }
-    if (!existing && data.surname && data.first_name) {
-      if (data.date_of_birth) {
-        existing = db.prepare(`
-          SELECT id FROM students
-          WHERE LOWER(surname) = LOWER(?) AND LOWER(first_name) = LOWER(?)
-          AND date_of_birth = ?
-        `).get(data.surname, data.first_name, data.date_of_birth);
-      } else if (data.current_class_id) {
-        existing = db.prepare(`
-          SELECT id FROM students
-          WHERE LOWER(surname) = LOWER(?) AND LOWER(first_name) = LOWER(?)
-          AND current_class_id = ?
-        `).get(data.surname, data.first_name, data.current_class_id);
+    // Index already used by a DIFFERENT existing student (name mismatch).
+    if (existing) {
+      const sameName = String(existing.surname || '').toLowerCase() === String(data.surname || '').toLowerCase()
+                    && String(existing.first_name || '').toLowerCase() === String(data.first_name || '').toLowerCase();
+      if (!sameName) {
+        issues.push({ level: 'warning', field: 'index_number', message: `Index "${idx}" already belongs to ${existing.surname || ''} ${existing.first_name || ''} — importing will UPDATE that record.` });
       }
     }
+  } else {
+    // No index supplied → it will be auto-assigned on import.
+    issues.push({ level: 'warning', field: 'index_number', message: 'No index number — one will be auto-assigned. Type one to set it manually.' });
+  }
+  return issues;
+}
+
+// Legacy one-shot import. Kept for compatibility, but now (a) honors provided
+// index numbers, (b) matches by index only when an index is present, and
+// (c) reports every skipped row instead of silently losing it.
+async function bulkUploadFromExcel(db, filePath) {
+  const rows = await readStudentSheet(filePath);
+  const cMap = buildClassMap(db);
+
+  let imported = 0, updated = 0, skipped = 0, duplicates = 0;
+  const errors = [];
+  const seenIndex = new Map();
+
+  for (const r of rows) {
+    const { rowNumber, data, classRaw } = r;
+    const classId = resolveClassId(cMap, classRaw);
+    data.current_class_id = classId;
+
+    if (!data.surname && !data.first_name) {
+      skipped++;
+      errors.push(`Row ${rowNumber}: no name provided`);
+      continue;
+    }
+
+    const existing = resolveExistingStudent(db, data);
+    const idx = data.index_number ? String(data.index_number).trim() : '';
 
     try {
       if (existing) {
-        // UPDATE — only fill in fields that have new values; never overwrite
-        // with NULL/empty values.
-        const setClauses = [];
-        const params = [];
-        const updatableFields = [
-          'surname', 'first_name', 'other_names', 'gender', 'denomination',
-          'date_of_birth', 'place_of_birth', 'place_of_residence',
-          'street_address', 'house_number', 'digital_address', 'nhis_number',
-          'father_name', 'father_contact', 'mother_name', 'mother_contact',
-          'guardian_name', 'guardian_contact', 'current_class_id',
-          'admission_date', 'notes',
-        ];
-        for (const f of updatableFields) {
-          if (data[f] !== null && data[f] !== undefined && data[f] !== '') {
-            setClauses.push(`${f} = ?`);
-            params.push(data[f]);
-          }
-        }
-        if (setClauses.length > 0) {
-          params.push(existing.id);
-          db.prepare(
-            `UPDATE students SET ${setClauses.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-          ).run(...params);
-          updated++;
-          duplicates++;
-        } else {
-          duplicates++;
-        }
+        if (applyStudentUpdate(db, existing.id, data)) updated++;
+        duplicates++;
       } else {
-        // CREATE
         if (!classId) {
           skipped++;
-          errors.push(`Row ${idx}: new student needs a valid class`);
-          return;
+          errors.push(`Row ${rowNumber} (${data.surname || ''} ${data.first_name || ''}): class "${classRaw}" not recognised`);
+          continue;
         }
         createStudentInternal(db, data);
         imported++;
       }
+      if (idx) seenIndex.set(idx, rowNumber);
     } catch (err) {
       skipped++;
-      errors.push(`Row ${idx} (${data.surname || ''} ${data.first_name || ''}): ${err.message}`);
+      errors.push(`Row ${rowNumber} (${data.surname || ''} ${data.first_name || ''}): ${err.message}`);
     }
-  });
+  }
 
   return { ok: true, imported, updated, skipped, duplicates, errors };
+}
+
+// PHASE 1 — parse + validate the whole sheet. No database writes. Returns every
+// row (with its resolved action and any issues) so the UI can present a review
+// grid where the user fixes problems before committing.
+async function bulkPreviewFromExcel(db, filePath) {
+  let rows;
+  try {
+    rows = await readStudentSheet(filePath);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const cMap = buildClassMap(db);
+  const classList = db.prepare('SELECT id, name, short_code FROM class_groups ORDER BY level_order').all();
+
+  const seenIndex = new Map();
+  const out = [];
+  for (const r of rows) {
+    const { rowNumber, data, classRaw, dobRaw } = r;
+    const classId = resolveClassId(cMap, classRaw);
+    data.current_class_id = classId;
+    data.dobRaw = dobRaw;
+    const existing = resolveExistingStudent(db, data);
+    const issues = validateStudentRow(db, { data, classId, existing, rowNumber }, seenIndex);
+
+    const idx = data.index_number ? String(data.index_number).trim() : '';
+    if (idx && !seenIndex.has(idx)) seenIndex.set(idx, rowNumber);
+
+    const hasError = issues.some(i => i.level === 'error');
+    const hasWarning = issues.some(i => i.level === 'warning');
+    out.push({
+      rowNumber,
+      data,
+      classRaw,
+      class_short: classId ? (classList.find(c => c.id === classId)?.short_code || '') : '',
+      action: existing ? 'update' : 'create',
+      existingId: existing ? existing.id : null,
+      existingName: existing ? `${existing.surname || ''} ${existing.first_name || ''}`.trim() : null,
+      issues,
+      status: hasError ? 'error' : (hasWarning ? 'warning' : 'ok'),
+    });
+  }
+
+  return {
+    ok: true,
+    rows: out,
+    classes: classList,
+    summary: {
+      total: out.length,
+      errors: out.filter(r => r.status === 'error').length,
+      warnings: out.filter(r => r.status === 'warning').length,
+      ready: out.filter(r => r.status !== 'error').length,
+    },
+  };
+}
+
+// PHASE 2 — commit the reviewed rows. Each row is written independently (its own
+// try/catch, no shared transaction) so one bad row can never roll back or drop
+// the rest. Rows that still fail are returned in `failed` so the user can fix and
+// retry — nothing is ever silently lost.
+function bulkCommitRows(db, rows) {
+  const cMap = buildClassMap(db);
+  let created = 0, updated = 0;
+  const failed = [];
+  const seenIndex = new Map();
+
+  for (const raw of rows) {
+    const rowNumber = raw.rowNumber;
+    // Normalise the incoming (possibly hand-edited) row into a clean data object.
+    const data = {};
+    for (const f of IMPORT_FIELDS) {
+      let v = raw.data ? raw.data[f] : raw[f];
+      if (typeof v === 'string') v = v.trim();
+      data[f] = (v === undefined || v === '') ? null : v;
+    }
+    // Class can arrive as an id (from the grid dropdown) or a raw code.
+    let classId = null;
+    const rawClassId = raw.data ? raw.data.current_class_id : raw.current_class_id;
+    if (rawClassId !== undefined && rawClassId !== null && rawClassId !== '') {
+      classId = parseInt(rawClassId, 10) || null;
+    }
+    if (!classId) classId = resolveClassId(cMap, raw.classRaw);
+    data.current_class_id = classId;
+    // Re-parse the (possibly edited) date so validation reflects what the user
+    // actually left in the cell, not the original sheet text.
+    const dobIn = data.date_of_birth;
+    const dobParsed = dobIn ? toIsoDate(dobIn) : null;
+    data.date_of_birth = dobParsed;
+    data.dobRaw = (dobIn && !dobParsed) ? dobIn : null;
+
+    const existing = resolveExistingStudent(db, data);
+    const issues = validateStudentRow(db, { data, classId, existing, rowNumber }, seenIndex);
+    const blocking = issues.filter(i => i.level === 'error');
+    const idx = data.index_number ? String(data.index_number).trim() : '';
+
+    if (blocking.length > 0) {
+      failed.push({ rowNumber, data, classRaw: raw.classRaw, reasons: blocking.map(i => i.message) });
+      continue;
+    }
+
+    try {
+      // Extra safety: a manual index that collides with a different existing
+      // student (not the one we resolved) must not overwrite them.
+      if (idx) {
+        const clash = db.prepare('SELECT id FROM students WHERE index_number = ?').get(idx);
+        if (clash && (!existing || clash.id !== existing.id)) {
+          failed.push({ rowNumber, data, classRaw: raw.classRaw, reasons: [`Index number "${idx}" is already used by another student.`] });
+          continue;
+        }
+      }
+      if (existing) {
+        if (applyStudentUpdate(db, existing.id, data)) updated++;
+      } else {
+        createStudentInternal(db, data);
+        created++;
+      }
+      if (idx) seenIndex.set(idx, rowNumber);
+    } catch (err) {
+      failed.push({ rowNumber, data, classRaw: raw.classRaw, reasons: [err.message] });
+    }
+  }
+
+  return { ok: failed.length === 0, created, updated, failed };
 }
 
 // Cell value unwrapper — handles every type ExcelJS returns
