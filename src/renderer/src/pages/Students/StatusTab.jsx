@@ -156,11 +156,34 @@ export default function StudentsStatusTab() {
   );
 }
 
-// ===== Bulk Import =====
+// ===== Bulk Import (two-phase: preview → review & fix → commit) =====
+
+// Best-effort client-side status so the review grid gives live feedback as the
+// user edits. The server re-validates authoritatively on commit.
+function computeRowStatus(row, allRows) {
+  const d = row.data || {};
+  const errs = [];
+  if (!d.surname && !d.first_name) errs.push({ field: 'surname', message: 'Enter a surname or first name.' });
+  if (row.action === 'create' && !d.current_class_id) errs.push({ field: 'current_class_id', message: 'Choose a class for this new student.' });
+  const idx = (d.index_number || '').trim();
+  if (idx) {
+    const dupRow = allRows.find(r => r !== row && ((r.data.index_number || '').trim() === idx));
+    if (dupRow) errs.push({ field: 'index_number', message: `Index "${idx}" is also on row ${dupRow.rowNumber}.` });
+  }
+  // Carry through any server warnings (e.g. "will update existing record").
+  const warns = (row.issues || []).filter(i => i.level === 'warning').map(i => ({ field: i.field, message: i.message }));
+  return { errs, warns, status: errs.length ? 'error' : (warns.length || !idx ? 'warning' : 'ok') };
+}
+
 function BulkImportModal({ onClose, onDone }) {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null);
   const showToast = useStore(s => s.showToast);
+  const classes = useStore(s => s.classes);
+  const [step, setStep] = useState('pick');       // 'pick' | 'review'
+  const [busy, setBusy] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [committing, setCommitting] = useState(false);
+  const [commitResult, setCommitResult] = useState(null);
 
   async function pickFile() {
     const res = await window.api.app.showOpenDialog({
@@ -170,37 +193,192 @@ function BulkImportModal({ onClose, onDone }) {
     });
     if (res.canceled || res.filePaths.length === 0) return;
     setBusy(true);
-    const out = await window.api.students.bulkUpload(res.filePaths[0]);
-    setResult(out);
+    const out = await window.api.students.bulkPreview(res.filePaths[0]);
     setBusy(false);
-    if (out.ok) showToast(`Imported ${out.imported} students`);
+    if (!out.ok) { showToast(out.error || 'Could not read that file', 'error'); return; }
+    setRows(out.rows.map(r => ({ ...r, data: { ...r.data } })));
+    setSummary(out.summary);
+    setCommitResult(null);
+    setStep('review');
   }
 
-  return (
-    <Modal title="Bulk import students" onClose={onClose}
-      footer={result && result.ok ? <button className="btn btn-primary" onClick={onDone}>Done</button> : null}>
-      <p className="text-muted text-sm mb-4">
-        Upload an Excel file. Required columns: <code>CLASS, SURNAME, FIRST NAME, GENDER</code>.<br />
-        Optional: <code>OTHER NAMES, AGE, DATE OF BIRTH, DENOMINATION, PLACE OF BIRTH, PLACE OF RESIDENCE,
-        FATHER'S NAME, FATHER'S CONTACT, MOTHER'S NAME, MOTHER'S CONTACT,
-        GUARDIAN'S NAME, GUARDIAN'S CONTACT, STREET ADDRESS, HOUSE NO, DIGITAL ADDRESS, NHIS NO</code>
-      </p>
-      <button className="btn btn-primary" onClick={pickFile} disabled={busy}>
-        {busy ? <><span className="spinner" /> Importing…</> : '📂 Select Excel file'}
-      </button>
-      {result && (
-        <div className="card mt-4" style={{ background: 'var(--surface-2)' }}>
-          <div className="bold">Imported: {result.imported}</div>
-          {result.skipped > 0 && <div className="text-sm text-muted">Skipped: {result.skipped}</div>}
-          {result.errors && result.errors.length > 0 && (
-            <details className="mt-2">
-              <summary className="text-sm">View errors ({result.errors.length})</summary>
-              <ul style={{ fontSize: 11, color: 'var(--muted)', maxHeight: 180, overflowY: 'auto', margin: '6px 0 0 16px' }}>
-                {result.errors.map((e, i) => <li key={i}>{e}</li>)}
-              </ul>
-            </details>
-          )}
+  function updateCell(rowIndex, field, value) {
+    setRows(prev => {
+      const next = [...prev];
+      const row = { ...next[rowIndex], data: { ...next[rowIndex].data } };
+      row.data[field] = value === '' ? null : value;
+      if (field === 'current_class_id') {
+        row.data.current_class_id = value ? parseInt(value, 10) : null;
+        row.class_short = classes.find(c => c.id === row.data.current_class_id)?.short_code || '';
+      }
+      next[rowIndex] = row;
+      return next;
+    });
+  }
+
+  async function commit() {
+    setCommitting(true);
+    const payload = rows.map(r => ({ rowNumber: r.rowNumber, classRaw: r.classRaw, data: r.data }));
+    const res = await window.api.students.bulkCommit(payload);
+    setCommitting(false);
+    setCommitResult(res);
+
+    if (res.failed && res.failed.length > 0) {
+      // Keep ONLY the rows that still failed, so the user can fix & retry the
+      // rest without re-importing the ones that already saved.
+      const failedRows = res.failed.map(f => ({
+        rowNumber: f.rowNumber,
+        data: { ...f.data },
+        classRaw: f.classRaw,
+        class_short: classes.find(c => c.id === f.data.current_class_id)?.short_code || '',
+        action: f.data.index_number ? 'create' : 'create',
+        existingId: null,
+        issues: (f.reasons || []).map(m => ({ level: 'error', field: '', message: m })),
+        status: 'error',
+      }));
+      setRows(failedRows);
+      showToast(`${res.created + res.updated} saved · ${res.failed.length} still need fixing`, 'error');
+    } else {
+      showToast(`Import complete — ${res.created} added, ${res.updated} updated`);
+    }
+  }
+
+  const errorCount = rows.filter(r => computeRowStatus(r, rows).status === 'error').length;
+  const allDone = commitResult && (!commitResult.failed || commitResult.failed.length === 0);
+
+  // ── Step 1: pick a file ──
+  if (step === 'pick') {
+    return (
+      <Modal title="Bulk import students" onClose={onClose} size="md">
+        <p className="text-muted text-sm mb-4">
+          Upload an Excel file. Recognised columns: <code>INDEX NUMBER, CLASS, SURNAME, FIRST NAME, OTHER NAMES,
+          GENDER, DATE OF BIRTH, DENOMINATION, PLACE OF BIRTH, PLACE OF RESIDENCE, FATHER'S NAME, FATHER'S CONTACT,
+          MOTHER'S NAME, MOTHER'S CONTACT, GUARDIAN'S NAME, GUARDIAN'S CONTACT, STREET ADDRESS, HOUSE NO,
+          DIGITAL ADDRESS, NHIS NO</code>.
+        </p>
+        <div className="card mb-4" style={{ background: 'var(--surface-2)', fontSize: 12, lineHeight: 1.6 }}>
+          <div className="bold" style={{ marginBottom: 4 }}>How this works</div>
+          • Index numbers on your sheet are kept <b>exactly as-is</b> — the system never changes them.<br />
+          • Rows without an index number get one auto-assigned (you can type your own instead).<br />
+          • You'll review every row and fix any flagged problems <b>before</b> anything is saved — no student is dropped.
         </div>
+        <button className="btn btn-primary" onClick={pickFile} disabled={busy}>
+          {busy ? <><span className="spinner" /> Reading file…</> : '📂 Select Excel file'}
+        </button>
+      </Modal>
+    );
+  }
+
+  // ── Step 2: review & fix ──
+  const inputStyle = { width: '100%', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 5px', fontSize: 11, background: 'var(--surface)' };
+  return (
+    <Modal
+      title="Review import"
+      onClose={onClose}
+      size="lg"
+      footer={
+        allDone ? (
+          <button className="btn btn-primary" onClick={onDone}>Done</button>
+        ) : (
+          <div className="row" style={{ justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+            <span className="text-sm" style={{ color: errorCount ? 'var(--danger, #c0392b)' : 'var(--muted)' }}>
+              {errorCount > 0
+                ? `${errorCount} row${errorCount === 1 ? '' : 's'} still need fixing`
+                : `${rows.length} row${rows.length === 1 ? '' : 's'} ready to import`}
+            </span>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setStep('pick')} disabled={committing}>← Choose another file</button>
+              <button className="btn btn-primary" onClick={commit} disabled={committing || rows.length === 0}>
+                {committing ? <><span className="spinner" /> Importing…</> : `Import ${rows.length} student${rows.length === 1 ? '' : 's'}`}
+              </button>
+            </div>
+          </div>
+        )
+      }
+    >
+      {commitResult && (
+        <div className="card mb-3" style={{ background: 'var(--surface-2)' }}>
+          <div className="bold">{commitResult.created} added · {commitResult.updated} updated
+            {commitResult.failed && commitResult.failed.length > 0 && ` · ${commitResult.failed.length} still need fixing`}</div>
+          {allDone && <div className="text-sm text-muted">All rows imported successfully.</div>}
+        </div>
+      )}
+
+      {!allDone && (
+        <>
+          <p className="text-sm text-muted" style={{ marginTop: 0 }}>
+            Fix any highlighted cells, then import. Rows highlighted red must be corrected;
+            amber rows are fine to import (e.g. an index number will be auto-assigned).
+          </p>
+          <div style={{ overflowX: 'auto', maxHeight: '55vh', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+              <thead>
+                <tr style={{ position: 'sticky', top: 0, background: 'var(--surface-2)', zIndex: 1 }}>
+                  {['Row', 'Index No.', 'Surname', 'First Name', 'Other Names', 'Class', 'Sex', 'Date of Birth', 'Denomination', 'Action', 'Notes'].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, i) => {
+                  const st = computeRowStatus(row, rows);
+                  const bg = st.status === 'error' ? 'rgba(192,57,43,0.08)' : (st.status === 'warning' ? 'rgba(243,156,18,0.08)' : 'transparent');
+                  const cellErr = (field) => st.errs.some(e => e.field === field);
+                  const d = row.data;
+                  return (
+                    <tr key={i} style={{ background: bg, borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '4px 8px', color: 'var(--muted)' }}>{row.rowNumber}</td>
+                      <td style={{ padding: '4px 6px', minWidth: 120 }}>
+                        <input style={{ ...inputStyle, fontFamily: 'monospace', borderColor: cellErr('index_number') ? 'var(--danger, #c0392b)' : undefined }}
+                          value={d.index_number || ''} placeholder="auto"
+                          onChange={e => updateCell(i, 'index_number', e.target.value)} />
+                      </td>
+                      <td style={{ padding: '4px 6px', minWidth: 110 }}>
+                        <input style={{ ...inputStyle, borderColor: cellErr('surname') ? 'var(--danger, #c0392b)' : undefined }}
+                          value={d.surname || ''} onChange={e => updateCell(i, 'surname', e.target.value)} />
+                      </td>
+                      <td style={{ padding: '4px 6px', minWidth: 110 }}>
+                        <input style={inputStyle} value={d.first_name || ''} onChange={e => updateCell(i, 'first_name', e.target.value)} />
+                      </td>
+                      <td style={{ padding: '4px 6px', minWidth: 110 }}>
+                        <input style={inputStyle} value={d.other_names || ''} onChange={e => updateCell(i, 'other_names', e.target.value)} />
+                      </td>
+                      <td style={{ padding: '4px 6px', minWidth: 90 }}>
+                        <select style={{ ...inputStyle, borderColor: cellErr('current_class_id') ? 'var(--danger, #c0392b)' : undefined }}
+                          value={d.current_class_id || ''} onChange={e => updateCell(i, 'current_class_id', e.target.value)}>
+                          <option value="">{row.classRaw ? `? ${row.classRaw}` : '—'}</option>
+                          {classes.map(c => <option key={c.id} value={c.id}>{c.short_code || c.name}</option>)}
+                        </select>
+                      </td>
+                      <td style={{ padding: '4px 6px', minWidth: 74 }}>
+                        <select style={inputStyle} value={d.gender || ''} onChange={e => updateCell(i, 'gender', e.target.value)}>
+                          <option value="">—</option>
+                          <option>Male</option>
+                          <option>Female</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: '4px 6px', minWidth: 130 }}>
+                        <input type="date" style={inputStyle} value={d.date_of_birth || ''} onChange={e => updateCell(i, 'date_of_birth', e.target.value)} />
+                      </td>
+                      <td style={{ padding: '4px 6px', minWidth: 110 }}>
+                        <input style={inputStyle} value={d.denomination || ''} onChange={e => updateCell(i, 'denomination', e.target.value)} />
+                      </td>
+                      <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
+                        <span className="badge badge-muted">{row.action === 'update' ? 'Update' : 'New'}</span>
+                      </td>
+                      <td style={{ padding: '4px 8px', minWidth: 180, color: 'var(--muted)', fontSize: 10.5 }}>
+                        {[...st.errs, ...st.warns].map((m, k) => (
+                          <div key={k} style={{ color: st.errs.includes(m) ? 'var(--danger, #c0392b)' : 'var(--muted)' }}>{m.message}</div>
+                        ))}
+                        {row.action === 'update' && row.existingName && <div>↻ Updates: {row.existingName}</div>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </Modal>
   );
