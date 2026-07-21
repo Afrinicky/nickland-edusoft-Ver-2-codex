@@ -457,26 +457,35 @@ function reportCardHtml(header, student, scores, summary, term, signatures, exam
     (term ? `End of ${term.label || ''} Examination, ${term.year_label || ''}` : 'Terminal Report')
   ).toUpperCase().replace(/\s+/g, ' ').trim();
 
-  // Score rows. Numbers rounded to integers (the template uses whole marks).
+  // Score rows. The template prints whole marks, so we ROUND EACH CELL ONCE and
+  // then derive every total from those same rounded integers. This is what makes
+  // the whole card add up on paper:
   //
-  // IMPORTANT: `class_score` is already the converted 40% mark, but
-  // `exam_score` is stored RAW (out of 100). The "EXAM (60%)" column must show
-  // the CONVERTED mark, not the raw one, and CLASS + EXAM must equal TOTAL.
-  // We convert the raw exam mark with the configured exam weight (the same
-  // formula recomputeTotal() uses) and rebuild the total from the two columns
-  // shown, so the arithmetic on the page always tallies.
+  //   • `class_score` is already the converted 40% mark; `exam_score` is stored
+  //     RAW (out of 100), so the "EXAM (60%)" column shows the CONVERTED mark
+  //     (raw × exam-weight ÷ 100), rounded — never the raw score.
+  //   • Per row:      Class + Exam = Total   (exact, both are integers)
+  //   • Footer:       ΣClass, ΣExam, ΣTotal are the column sums of the printed
+  //                   integers, and ΣClass + ΣExam = ΣTotal by construction.
+  //   • Average:      ΣTotal ÷ subjects, so it matches the printed Total Score.
+  //
+  // Summing rounded cells (rather than rounding a sum of unrounded values) is the
+  // fix for the footer showing e.g. 172/427 when the columns visibly add to
+  // 170/425.
   const rows = scores || [];
-  const convertExam = raw => Math.round(((Number(raw) || 0) / 100) * examWeight * 100) / 100;
-  const scoreRows = rows.map(sc => {
-    const cls = sc.class_score ?? 0;
-    const exm = convertExam(sc.exam_score);
+  const computed = rows.map(sc => {
+    const cls = Math.round(Number(sc.class_score) || 0);
+    const exm = Math.round(((Number(sc.exam_score) || 0) / 100) * examWeight);
     const tot = cls + exm;
+    return { sc, cls, exm, tot };
+  });
+  const scoreRows = computed.map(({ sc, cls, exm, tot }) => {
     const remark = sc.grade_remark || remarkForTotal(tot);
     return `<tr>
       <td class="rc-subj">${escapeHtml(sc.subject_name || '')}</td>
-      <td class="rc-num">${Math.round(cls)}</td>
-      <td class="rc-num">${Math.round(exm)}</td>
-      <td class="rc-num">${Math.round(tot)}</td>
+      <td class="rc-num">${cls}</td>
+      <td class="rc-num">${exm}</td>
+      <td class="rc-num">${tot}</td>
       <td class="rc-remark">${escapeHtml(remark)}</td>
     </tr>`;
   }).join('');
@@ -486,11 +495,11 @@ function reportCardHtml(header, student, scores, summary, term, signatures, exam
     ? `<tr><td colspan="5" class="rc-placeholder">No scores recorded yet — enter Class and Exam scores to populate this section.</td></tr>`
     : '';
 
-  const totalClass = rows.reduce((s, x) => s + (x.class_score || 0), 0);
-  const totalExam  = rows.reduce((s, x) => s + convertExam(x.exam_score), 0);
+  const totalClass = computed.reduce((s, r) => s + r.cls, 0);
+  const totalExam  = computed.reduce((s, r) => s + r.exm, 0);
   const totalAll   = totalClass + totalExam;
-  const avgScore   = summary?.average_score ?? (rows.length ? totalAll / rows.length : 0);
-  const avgRemark  = rows.length > 0 ? remarkForTotal(avgScore) : '';
+  const avgScore   = computed.length ? totalAll / computed.length : 0;
+  const avgRemark  = computed.length > 0 ? remarkForTotal(avgScore) : '';
 
   // Signature blocks. Each one only renders when its toggle is ON AND its
   // file exists on disk. When neither renders, the whole right column is
