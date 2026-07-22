@@ -63,13 +63,27 @@ export default function AssessmentCompilationTab() {
       setLoading(true);
       const data = await window.api.scores.assessmentCompilationSheet({ classId, termId });
       if (cancelled) return;
+      // Promotion preset: in the third (promotion) term, default each student's
+      // "Promoted To" to the next class up (still editable). Never overrides a
+      // value already saved.
+      const selTerm = terms.find(t => String(t.id) === String(termId));
+      const isPromoTermNow = selTerm?.term_number === 3;
+      const clsSorted = [...classes].sort((a, b) => (a.level_order || 0) - (b.level_order || 0));
+      const ci = clsSorted.findIndex(c => String(c.id) === String(classId));
+      const defaultPromo = (ci >= 0 && clsSorted[ci + 1]) ? clsSorted[ci + 1].name : '';
       const seed = {};
       for (const st of data.students) {
         for (const sub of data.subjects) {
           seed[`${st.student_id}|class|${sub.id}`] = st.subject_scores[sub.id]?.class_score ?? '';
           seed[`${st.student_id}|exam|${sub.id}`] = st.subject_scores[sub.id]?.exam_score ?? '';
         }
-        for (const [field] of summaryFields) seed[`${st.student_id}|summary|${field}`] = st.summary?.[field] ?? '';
+        for (const [field] of summaryFields) {
+          let v = st.summary?.[field];
+          if (field === 'promoted_to' && (v == null || v === '')) {
+            v = isPromoTermNow ? defaultPromo : '';
+          }
+          seed[`${st.student_id}|summary|${field}`] = v ?? '';
+        }
       }
       setSheet(data);
       setInputs(seed);
@@ -83,7 +97,7 @@ export default function AssessmentCompilationTab() {
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [classId, termId, showToast]);
+  }, [classId, termId, showToast, terms, classes]);
 
   function setCell(key, value) {
     setInputs(prev => ({ ...prev, [key]: value }));
@@ -129,6 +143,13 @@ export default function AssessmentCompilationTab() {
     [terms, termId],
   );
 
+  // Dropdown choices for the promotion cell: "Not Promoted" plus every class as
+  // a "Promoted to …" target (teacher can pick a different class than the preset).
+  const promotionOptions = useMemo(() => {
+    const list = [...classes].sort((a, b) => (a.level_order || 0) - (b.level_order || 0));
+    return [{ value: '', label: '— Not Promoted —' }, ...list.map(c => ({ value: c.name, label: `Promoted to ${c.name}` }))];
+  }, [classes]);
+
   // ── Column model — single source of truth for rendering, copy/paste,
   //    export and import. Order mirrors the original on-screen layout. ──
   const columns = useMemo(() => {
@@ -149,10 +170,10 @@ export default function AssessmentCompilationTab() {
     cols.push({ id: 'learner_talents', label: 'Learner Talents', type: 'text', minWidth: 160, cellKey: r => `${r.student_id}|summary|learner_talents` });
     cols.push({ id: 'teacher_remarks', label: "Teacher's Remarks", type: 'text', minWidth: 160, cellKey: r => `${r.student_id}|summary|teacher_remarks` });
     if (isPromotionTerm) {
-      cols.push({ id: 'promoted_to', label: 'Promoted To', subLabel: 'blank = not promoted', type: 'text', minWidth: 150, cellKey: r => `${r.student_id}|summary|promoted_to` });
+      cols.push({ id: 'promoted_to', label: 'Promotion', subLabel: 'auto-set · editable', type: 'enum', options: promotionOptions, minWidth: 190, cellKey: r => `${r.student_id}|summary|promoted_to` });
     }
     return cols;
-  }, [sheet, isPromotionTerm]);
+  }, [sheet, isPromotionTerm, promotionOptions]);
 
   // Text value of a cell (used for copy + export + display of editables).
   function cellText(col, row) {
@@ -464,7 +485,8 @@ export default function AssessmentCompilationTab() {
     const editingThis = editing && editing.r === r && editing.c === c;
     const editable = isEditable(col);
     const cls = ['sheet-cell', 'ac-cell'];
-    if (editable) cls.push('sheet-cell-editable'); else cls.push('sheet-cell-readonly');
+    // Enum (dropdown) cells are interactive too, so they shouldn't look locked.
+    if (editable || col.type === 'enum') cls.push('sheet-cell-editable'); else cls.push('sheet-cell-readonly');
     if (selected) cls.push('ac-cell-selected');
     if (active) cls.push('ac-cell-active');
     if (col.center) cls.push('text-center');
@@ -475,7 +497,25 @@ export default function AssessmentCompilationTab() {
     if (col.mono) { style.fontFamily = 'monospace'; style.fontSize = 11; }
 
     let content;
-    if (editingThis && editable) {
+    if (col.type === 'enum') {
+      // Always-interactive dropdown (bypasses the grid's typed-edit flow).
+      const key = col.cellKey(row);
+      content = (
+        <select
+          className="ac-enum-select"
+          value={inputs[key] ?? ''}
+          onMouseDown={e => e.stopPropagation()}
+          onChange={e => setCell(key, e.target.value)}
+          style={{ width: '100%', border: 'none', background: 'transparent', font: 'inherit', padding: '2px 4px', cursor: 'pointer' }}
+        >
+          {/* Show the stored value even if it isn't one of the class options. */}
+          {(col.options || []).some(o => o.value === (inputs[key] ?? '')) ? null : (
+            <option value={inputs[key] ?? ''}>{inputs[key] || '— Not Promoted —'}</option>
+          )}
+          {(col.options || []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      );
+    } else if (editingThis && editable) {
       const key = col.cellKey(row);
       content = (
         <input

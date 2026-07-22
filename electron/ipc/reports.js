@@ -689,9 +689,9 @@ function reportCardStyles(header) {
     }
     .rc-info-cell { white-space: nowrap; }
     .rc-info-cell.rc-info-full { flex: 1; white-space: normal; }
-    /* "Promoted to …" — pushed to the right edge of the Index/Class row. */
+    /* "Promoted to …" — sits on the same row as Index No./Class, spaced evenly
+       with the other cells (not flushed to the far right edge). */
     .rc-info-cell.rc-promo {
-      margin-left: auto;
       font-weight: 700;
       font-style: italic;
       text-decoration: underline;
@@ -716,7 +716,7 @@ function reportCardStyles(header) {
       width: 100%;
       border-collapse: collapse;
       border: 1px solid #000;
-      margin-bottom: 6mm;
+      margin-bottom: 4mm;
       page-break-inside: avoid;
     }
     .rc-scores th, .rc-scores td {
@@ -747,11 +747,11 @@ function reportCardStyles(header) {
     }
 
     /* --- Qualitative block (inline rows, no table) --- */
-    .rc-qual-block { margin: 5mm 0 6mm 0; font-size: 11pt; }
+    .rc-qual-block { margin: 3mm 0 3mm 0; font-size: 11pt; }
     .rc-qual-row {
       display: flex;
       align-items: baseline;
-      margin-bottom: 2.5mm;
+      margin-bottom: 1.8mm;
     }
     .rc-qual-label {
       width: 44mm;
@@ -770,7 +770,7 @@ function reportCardStyles(header) {
 
     /* --- Attendance (inline) --- */
     .rc-attendance {
-      margin: 6mm 0 4mm 0;
+      margin: 3mm 0 2mm 0;
       font-size: 11pt;
     }
     .rc-att-num {
@@ -790,7 +790,7 @@ function reportCardStyles(header) {
       justify-content: space-between;
       align-items: flex-end;
       gap: 10mm;
-      margin-top: 12mm;
+      margin-top: 6mm;
       font-size: 10.5pt;
       page-break-inside: avoid;
     }
