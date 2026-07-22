@@ -121,6 +121,14 @@ export default function Terms() {
             <div className="form-group"><label className="label">End date</label>
               <input className="input" type="date" value={editingTerm.end_date || ''} onChange={e => setEditingTerm({ ...editingTerm, end_date: e.target.value })} /></div>
           </div>
+          <div className="form-row">
+            <div className="form-group"><label className="label">Vacation date (this term)</label>
+              <input className="input" type="date" value={editingTerm.vacation_date || ''} onChange={e => setEditingTerm({ ...editingTerm, vacation_date: e.target.value })} />
+              <div className="form-hint">Printed as "Vacation Date" on this term's report cards.</div></div>
+            <div className="form-group"><label className="label">Reopening date (next term)</label>
+              <input className="input" type="date" value={editingTerm.reopening_date || ''} onChange={e => setEditingTerm({ ...editingTerm, reopening_date: e.target.value })} />
+              <div className="form-hint">When school resumes after this term — printed as "Reopening Date".</div></div>
+          </div>
         </Modal>
       )}
     </div>

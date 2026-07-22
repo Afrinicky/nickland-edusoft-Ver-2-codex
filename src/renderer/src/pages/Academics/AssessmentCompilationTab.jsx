@@ -9,6 +9,10 @@ const summaryFields = [
   ['learner_interests', 'Learner Interests', 'text'],
   ['learner_talents', 'Learner Talents', 'text'],
   ['teacher_remarks', "Teacher's Remarks", 'text'],
+  // Promotion outcome (third/promotion term). Filled = promoted to that class;
+  // left blank = not promoted. Seeded + saved every term; only shown in the
+  // promotion term's grid.
+  ['promoted_to', 'Promoted To', 'text'],
 ];
 
 const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -118,6 +122,13 @@ export default function AssessmentCompilationTab() {
     return rows;
   }, [sheet, inputs]);
 
+  // The third term is the promotion term. Only then do we surface the
+  // "Promoted To" column so teachers can record who moves up.
+  const isPromotionTerm = useMemo(
+    () => terms.find(t => String(t.id) === String(termId))?.term_number === 3,
+    [terms, termId],
+  );
+
   // ── Column model — single source of truth for rendering, copy/paste,
   //    export and import. Order mirrors the original on-screen layout. ──
   const columns = useMemo(() => {
@@ -137,8 +148,11 @@ export default function AssessmentCompilationTab() {
     cols.push({ id: 'learner_interests', label: 'Learner Interests', type: 'text', minWidth: 160, cellKey: r => `${r.student_id}|summary|learner_interests` });
     cols.push({ id: 'learner_talents', label: 'Learner Talents', type: 'text', minWidth: 160, cellKey: r => `${r.student_id}|summary|learner_talents` });
     cols.push({ id: 'teacher_remarks', label: "Teacher's Remarks", type: 'text', minWidth: 160, cellKey: r => `${r.student_id}|summary|teacher_remarks` });
+    if (isPromotionTerm) {
+      cols.push({ id: 'promoted_to', label: 'Promoted To', subLabel: 'blank = not promoted', type: 'text', minWidth: 150, cellKey: r => `${r.student_id}|summary|promoted_to` });
+    }
     return cols;
-  }, [sheet]);
+  }, [sheet, isPromotionTerm]);
 
   // Text value of a cell (used for copy + export + display of editables).
   function cellText(col, row) {

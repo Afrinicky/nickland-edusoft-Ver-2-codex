@@ -200,16 +200,18 @@ function registerSettingsHandlers(ipcMain, db, getResourcePath) {
     if (data.id) {
       db.prepare(`
         UPDATE terms SET academic_year_id = ?, term_number = ?, label = ?,
-          start_date = ?, end_date = ?
+          start_date = ?, end_date = ?, vacation_date = ?, reopening_date = ?
         WHERE id = ?
       `).run(data.academic_year_id, data.term_number, data.label,
-        data.start_date, data.end_date, data.id);
+        data.start_date, data.end_date,
+        data.vacation_date || null, data.reopening_date || null, data.id);
       return { ok: true, id: data.id };
     } else {
       const result = db.prepare(`
-        INSERT INTO terms (academic_year_id, term_number, label, start_date, end_date)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(data.academic_year_id, data.term_number, data.label, data.start_date, data.end_date);
+        INSERT INTO terms (academic_year_id, term_number, label, start_date, end_date, vacation_date, reopening_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(data.academic_year_id, data.term_number, data.label, data.start_date, data.end_date,
+        data.vacation_date || null, data.reopening_date || null);
       return { ok: true, id: result.lastInsertRowid };
     }
   });
