@@ -1284,6 +1284,23 @@ function runMigrations(db) {
     ins.run('current_exam_title', '');
     ins.run('signature_size_mm', '22');
   });
+
+  // 6. Per-term vacation/reopening dates so each term's report card carries its
+  //    own dates (vacation = end of the printed term, reopening = start of the
+  //    upcoming term).
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(terms)").all().map(c => c.name);
+    if (!cols.includes('vacation_date'))  db.exec("ALTER TABLE terms ADD COLUMN vacation_date TEXT");
+    if (!cols.includes('reopening_date')) db.exec("ALTER TABLE terms ADD COLUMN reopening_date TEXT");
+  });
+
+  // 7. Promotion outcome per student/term (third term is the promotion term).
+  //    A non-empty promoted_to means the student was promoted and the report
+  //    prints "Promoted to <value>".
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(student_term_summary)").all().map(c => c.name);
+    if (!cols.includes('promoted_to')) db.exec("ALTER TABLE student_term_summary ADD COLUMN promoted_to TEXT");
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

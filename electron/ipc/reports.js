@@ -269,6 +269,25 @@ function remarkForTotal(t) {
   return 'Beginning';
 }
 
+// Format a report date for printing. An ISO date (YYYY-MM-DD, as saved by the
+// term settings date pickers) becomes e.g. "Wednesday, 1st April 2026"; any
+// other value (legacy free-text) is printed unchanged.
+function formatReportDate(v) {
+  if (v == null) return '';
+  const s = String(v).trim();
+  if (!s) return '';
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return s; // free text — print as entered
+  const d = new Date(`${s}T00:00:00`);
+  if (isNaN(d.getTime())) return s;
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const months = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+  const day = d.getDate();
+  const ord = (day % 100 >= 11 && day % 100 <= 13) ? 'th' : (['th', 'st', 'nd', 'rd'][day % 10] || 'th');
+  return `${days[d.getDay()]}, ${day}${ord} ${months[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 // Read everything the report card needs from settings in a single call.
 // No name fields — captions are fixed strings (PROPRIETOR / HEAD TEACHER)
 // per the user's removal of the explicit name line.
@@ -452,6 +471,16 @@ function reportCardHtml(header, student, scores, summary, term, signatures, exam
     .replace(/\s+/g, ' ').trim().toUpperCase();
   const className = student.class_name || student.class_short || '';
 
+  // Vacation/reopening dates: the printed term's own dates win; fall back to the
+  // global Terminal Report Layout settings for older data.
+  const vacationDate  = formatReportDate(term?.vacation_date)  || formatReportDate(sig.vacationDate) || '';
+  const reopeningDate = formatReportDate(term?.reopening_date) || formatReportDate(sig.reopeningDate) || '';
+
+  // Promotion (third term). A non-empty promoted_to means the student advanced;
+  // we print "Promoted to <class>" beside the Index No. / Class row.
+  const promotedTo = (summary?.promoted_to != null ? String(summary.promoted_to).trim() : '');
+  const promotionText = promotedTo ? `Promoted to ${promotedTo}` : '';
+
   // Exam title — explicit setting wins, otherwise derive from term + year.
   const examTitle = (sig.examTitle ||
     (term ? `End of ${term.label || ''} Examination, ${term.year_label || ''}` : 'Terminal Report')
@@ -532,6 +561,7 @@ function reportCardHtml(header, student, scores, summary, term, signatures, exam
         <div class="rc-info-line">
           <span class="rc-info-cell"><b>Index No:</b> <span class="rc-info-v">${escapeHtml(student.index_number || '')}</span></span>
           <span class="rc-info-cell"><b>Class:</b> <span class="rc-info-v">${escapeHtml(className)}</span></span>
+          ${promotionText ? `<span class="rc-info-cell rc-promo">${escapeHtml(promotionText)}</span>` : ''}
         </div>
         <div class="rc-info-line">
           <span class="rc-info-cell rc-info-full"><b>Student Name:</b> <span class="rc-info-v rc-info-name">${escapeHtml(fullName)}</span></span>
@@ -601,8 +631,8 @@ function reportCardHtml(header, student, scores, summary, term, signatures, exam
 
       <div class="rc-bottom">
         <div class="rc-bottom-left">
-          <div class="rc-date-line"><b>Vacation Date:</b> <span class="rc-date-v">${escapeHtml(sig.vacationDate || '')}</span></div>
-          <div class="rc-date-line"><b>Reopening Date:</b> <span class="rc-date-v">${escapeHtml(sig.reopeningDate || '')}</span></div>
+          <div class="rc-date-line"><b>Vacation Date:</b> <span class="rc-date-v">${escapeHtml(vacationDate)}</span></div>
+          <div class="rc-date-line"><b>Reopening Date:</b> <span class="rc-date-v">${escapeHtml(reopeningDate)}</span></div>
         </div>
         ${anySignature ? `
           <div class="rc-bottom-right">
@@ -659,6 +689,13 @@ function reportCardStyles(header) {
     }
     .rc-info-cell { white-space: nowrap; }
     .rc-info-cell.rc-info-full { flex: 1; white-space: normal; }
+    /* "Promoted to …" — pushed to the right edge of the Index/Class row. */
+    .rc-info-cell.rc-promo {
+      margin-left: auto;
+      font-weight: 700;
+      font-style: italic;
+      text-decoration: underline;
+    }
     .rc-info-v {
       display: inline-block;
       font-weight: 700;

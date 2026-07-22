@@ -133,17 +133,22 @@ function TerminalReportSettings({ settings, reload, showToast }) {
 
       <div className="form-row">
         <div className="form-group">
-          <label>Vacation date</label>
+          <label>Vacation date (fallback)</label>
           <input type="text" value={form.vacation_date ?? ''}
             onChange={e => set('vacation_date', e.target.value)}
             placeholder="e.g. Wednesday, 1st April 2026" />
         </div>
         <div className="form-group">
-          <label>Reopening date</label>
+          <label>Reopening date (fallback)</label>
           <input type="text" value={form.reopening_date ?? ''}
             onChange={e => set('reopening_date', e.target.value)}
             placeholder="e.g. Tuesday, 21st April 2026" />
         </div>
+      </div>
+      <div className="form-hint" style={{ marginTop: -6, marginBottom: 6 }}>
+        Set these per term under <strong>Settings → Terms → Edit term</strong> — each term's
+        report card uses its own vacation/reopening dates. These fields are only a fallback
+        when a term has none.
       </div>
 
       <div className="form-row">

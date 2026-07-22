@@ -420,7 +420,7 @@ function registerScoresHandlers(ipcMain, db) {
       const summary = db.prepare(`
         SELECT days_present, total_days, conduct_traits, learner_interests,
                learner_talents, teacher_remarks, total_score_all,
-               average_score, class_rank, number_on_roll
+               average_score, class_rank, number_on_roll, promoted_to
         FROM student_term_summary
         WHERE student_id = ? AND term_id = ?
       `).get(st.id, termId) || {};
@@ -459,8 +459,8 @@ function registerScoresHandlers(ipcMain, db) {
           INSERT INTO student_term_summary (
             student_id, term_id, class_group_id, total_score_all, average_score,
             class_rank, number_on_roll, conduct_traits, learner_interests,
-            learner_talents, teacher_remarks, days_present, total_days
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            learner_talents, teacher_remarks, days_present, total_days, promoted_to
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(student_id, term_id) DO UPDATE SET
             class_group_id = excluded.class_group_id,
             total_score_all = excluded.total_score_all,
@@ -472,7 +472,8 @@ function registerScoresHandlers(ipcMain, db) {
             learner_talents = excluded.learner_talents,
             teacher_remarks = excluded.teacher_remarks,
             days_present = excluded.days_present,
-            total_days = excluded.total_days
+            total_days = excluded.total_days,
+            promoted_to = excluded.promoted_to
         `);
 
         for (const st of (students || [])) {
@@ -496,7 +497,8 @@ function registerScoresHandlers(ipcMain, db) {
             summary.learner_talents || '',
             summary.teacher_remarks || '',
             summary.days_present === '' ? null : (parseInt(summary.days_present, 10) || 0),
-            summary.total_days === '' ? null : (parseInt(summary.total_days, 10) || 0)
+            summary.total_days === '' ? null : (parseInt(summary.total_days, 10) || 0),
+            (summary.promoted_to && String(summary.promoted_to).trim()) || null
           );
         }
       });
