@@ -6,6 +6,7 @@ import { useStore } from '../store/index.js';
 export default function Topbar() {
   const navigate = useNavigate();
   const { settings, currentTerm, classes } = useStore();
+  const showToast = useStore(s => s.showToast);
   const school = settings.school || {};
   const branding = settings.branding || {};
   const logoPath = branding.school_logo_path;
@@ -71,6 +72,9 @@ export default function Topbar() {
           </svg>
         </button>
 
+        {/* School-in-session / vacation indicator */}
+        <SessionBadge showToast={showToast} />
+
         {/* Term selector */}
         {currentTerm && (
           <div className="topbar-term">
@@ -80,5 +84,92 @@ export default function Topbar() {
         )}
       </div>
     </header>
+  );
+}
+
+// Live academic-session indicator. Shows whether school is in session or on
+// vacation (based on the term calendar + real/network time) and, when the
+// calendar has rolled into a new term, offers or auto-runs the migration.
+function SessionBadge({ showToast }) {
+  const [info, setInfo] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    try {
+      const s = await window.api.session.status();
+      if (s && s.ok) setInfo(s);
+    } catch (_) {}
+  }
+
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 5 * 60 * 1000); // re-check every 5 min
+    return () => clearInterval(id);
+  }, []);
+
+  // Auto-migrate when configured to do so and a transition is pending.
+  useEffect(() => {
+    if (!info?.transition_pending || info.auto_migrate !== 'auto' || busy) return;
+    (async () => {
+      setBusy(true);
+      try {
+        const res = await window.api.session.migrateTerm({ targetTermId: info.transition_target });
+        if (res?.ok) {
+          await useStore.getState().loadClassesAndTerms();
+          showToast?.(res.was_promotional
+            ? `New academic term started — ${res.promoted} students promoted`
+            : 'System migrated to the new term', 'success');
+        }
+      } catch (_) {}
+      setBusy(false);
+      refresh();
+    })();
+  }, [info?.transition_pending, info?.auto_migrate]);
+
+  async function promptMigrate() {
+    if (!info?.transition_target || busy) return;
+    let plan = null;
+    try { plan = await window.api.session.migrationPreview(info.transition_target); } catch (_) {}
+    const msg = plan?.is_promotional
+      ? `Start "${info.term?.label}" and PROMOTE ${plan.promote_count} students to the next class? Unpaid balances carry forward as arrears.`
+      : `Move the system into "${info.term?.label}"? Unpaid balances carry forward as arrears.`;
+    if (!window.confirm(msg)) return;
+    setBusy(true);
+    try {
+      const res = await window.api.session.migrateTerm({ targetTermId: info.transition_target });
+      if (res?.ok) {
+        await useStore.getState().loadClassesAndTerms();
+        showToast?.(res.was_promotional ? `Term started — ${res.promoted} students promoted` : 'Migrated to new term', 'success');
+      } else {
+        showToast?.(res?.error || 'Migration failed', 'error');
+      }
+    } catch (e) { showToast?.('Migration failed', 'error'); }
+    setBusy(false);
+    refresh();
+  }
+
+  if (!info) return null;
+  const inSession = info.status === 'in_session';
+  const dot = inSession ? '#16a34a' : '#d97706';
+  const bg = inSession ? 'rgba(22,163,74,0.12)' : 'rgba(217,119,6,0.14)';
+  const label = inSession ? 'School in Session' : 'On Vacation';
+  const sub = inSession
+    ? (info.days_to_vacation != null && info.days_to_vacation >= 0 ? `${info.days_to_vacation}d to vacation` : '')
+    : (info.days_to_reopen != null && info.days_to_reopen >= 0 ? `Reopens in ${info.days_to_reopen}d` : '');
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div title={`${label}${info.source === 'manual' ? ' (manual override)' : ''} · time: ${info.time_source}`}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, background: bg, whiteSpace: 'nowrap' }}>
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: dot, boxShadow: `0 0 0 3px ${bg}` }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: dot }}>{label}</span>
+        {sub && <span style={{ fontSize: 11, opacity: 0.7 }}>· {sub}</span>}
+      </div>
+      {info.transition_pending && info.auto_migrate !== 'auto' && (
+        <button className="btn btn-sm btn-primary" disabled={busy} onClick={promptMigrate} title="A new term has started on the calendar">
+          {busy ? '…' : `Start ${info.term?.label || 'new term'} →`}
+        </button>
+      )}
+    </div>
   );
 }

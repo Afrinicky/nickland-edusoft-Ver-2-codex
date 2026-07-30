@@ -73,21 +73,32 @@ export default function FeesBulkPaySheet() {
   async function printReceipt(row) {
     const lp = lastPaid[row.student_id];
     if (!lp?.paymentId) return showToast('No recent payment to print', 'info');
-    const res = await window.api.receipts.generate({
-      templateType: 'fees',
-      paymentId: lp.paymentId,
+    // Built-in standard receipt → opens in a print-preview window with the
+    // configured paper size (A4 / A5 / thermal roll). No template upload needed.
+    const res = await window.api.receipts.print({
       paymentSource: 'fees',
+      paymentId: lp.paymentId,
     });
     if (!res.ok) {
       showToast(res.error || 'Receipt generation failed', 'error');
       return;
     }
-    // Open the generated docx in the OS default app (Word)
-    const openRes = await window.api.app.openFile(res.output_path);
-    if (openRes.ok) {
-      showToast(`Receipt ${lp.receiptNo} opened in Word`, 'success');
+    showToast(`Receipt ${lp.receiptNo} ready to print`, 'success');
+  }
+
+  async function sendReceipt(row, channels) {
+    const lp = lastPaid[row.student_id];
+    if (!lp?.paymentId) return showToast('No recent payment to send', 'info');
+    const res = await window.api.receipts.send({
+      paymentSource: 'fees',
+      paymentId: lp.paymentId,
+      channels,
+    });
+    if (!res.ok) return showToast(res.error || 'Send failed', 'error');
+    if (!res.contact) {
+      showToast('No parent contact on file — receipt saved but not delivered', 'warning');
     } else {
-      showToast(`Receipt saved to ${res.output_path} — open it manually`, 'info');
+      showToast(`Receipt sent via ${res.channels.join(', ')} to ${res.contact}`, 'success');
     }
   }
 
@@ -312,7 +323,13 @@ export default function FeesBulkPaySheet() {
       </div>
 
       {previewRow && (
-        <PreviewModal row={previewRow} lastPaid={lastPaid[previewRow.student_id]} onClose={() => setPreviewRow(null)} />
+        <PreviewModal
+          row={previewRow}
+          lastPaid={lastPaid[previewRow.student_id]}
+          onClose={() => setPreviewRow(null)}
+          onPrint={() => printReceipt(previewRow)}
+          onSend={(channels) => sendReceipt(previewRow, channels)}
+        />
       )}
     </div>
   );
@@ -335,12 +352,12 @@ function statusLabel(s) {
   }[s] || s;
 }
 
-function PreviewModal({ row, lastPaid, onClose }) {
+function PreviewModal({ row, lastPaid, onClose, onPrint, onSend }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <div className="modal-title">Receipt Preview</div>
+          <div className="modal-title">Receipt — {lastPaid?.receiptNo || ''}</div>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
         <table className="reports-table" style={{ width: '100%' }}>
@@ -356,9 +373,15 @@ function PreviewModal({ row, lastPaid, onClose }) {
             <tr><td>Balance Remaining</td><td>{fmtCedi(row.balance)}</td></tr>
           </tbody>
         </table>
-        <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>← Back to Sheet</button>
-          <button className="btn btn-primary" onClick={() => { window.print(); }}>🖨 Print</button>
+        <div className="text-xs text-muted" style={{ marginTop: 10 }}>
+          Send an electronic copy to the parent, or open a print-ready PDF in the
+          configured paper size (change it in Settings → Print &amp; Receipts).
+        </div>
+        <div className="modal-footer" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <button className="btn btn-ghost" onClick={onClose}>← Back</button>
+          <button className="btn btn-outline" onClick={() => onSend(['sms'])}>✉ SMS</button>
+          <button className="btn btn-outline" onClick={() => onSend(['email'])}>📧 Email</button>
+          <button className="btn btn-primary" onClick={onPrint}>🖨 Print / PDF</button>
         </div>
       </div>
     </div>

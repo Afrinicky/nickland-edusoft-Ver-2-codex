@@ -1,5 +1,7 @@
 // Canteen IPC handlers — academic calendar, per-student canteen profile, payments, debtors.
 const { getSetting } = require('../utils/idgen');
+const { postIncome } = require('./_ledger');
+const { autoReceiptForPayment } = require('./receipts_engine');
 
 function registerCanteenHandlers(ipcMain, db) {
   // ===== Calendar =====
@@ -149,19 +151,28 @@ function registerCanteenHandlers(ipcMain, db) {
         VALUES (?, ?, 'paid', ?)
       `);
       for (const d of unpaidDays) insStatus.run(data.student_id, d.date, paymentId);
-      // Add to income ledger
-      db.prepare(`
-        INSERT INTO income_records (date, category, description, amount, source, linked_canteen_payment_id)
-        VALUES (?, 'canteen', ?, ?, 'canteen_payment', ?)
-      `).run(
-        data.payment_date,
-        `Canteen payment - ${days} days @ GHS ${dailyRate.toFixed(2)}`,
-        amount, paymentId
-      );
+      // Add to income ledger via the central helper — previously this INSERT
+      // omitted transaction_date (a NOT NULL column) which rolled the whole
+      // payment back, so canteen collections never reached Finance.
+      postIncome(db, {
+        category: 'canteen',
+        amount,
+        description: `Canteen payment - ${days} days @ GHS ${dailyRate.toFixed(2)}`,
+        payment_method: data.payment_method || 'Cash',
+        date: data.payment_date,
+        source: 'canteen_payment',
+        student_id: data.student_id,
+        term_id: data.term_id || null,
+        linked_canteen_payment_id: paymentId,
+        recorded_by: data.received_by || null,
+        is_auto: 1,
+      });
       return paymentId;
     });
     const id = tx();
-    return { ok: true, id, days_covered: days };
+    let receiptRow = null;
+    try { receiptRow = autoReceiptForPayment(db, 'canteen', id); } catch (_) {}
+    return { ok: true, id, days_covered: days, receipt_id: receiptRow?.id || null };
   });
 
   ipcMain.handle('canteen:debtors-report', (_e, termId) => {

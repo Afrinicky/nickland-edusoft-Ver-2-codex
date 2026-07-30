@@ -1,5 +1,7 @@
 // Fees IPC handlers — fee templates, bill generation, payments, arrears.
 const { getNextReceiptNumber } = require('../utils/idgen');
+const { postIncome } = require('./_ledger');
+const { autoReceiptForPayment } = require('./receipts_engine');
 
 function registerFeesHandlers(ipcMain, db) {
   // ===== Templates =====
@@ -195,28 +197,34 @@ function registerFeesHandlers(ipcMain, db) {
         `).run(data.amount, data.amount, data.student_bill_id);
       }
 
-      // Auto-record into income ledger — category 'fees' (matches finance summary + audit),
-      // with transaction_date set (NOT NULL + queried by audit)
-      db.prepare(`
-        INSERT INTO income_records
-          (receipt_number, category, amount, description, payment_method,
-           transaction_date, date, source, student_id, term_id,
-           linked_payment_id, recorded_by, is_auto)
-        VALUES (?, 'fees', ?, ?, ?, ?, ?, 'student_payment', ?, ?, ?, ?, 1)
-      `).run(
-        receiptNo, data.amount,
-        `School fees payment — ${receiptNo}`,
-        data.payment_method || 'Cash', payDate, payDate,
-        data.student_id, data.term_id || null,
-        result.lastInsertRowid, data.received_by || null
-      );
+      // Auto-record into the finance ledger via the central posting helper.
+      // This guarantees transaction_date + term_id are always set, so the
+      // income can never fall out of the term-scoped finance reports.
+      postIncome(db, {
+        receipt_number: receiptNo,
+        category: 'fees',
+        amount: data.amount,
+        description: `School fees payment — ${receiptNo}`,
+        payment_method: data.payment_method || 'Cash',
+        reference: data.reference || null,
+        date: payDate,
+        source: 'student_payment',
+        student_id: data.student_id,
+        term_id: data.term_id || null,
+        linked_payment_id: result.lastInsertRowid,
+        recorded_by: data.received_by || null,
+        is_auto: 1,
+      });
 
       return result.lastInsertRowid;
     });
 
     try {
       const paymentId = tx();
-      return { ok: true, id: paymentId, receipt_number: receiptNo };
+      // Auto-generate a durable receipt for every fee payment (best-effort).
+      let receipt = null;
+      try { receipt = autoReceiptForPayment(db, 'fees', paymentId); } catch (_) {}
+      return { ok: true, id: paymentId, receipt_number: receiptNo, receipt_id: receipt?.id || null };
     } catch (e) {
       // Log the failure to the audit trail instead of swallowing it
       try {

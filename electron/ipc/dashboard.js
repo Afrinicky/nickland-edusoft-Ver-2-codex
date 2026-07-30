@@ -23,12 +23,14 @@ module.exports = function registerDashboardHandlers(ipcMain, db) {
     const startD = term?.start_date || '1970-01-01';
     const endD   = term?.end_date   || '2099-12-31';
 
-    // Total income from income_records (handles both new transaction_date and legacy date columns)
+    // Total income from income_records. Match by term_id (authoritative) OR
+    // date window (legacy rows) so nothing collected this term is missed.
     const incomeRow = db.prepare(`
       SELECT COALESCE(SUM(amount), 0) AS total
       FROM income_records
-      WHERE COALESCE(transaction_date, date) >= ? AND COALESCE(transaction_date, date) <= ?
-    `).get(startD, endD);
+      WHERE term_id = ?
+         OR (term_id IS NULL AND COALESCE(transaction_date, date) BETWEEN ? AND ?)
+    `).get(currentTerm, startD, endD);
 
     // Fees collected (sum of all payments this term)
     const feesCollectedRow = db.prepare(`

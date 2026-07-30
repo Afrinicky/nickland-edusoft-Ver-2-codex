@@ -11,12 +11,21 @@ export default function Terms() {
   const [editingYear, setEditingYear] = useState(null);
   const [editingTerm, setEditingTerm] = useState(null);
 
+  const [session, setSession] = useState(null);
+
   async function refresh() {
     setYears(await window.api.settings.listAcademicYears());
     setTerms(await window.api.settings.listTerms());
     await loadClassesAndTerms();
+    try { setSession(await window.api.session.status()); } catch (_) {}
   }
   useEffect(() => { refresh(); }, []);
+
+  async function saveSession(patch) {
+    await window.api.session.setMode(patch);
+    setSession(await window.api.session.status());
+    showToast('Session settings updated');
+  }
 
   async function setCurrent(termId) {
     await window.api.settings.setCurrentTerm(termId);
@@ -26,6 +35,55 @@ export default function Terms() {
 
   return (
     <div>
+      {/* Academic session automation */}
+      <div className="card mb-4">
+        <div className="card-header">
+          <div className="card-title">Academic session</div>
+          {session?.ok && (
+            <span className={'badge ' + (session.status === 'in_session' ? 'badge-success' : 'badge-warning')}>
+              {session.status === 'in_session' ? 'School in Session' : 'On Vacation'}
+              {session.source === 'manual' ? ' (manual)' : ''}
+            </span>
+          )}
+        </div>
+        <div className="text-sm text-muted mb-3" style={{ padding: '0 4px' }}>
+          The system decides automatically whether school is in session or on vacation from the term
+          dates and the real (network) time. You can override it, and control what happens when a new term begins.
+          {session?.time_source && <> · Time source: <strong>{session.time_source}</strong></>}
+        </div>
+        <div className="form-row" style={{ padding: '0 4px' }}>
+          <div className="form-group">
+            <label className="label">Status mode</label>
+            <select className="select" value={session?.mode || 'auto'} onChange={e => saveSession({ mode: e.target.value })}>
+              <option value="auto">Automatic (from calendar + time)</option>
+              <option value="in_session">Force: In Session</option>
+              <option value="vacation">Force: On Vacation</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="label">When a new term starts</label>
+            <select className="select" value={session?.auto_migrate || 'prompt'} onChange={e => saveSession({ autoMigrate: e.target.value })}>
+              <option value="prompt">Prompt me to migrate</option>
+              <option value="auto">Migrate automatically</option>
+              <option value="off">Do nothing (manual)</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="label">Time source</label>
+            <select className="select" value={session?.use_network_time === false ? 'system' : 'network'}
+              onChange={e => saveSession({ useNetworkTime: e.target.value === 'network' })}>
+              <option value="network">Network time (recommended)</option>
+              <option value="system">System clock</option>
+            </select>
+          </div>
+        </div>
+        {session?.transition_pending && (
+          <div className="text-sm" style={{ margin: '8px 4px 0', padding: 10, borderRadius: 8, background: 'rgba(217,119,6,0.12)' }}>
+            📆 The calendar shows <strong>{session.term?.label}</strong> has begun. Use the badge in the top bar (or “Set current” below) to migrate the system into it.
+          </div>
+        )}
+      </div>
+
       <div className="card mb-4">
         <div className="card-header">
           <div className="card-title">Academic years</div>

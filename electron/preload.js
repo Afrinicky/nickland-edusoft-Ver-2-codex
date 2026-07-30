@@ -183,6 +183,10 @@ const api = {
     deleteTemplate:    (id)                  => ipcRenderer.invoke('receipts:delete-template', id),
     availableTags:     (templateType)        => ipcRenderer.invoke('receipts:available-tags', templateType),
     generate:          (data)                => ipcRenderer.invoke('receipts:generate', data),
+    generateStandard:  (data)                => ipcRenderer.invoke('receipts:generate-standard', data),
+    print:             (data)                => ipcRenderer.invoke('receipts:print', data),
+    send:              (data)                => ipcRenderer.invoke('receipts:send', data),
+    list:              (filters)             => ipcRenderer.invoke('receipts:list', filters || {}),
   },
 
   // ── Photos ────────────────────────────────────────────
@@ -356,6 +360,14 @@ const api = {
     deleteSubject:     (id)                  => ipcRenderer.invoke('settings:delete-subject', id),
     getClassSubjects:  (classId)             => ipcRenderer.invoke('settings:get-class-subjects', classId),
     setClassSubjects:  (classId, ids)        => ipcRenderer.invoke('settings:set-class-subjects', { classId, subjectIds: ids }),
+  },
+
+  // ── Academic Session / Term automation ────────────────
+  session: {
+    status:            ()                    => ipcRenderer.invoke('session:status'),
+    setMode:           (data)                => ipcRenderer.invoke('session:set-mode', data),
+    migrationPreview:  (targetTermId)        => ipcRenderer.invoke('session:migration-preview', { targetTermId }),
+    migrateTerm:       (data)                => ipcRenderer.invoke('session:migrate-term', data),
   },
 
   // ── Notifications ─────────────────────────────────────

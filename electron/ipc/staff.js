@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getSetting } = require('../utils/idgen');
+const { postExpense } = require('./_ledger');
 
 function registerStaffHandlers(ipcMain, db, userDataPath) {
   // List staff
@@ -159,6 +160,20 @@ function registerStaffHandlers(ipcMain, db, userDataPath) {
         data.is_paid ? 1 : 0, data.notes || '',
         existing.id
       );
+      // Post the salary expense if this update marks it paid (idempotent).
+      if (data.is_paid && actualPaid > 0) {
+        postExpense(db, {
+          category: 'salary',
+          amount: actualPaid,
+          description: `Salary ${data.month}/${data.year}`,
+          payee_name: `${staff.surname} ${staff.first_name}`.trim(),
+          payment_method: data.payment_method || 'Bank',
+          reference: data.payment_reference || null,
+          date: data.payment_date || new Date().toISOString().slice(0, 10),
+          linked_salary_id: existing.id,
+          is_auto: 1,
+        });
+      }
       return { ok: true, id: existing.id };
     } else {
       const result = db.prepare(`
@@ -176,16 +191,21 @@ function registerStaffHandlers(ipcMain, db, userDataPath) {
         data.payment_date || null, data.payment_method || '', data.payment_reference || '',
         data.is_paid ? 1 : 0, data.notes || ''
       );
-      // Add to expense ledger if paid
+      // Add to expense ledger if paid — via the central helper so
+      // transaction_date is always set (the old raw INSERT omitted it, and
+      // transaction_date is NOT NULL, which crashed the whole save).
       if (data.is_paid && actualPaid > 0) {
-        db.prepare(`
-          INSERT INTO expense_records (date, category, description, amount, paid_to, linked_salary_id)
-          VALUES (?, 'salary', ?, ?, ?, ?)
-        `).run(
-          data.payment_date || new Date().toISOString().slice(0, 10),
-          `Salary ${data.month}/${data.year}`, actualPaid,
-          `${staff.surname} ${staff.first_name}`, result.lastInsertRowid
-        );
+        postExpense(db, {
+          category: 'salary',
+          amount: actualPaid,
+          description: `Salary ${data.month}/${data.year}`,
+          payee_name: `${staff.surname} ${staff.first_name}`.trim(),
+          payment_method: data.payment_method || 'Bank',
+          reference: data.payment_reference || null,
+          date: data.payment_date || new Date().toISOString().slice(0, 10),
+          linked_salary_id: result.lastInsertRowid,
+          is_auto: 1,
+        });
       }
       return { ok: true, id: result.lastInsertRowid };
     }

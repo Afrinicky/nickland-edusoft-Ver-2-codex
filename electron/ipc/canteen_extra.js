@@ -1,5 +1,6 @@
 // Nickland Edusoft — Canteen Extra IPC (dashboard, quick-pay, bulk-pay, exemptions)
 // Copyright © 2026 Nickland Sales. All rights reserved.
+const { postIncome } = require('./_ledger');
 
 function getDailyRate(db) {
   const r = db.prepare("SELECT value FROM settings WHERE key = 'canteen_daily_rate'").get();
@@ -237,24 +238,19 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
           ON CONFLICT (student_id, date) DO UPDATE SET status = 'paid', payment_id = excluded.payment_id
         `).run(studentId, date, paymentId);
 
-        // Auto-record income
-        try {
-          db.prepare(`
-            INSERT INTO income_records
-              (receipt_number, category, amount, description, payment_method,
-               transaction_date, date, source, student_id, linked_canteen_payment_id,
-               recorded_by, is_auto)
-            VALUES (NULL, 'canteen', ?, ?, ?, ?, ?, 'canteen_quick', ?, ?, ?, 1)
-          `).run(dailyRate, `Canteen — ${date}`, paymentMethod || 'Cash',
-                 today, today, studentId, paymentId, receivedBy || null);
-        } catch (e) {
-          try {
-            db.prepare(`
-              INSERT INTO audit_log (entity_type, entity_id, action, justification, severity)
-              VALUES ('canteen_payment', ?, 'auto_record_failed', ?, 'high')
-            `).run(studentId, `Canteen income auto-record failed: ${e.message}`);
-          } catch (_) {}
-        }
+        // Auto-record income via central ledger helper.
+        postIncome(db, {
+          category: 'canteen',
+          amount: dailyRate,
+          description: `Canteen — ${date}`,
+          payment_method: paymentMethod || 'Cash',
+          date: today,
+          source: 'canteen_quick',
+          student_id: studentId,
+          linked_canteen_payment_id: paymentId,
+          recorded_by: receivedBy || null,
+          is_auto: 1,
+        });
         return { paymentId };
       }
 
@@ -305,33 +301,25 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
       `);
       for (const d of dates) stmt.run(studentId, d, payRes.lastInsertRowid);
 
-      // Auto-record income
-      try {
-        const receipt = db.prepare("SELECT value FROM settings WHERE key = 'receipt_counter'").get();
-        const n = parseInt(receipt?.value || '1', 10);
-        const receiptNo = `CT/${new Date().getFullYear().toString().slice(-2)}/${String(n).padStart(5, '0')}`;
-        db.prepare("UPDATE settings SET value = ? WHERE key = 'receipt_counter'").run(String(n + 1));
+      // Auto-record income via central ledger helper.
+      const receipt = db.prepare("SELECT value FROM settings WHERE key = 'receipt_counter'").get();
+      const n = parseInt(receipt?.value || '1', 10);
+      const receiptNo = `CT/${new Date().getFullYear().toString().slice(-2)}/${String(n).padStart(5, '0')}`;
+      db.prepare("UPDATE settings SET value = ? WHERE key = 'receipt_counter'").run(String(n + 1));
 
-        db.prepare(`
-          INSERT INTO income_records
-            (receipt_number, category, amount, description,
-             payment_method, transaction_date, date,
-             linked_canteen_payment_id, recorded_by, is_auto)
-          VALUES (?, 'canteen', ?, ?, ?, ?, ?, ?, ?, 1)
-        `).run(
-          receiptNo, amount,
-          `Canteen payment — ${dates.length} day${dates.length > 1 ? 's' : ''}`,
-          paymentMethod || 'Cash', today, today,
-          payRes.lastInsertRowid, receivedBy || null
-        );
-      } catch (e) {
-        try {
-          db.prepare(`
-            INSERT INTO audit_log (entity_type, entity_id, action, justification, severity)
-            VALUES ('canteen_payment', ?, 'auto_record_failed', ?, 'high')
-          `).run(studentId || null, `Canteen income auto-record failed: ${e.message}`);
-        } catch (_) {}
-      }
+      postIncome(db, {
+        receipt_number: receiptNo,
+        category: 'canteen',
+        amount,
+        description: `Canteen payment — ${dates.length} day${dates.length > 1 ? 's' : ''}`,
+        payment_method: paymentMethod || 'Cash',
+        date: today,
+        source: 'canteen_payment',
+        student_id: studentId,
+        linked_canteen_payment_id: payRes.lastInsertRowid,
+        recorded_by: receivedBy || null,
+        is_auto: 1,
+      });
 
       return payRes.lastInsertRowid;
     });

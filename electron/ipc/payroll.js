@@ -48,6 +48,7 @@ function isPAYEEnabled(db) {
 
 module.exports = function registerPayrollHandlers(ipcMain, db) {
   const security = require('./_security');
+  const { postExpense, nextCounter } = require('./_ledger');
 
 
   // ── Calculate (preview) a salary without saving ──────
@@ -240,29 +241,25 @@ module.exports = function registerPayrollHandlers(ipcMain, db) {
       WHERE id = ?
     `).run(actual, Math.max(0, carryOver), paymentDate, paymentMethod || 'Bank', paymentReference || null, id);
 
-    // Auto-record expense
+    // Auto-record expense via the central ledger helper (idempotent on
+    // linked_salary_id, so this can never double-post even if the legacy
+    // staff:save-salary path also ran).
     try {
       const staffRow = db.prepare('SELECT surname, first_name FROM staff WHERE id = ?').get(salary.staff_id);
-      const txnRow = db.prepare("SELECT value FROM settings WHERE key = 'transaction_counter'").get();
-      const n = parseInt(txnRow?.value || '1', 10);
-      const txnNo = `SAL/${new Date().getFullYear().toString().slice(-2)}/${String(n).padStart(5, '0')}`;
-      db.prepare("UPDATE settings SET value = ? WHERE key = 'transaction_counter'").run(String(n + 1));
-
-      db.prepare(`
-        INSERT INTO expense_records
-          (transaction_number, category, amount, description,
-           paid_to, payee_name, payment_method, transaction_date, date,
-           linked_salary_id, recorded_by, is_auto)
-        VALUES (?, 'salary', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      `).run(
-        txnNo, actual,
-        `Salary ${salary.month}/${salary.year}`,
-        `${staffRow.surname} ${staffRow.first_name}`,
-        `${staffRow.surname} ${staffRow.first_name}`,
-        paymentMethod || 'Bank',
-        paymentDate, paymentDate,
-        id, paidBy || null
-      );
+      const txnNo = nextCounter(db, 'transaction_counter', 'SAL');
+      postExpense(db, {
+        transaction_number: txnNo,
+        category: 'salary',
+        amount: actual,
+        description: `Salary ${salary.month}/${salary.year}`,
+        payee_name: `${staffRow.surname} ${staffRow.first_name}`.trim(),
+        payment_method: paymentMethod || 'Bank',
+        reference: paymentReference || null,
+        date: paymentDate,
+        linked_salary_id: id,
+        recorded_by: paidBy || null,
+        is_auto: 1,
+      });
     } catch (e) {
       try {
         db.prepare(`

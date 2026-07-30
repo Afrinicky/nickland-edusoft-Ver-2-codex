@@ -3,6 +3,7 @@
 // If unpaid, the outstanding balance carries forward to Term 2/Term 3 bills
 // as "Books Arrears", visually separated from school fees.
 // Copyright © 2026 Nickland Sales. All rights reserved.
+const { postIncome } = require('./_ledger');
 
 function nextBooksReceipt(db) {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'receipt_counter'").get();
@@ -188,29 +189,20 @@ module.exports = function registerBooksHandlers(ipcMain, db) {
         `).run(data.amount, data.amount, data.student_books_id);
       }
 
-      // Auto-record income
-      try {
-        const incRow = db.prepare("SELECT value FROM settings WHERE key = 'receipt_counter'").get();
-        db.prepare(`
-          INSERT INTO income_records
-            (receipt_number, category, amount, description,
-             payment_method, transaction_date, date, student_id,
-             recorded_by, is_auto)
-          VALUES (?, 'books', ?, ?, ?, ?, ?, ?, ?, 1)
-        `).run(
-          receipt, data.amount,
-          `Books payment — ${data.notes || receipt}`,
-          data.payment_method || 'Cash', today, today,
-          data.student_id, data.received_by || null
-        );
-      } catch (e) {
-        try {
-          db.prepare(`
-            INSERT INTO audit_log (entity_type, entity_id, action, justification, severity)
-            VALUES ('books_payment', ?, 'auto_record_failed', ?, 'high')
-          `).run(data.student_id || null, `Books income auto-record failed: ${e.message}`);
-        } catch (_) {}
-      }
+      // Auto-record income via central ledger helper.
+      postIncome(db, {
+        receipt_number: receipt,
+        category: 'books',
+        amount: data.amount,
+        description: `Books payment — ${data.notes || receipt}`,
+        payment_method: data.payment_method || 'Cash',
+        reference: data.reference || null,
+        date: today,
+        source: 'books_payment',
+        student_id: data.student_id,
+        recorded_by: data.received_by || null,
+        is_auto: 1,
+      });
 
       return r.lastInsertRowid;
     });
