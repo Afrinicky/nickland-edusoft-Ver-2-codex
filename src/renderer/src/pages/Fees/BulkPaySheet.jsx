@@ -66,7 +66,9 @@ export default function FeesBulkPaySheet() {
         paymentId: res.payment_id,
       },
     }));
-    showToast(`Saved ${fmtCedi(amount)} — receipt ${res.receipt_number}`, 'success');
+    const delivered = Array.isArray(res.delivered) && res.delivered.length
+      ? ` · sent via ${res.delivered.join(' & ')}` : '';
+    showToast(`Saved ${fmtCedi(amount)} — receipt ${res.receipt_number}${delivered}`, 'success');
     refresh();
   }
 
@@ -84,22 +86,6 @@ export default function FeesBulkPaySheet() {
       return;
     }
     showToast(`Receipt ${lp.receiptNo} ready to print`, 'success');
-  }
-
-  async function sendReceipt(row, channels) {
-    const lp = lastPaid[row.student_id];
-    if (!lp?.paymentId) return showToast('No recent payment to send', 'info');
-    const res = await window.api.receipts.send({
-      paymentSource: 'fees',
-      paymentId: lp.paymentId,
-      channels,
-    });
-    if (!res.ok) return showToast(res.error || 'Send failed', 'error');
-    if (!res.contact) {
-      showToast('No parent contact on file — receipt saved but not delivered', 'warning');
-    } else {
-      showToast(`Receipt sent via ${res.channels.join(', ')} to ${res.contact}`, 'success');
-    }
   }
 
   const filteredRows = statusFilter
@@ -269,31 +255,26 @@ export default function FeesBulkPaySheet() {
                               />
                             </td>
                             <td className="sheet-cell no-print">
-                              <div style={{ display: 'flex', gap: 4 }}>
+                              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                                 <button
                                   className={'btn btn-sm ' + (hasInput ? 'btn-success' : 'btn-ghost')}
                                   disabled={!hasInput || savingRowId === row.student_id}
                                   onClick={() => save(row)}
                                   title="Save payment"
+                                  style={{ minWidth: 82 }}
                                 >
-                                  {savingRowId === row.student_id ? '…' : '💾 Save'}
+                                  {savingRowId === row.student_id ? 'Saving…' : '💾 Save'}
                                 </button>
-                                <button
-                                  className={'btn btn-sm ' + (lp ? 'btn-outline' : 'btn-ghost')}
-                                  disabled={!lp}
-                                  onClick={() => printReceipt(row)}
-                                  title="Print receipt of last payment"
-                                >
-                                  🖨
-                                </button>
-                                <button
-                                  className={'btn btn-sm ' + (lp ? 'btn-outline' : 'btn-ghost')}
-                                  disabled={!lp}
-                                  onClick={() => setPreviewRow(row)}
-                                  title="Preview last receipt"
-                                >
-                                  👁
-                                </button>
+                                <div className="bulk-pay-receipt-actions"
+                                  style={{ display: 'flex', gap: 4, opacity: lp ? 1 : 0.45 }}
+                                  title={lp ? `Receipt ${lp.receiptNo}` : 'Save a payment to enable the receipt'}>
+                                  <button className="btn btn-sm btn-outline" disabled={!lp}
+                                    onClick={() => printReceipt(row)} title="Print / PDF receipt"
+                                    style={{ minWidth: 38 }}>🖨</button>
+                                  <button className="btn btn-sm btn-outline" disabled={!lp}
+                                    onClick={() => setPreviewRow(row)} title="Preview receipt"
+                                    style={{ minWidth: 38 }}>👁</button>
+                                </div>
                               </div>
                             </td>
                           </tr>
@@ -328,7 +309,6 @@ export default function FeesBulkPaySheet() {
           lastPaid={lastPaid[previewRow.student_id]}
           onClose={() => setPreviewRow(null)}
           onPrint={() => printReceipt(previewRow)}
-          onSend={(channels) => sendReceipt(previewRow, channels)}
         />
       )}
     </div>
@@ -352,7 +332,7 @@ function statusLabel(s) {
   }[s] || s;
 }
 
-function PreviewModal({ row, lastPaid, onClose, onPrint, onSend }) {
+function PreviewModal({ row, lastPaid, onClose, onPrint }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -374,13 +354,11 @@ function PreviewModal({ row, lastPaid, onClose, onPrint, onSend }) {
           </tbody>
         </table>
         <div className="text-xs text-muted" style={{ marginTop: 10 }}>
-          Send an electronic copy to the parent, or open a print-ready PDF in the
-          configured paper size (change it in Settings → Print &amp; Receipts).
+          Opens a print-ready PDF in the configured paper size (Settings → Receipt Templates).
+          SMS/email delivery to the parent happens automatically at payment when enabled in Settings.
         </div>
-        <div className="modal-footer" style={{ flexWrap: 'wrap', gap: 6 }}>
+        <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>← Back</button>
-          <button className="btn btn-outline" onClick={() => onSend(['sms'])}>✉ SMS</button>
-          <button className="btn btn-outline" onClick={() => onSend(['email'])}>📧 Email</button>
           <button className="btn btn-primary" onClick={onPrint}>🖨 Print / PDF</button>
         </div>
       </div>

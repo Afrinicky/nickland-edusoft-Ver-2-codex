@@ -11,8 +11,10 @@ export default function StudentForm({ student, onSaved, onCancel }) {
     index_number: '',
     surname: '', first_name: '', other_names: '', gender: 'Male', denomination: '',
     age: '', date_of_birth: '', place_of_birth: '', place_of_residence: '',
-    father_name: '', father_contact: '', mother_name: '', mother_contact: '',
-    guardian_name: '', guardian_contact: '', street_address: '', house_number: '',
+    father_name: '', father_contact: '', father_email: '',
+    mother_name: '', mother_contact: '', mother_email: '',
+    guardian_name: '', guardian_contact: '', guardian_email: '',
+    street_address: '', house_number: '',
     digital_address: '', nhis_number: '', current_class_id: '', photo_path: '',
   });
   const [saving, setSaving] = useState(false);
@@ -135,17 +137,26 @@ export default function StudentForm({ student, onSaved, onCancel }) {
         <Field label="Father's contact">
           <input className="input" value={data.father_contact || ''} onChange={e => set('father_contact', e.target.value)} />
         </Field>
+        <Field label="Father's email">
+          <input className="input" type="email" value={data.father_email || ''} onChange={e => set('father_email', e.target.value)} placeholder="for receipt delivery" />
+        </Field>
         <Field label="Mother's name">
           <input className="input" value={data.mother_name || ''} onChange={e => set('mother_name', e.target.value)} />
         </Field>
         <Field label="Mother's contact">
           <input className="input" value={data.mother_contact || ''} onChange={e => set('mother_contact', e.target.value)} />
         </Field>
+        <Field label="Mother's email">
+          <input className="input" type="email" value={data.mother_email || ''} onChange={e => set('mother_email', e.target.value)} placeholder="for receipt delivery" />
+        </Field>
         <Field label="Guardian's name">
           <input className="input" value={data.guardian_name || ''} onChange={e => set('guardian_name', e.target.value)} />
         </Field>
         <Field label="Guardian's contact">
           <input className="input" value={data.guardian_contact || ''} onChange={e => set('guardian_contact', e.target.value)} />
+        </Field>
+        <Field label="Guardian's email">
+          <input className="input" type="email" value={data.guardian_email || ''} onChange={e => set('guardian_email', e.target.value)} placeholder="for receipt delivery" />
         </Field>
       </div>
 

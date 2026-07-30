@@ -353,7 +353,63 @@ function autoReceiptForPayment(db, type, paymentId) {
   }
 }
 
+// Pick the recipient (phone or email) for a payment based on config + the
+// student's parent/guardian records. `field` is 'contact' or 'email'.
+function pickRecipient(db, studentId, field, source) {
+  const cols = field === 'email'
+    ? { father: 'father_email', mother: 'mother_email', guardian: 'guardian_email' }
+    : { father: 'father_contact', mother: 'mother_contact', guardian: 'guardian_contact' };
+  const s = db.prepare(`SELECT ${cols.father} AS f, ${cols.mother} AS m, ${cols.guardian} AS g FROM students WHERE id = ?`).get(studentId);
+  if (!s) return '';
+  if (source === 'father')   return s.f || '';
+  if (source === 'mother')   return s.m || '';
+  if (source === 'guardian') return s.g || '';
+  return s.f || s.m || s.g || ''; // auto: first available
+}
+
+// Automatically deliver a receipt for a payment via the configured channels.
+// Best-effort: logs to notification_log (the notifications transport handles
+// the actual send/simulation) and stamps the receipts row. Never throws.
+function autoDeliverReceipt(db, type, paymentId) {
+  try {
+    if (getSetting(db, 'receipt_delivery_enabled', 'false') !== 'true') return null;
+    const channels = getSetting(db, 'receipt_delivery_channels', 'sms')
+      .split(',').map(c => c.trim().toLowerCase()).filter(Boolean);
+    if (!channels.length) return null;
+
+    const model = buildReceiptModel(db, type, paymentId);
+    if (!model || !model.student_id) return null;
+
+    const school = { name: getSetting(db, 'school_name', 'School') };
+    const smsSource = getSetting(db, 'receipt_delivery_contact', 'auto');
+    const emailSource = getSetting(db, 'receipt_delivery_email_source', 'auto');
+    const smsBody = `Dear Parent, we received GHS ${Number(model.amount).toFixed(2)} for ${model.student_name} (${model.student_index || ''}). Receipt ${model.receipt_number || ''}. -${school.name}`;
+
+    const delivered = [];
+    for (const ch of channels) {
+      if (ch !== 'sms' && ch !== 'email') continue;
+      const to = ch === 'email'
+        ? pickRecipient(db, model.student_id, 'email', emailSource)
+        : pickRecipient(db, model.student_id, 'contact', smsSource);
+      db.prepare(`
+        INSERT INTO notification_log (channel, recipient_type, recipient_name, recipient_contact,
+          message_body, template_used, delivery_status)
+        VALUES (?, 'parent', ?, ?, ?, 'receipt_auto', ?)
+      `).run(ch, model.student_name || '', to || '', smsBody, to ? 'queued' : 'no_contact');
+      if (to) delivered.push(ch);
+    }
+    try {
+      db.prepare("UPDATE receipts SET delivery_status = ?, delivered_channels = ? WHERE source = ? AND source_id = ?")
+        .run(delivered.length ? 'sent' : 'no_contact', delivered.join(','), type, paymentId);
+    } catch (_) {}
+    return { channels: delivered };
+  } catch (e) {
+    return null;
+  }
+}
+
 module.exports = {
   PAPER, resolvePaper, buildReceiptModel, renderReceiptHtml,
-  htmlToPdf, autoReceiptForPayment, schoolInfo, amountInWords,
+  htmlToPdf, autoReceiptForPayment, autoDeliverReceipt, pickRecipient,
+  schoolInfo, amountInWords,
 };
