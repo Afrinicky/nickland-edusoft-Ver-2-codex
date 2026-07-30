@@ -2,7 +2,7 @@
 // Provides per-class payment sheet data (WHONET-style) and rapid payment recording
 // Copyright © 2026 Nickland Sales. All rights reserved.
 const { postIncome } = require('./_ledger');
-const { autoReceiptForPayment } = require('./receipts_engine');
+const { autoReceiptForPayment, autoDeliverReceipt } = require('./receipts_engine');
 
 function nextFeesReceipt(db) {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'receipt_counter'").get();
@@ -151,6 +151,8 @@ module.exports = function registerFeesBulkPayHandlers(ipcMain, db) {
     const paymentId = tx();
     let receiptRow = null;
     try { receiptRow = autoReceiptForPayment(db, 'fees', paymentId); } catch (_) {}
-    return { ok: true, payment_id: paymentId, receipt_number: receipt, receipt_id: receiptRow?.id || null };
+    let delivery = null;
+    try { delivery = autoDeliverReceipt(db, 'fees', paymentId); } catch (_) {}
+    return { ok: true, payment_id: paymentId, receipt_number: receipt, receipt_id: receiptRow?.id || null, delivered: delivery?.channels || [] };
   });
 };

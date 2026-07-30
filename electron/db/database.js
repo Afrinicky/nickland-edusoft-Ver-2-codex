@@ -1203,6 +1203,7 @@ function seedDefaults(db) {
     ['email_smtp_port', '587', 'notifications'],
     ['email_smtp_user', '', 'notifications'],
     ['email_smtp_pass', '', 'notifications'],
+    ['email_from', '', 'notifications'],
     ['whatsapp_api_token', '', 'notifications'],
     ['whatsapp_phone_id', '', 'notifications'],
     // Payroll
@@ -1375,6 +1376,22 @@ function runMigrations(db) {
     ins.run('receipt_paper_size', 'A4');         // A4 | A5 | Letter | roll80 | roll58
     ins.run('receipt_auto_generate', 'true');    // auto-make a receipt on every fee payment
     ins.run('receipt_footer_note', 'Thank you for your payment.');
+  });
+
+  // 13. Automatic receipt delivery settings + parent email columns.
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(students)").all().map(c => c.name);
+    if (!cols.includes('father_email'))   db.exec("ALTER TABLE students ADD COLUMN father_email TEXT");
+    if (!cols.includes('mother_email'))   db.exec("ALTER TABLE students ADD COLUMN mother_email TEXT");
+    if (!cols.includes('guardian_email')) db.exec("ALTER TABLE students ADD COLUMN guardian_email TEXT");
+  });
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'notifications')");
+    ins.run('receipt_delivery_enabled', 'false');       // auto-send receipt on payment
+    ins.run('receipt_delivery_channels', 'sms');        // comma list: sms,email
+    ins.run('receipt_delivery_contact', 'auto');        // auto | father | mother | guardian
+    ins.run('receipt_delivery_email_source', 'auto');   // auto | father | mother | guardian
+    ins.run('email_from', '');                          // From: address for SMTP email
   });
 }
 

@@ -95,7 +95,8 @@ module.exports = function registerReceiptTemplatesHandlers(ipcMain, db, userData
     } catch (e) { return { ok: false, error: `Receipt print failed: ${e.message || e}` }; }
   });
 
-  // Send a receipt electronically (email and/or SMS) via the notifications channel.
+  // Send a receipt electronically (email and/or SMS). Logs each message and
+  // hands it to the transport layer (Arkesel SMS / SMTP email) for real send.
   ipcMain.handle('receipts:send', async (_e, { paymentSource, paymentId, channels, contact, paperSize }) => {
     try {
       const res = await generateStandard(paymentSource, paymentId, { paperSize });
@@ -103,23 +104,36 @@ module.exports = function registerReceiptTemplatesHandlers(ipcMain, db, userData
       const m = res.model;
       const school = engine.schoolInfo(db, getResourcePath);
       const wanted = channels && channels.length ? channels : ['sms'];
-      const to = contact || m.contact || '';
+      let transport = null;
+      try { transport = require('./_transport'); } catch (_) {}
       const done = [];
       const smsBody = `Dear Parent, we received GHS ${Number(m.amount).toFixed(2)} for ${m.student_name} (${m.student_index || ''}). Receipt ${m.receipt_number || ''}. -${school.name}`;
+      const emailSubject = `Payment Receipt ${m.receipt_number || ''} — ${school.name}`;
       for (const ch of wanted) {
-        db.prepare(`
+        // Resolve recipient: explicit `contact`, else the model's own contact
+        // (for email fall back to the student's configured email source).
+        let to = contact || '';
+        if (!to) {
+          to = ch === 'email'
+            ? engine.pickRecipient(db, m.student_id, 'email', 'auto')
+            : engine.pickRecipient(db, m.student_id, 'contact', 'auto');
+        }
+        const r = db.prepare(`
           INSERT INTO notification_log (channel, recipient_type, recipient_name, recipient_contact,
             message_body, attachment_paths, template_used, delivery_status)
           VALUES (?, 'parent', ?, ?, ?, ?, 'receipt', ?)
-        `).run(
-          ch, m.student_name || '', to, smsBody, res.output_path,
-          to ? 'queued' : 'no_contact'
-        );
-        done.push(ch);
+        `).run(ch, m.student_name || '', to || '', smsBody, res.output_path, to ? 'pending' : 'no_contact');
+        if (to) {
+          done.push(ch);
+          if (transport) {
+            const html = ch === 'email' ? res.html : undefined;
+            transport.dispatchAsync(db, r.lastInsertRowid, ch, to, smsBody, { subject: emailSubject, html });
+          }
+        }
       }
-      db.prepare("UPDATE receipts SET delivery_status = 'sent', delivered_channels = ? WHERE source = ? AND source_id = ?")
-        .run(done.join(','), paymentSource, paymentId);
-      return { ok: true, channels: done, contact: to, output_path: res.output_path };
+      db.prepare("UPDATE receipts SET delivery_status = ?, delivered_channels = ? WHERE source = ? AND source_id = ?")
+        .run(done.length ? 'sending' : 'no_contact', done.join(','), paymentSource, paymentId);
+      return { ok: true, channels: done, contact: contact || (m.contact || ''), output_path: res.output_path };
     } catch (e) { return { ok: false, error: `Receipt send failed: ${e.message || e}` }; }
   });
 

@@ -62,6 +62,14 @@ export default function NotificationsConfig() {
             <input className="input" type="password" value={data.email_smtp_pass || ''} onChange={e => set('email_smtp_pass', e.target.value)} />
           </Field>
         </div>
+        <div className="form-row">
+          <Field label="From address">
+            <input className="input" type="email" value={data.email_from || ''} onChange={e => set('email_from', e.target.value)} placeholder="Defaults to the SMTP user" />
+          </Field>
+        </div>
+        <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+          Port 465 uses implicit TLS; 587/25 use STARTTLS. Receipts and notices are sent from this account.
+        </div>
       </div>
 
       <div className="card mb-4">

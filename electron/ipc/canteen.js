@@ -1,7 +1,7 @@
 // Canteen IPC handlers — academic calendar, per-student canteen profile, payments, debtors.
 const { getSetting } = require('../utils/idgen');
 const { postIncome } = require('./_ledger');
-const { autoReceiptForPayment } = require('./receipts_engine');
+const { autoReceiptForPayment, autoDeliverReceipt } = require('./receipts_engine');
 
 function registerCanteenHandlers(ipcMain, db) {
   // ===== Calendar =====
@@ -172,6 +172,7 @@ function registerCanteenHandlers(ipcMain, db) {
     const id = tx();
     let receiptRow = null;
     try { receiptRow = autoReceiptForPayment(db, 'canteen', id); } catch (_) {}
+    try { autoDeliverReceipt(db, 'canteen', id); } catch (_) {}
     return { ok: true, id, days_covered: days, receipt_id: receiptRow?.id || null };
   });
 

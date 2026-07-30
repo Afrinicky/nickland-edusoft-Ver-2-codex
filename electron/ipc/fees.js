@@ -1,7 +1,7 @@
 // Fees IPC handlers — fee templates, bill generation, payments, arrears.
 const { getNextReceiptNumber } = require('../utils/idgen');
 const { postIncome } = require('./_ledger');
-const { autoReceiptForPayment } = require('./receipts_engine');
+const { autoReceiptForPayment, autoDeliverReceipt } = require('./receipts_engine');
 
 function registerFeesHandlers(ipcMain, db) {
   // ===== Templates =====
@@ -221,10 +221,13 @@ function registerFeesHandlers(ipcMain, db) {
 
     try {
       const paymentId = tx();
-      // Auto-generate a durable receipt for every fee payment (best-effort).
+      // Auto-generate a durable receipt for every fee payment, and auto-deliver
+      // it to the parent by SMS/email if that's enabled in Settings (best-effort).
       let receipt = null;
       try { receipt = autoReceiptForPayment(db, 'fees', paymentId); } catch (_) {}
-      return { ok: true, id: paymentId, receipt_number: receiptNo, receipt_id: receipt?.id || null };
+      let delivery = null;
+      try { delivery = autoDeliverReceipt(db, 'fees', paymentId); } catch (_) {}
+      return { ok: true, id: paymentId, receipt_number: receiptNo, receipt_id: receipt?.id || null, delivered: delivery?.channels || [] };
     } catch (e) {
       // Log the failure to the audit trail instead of swallowing it
       try {

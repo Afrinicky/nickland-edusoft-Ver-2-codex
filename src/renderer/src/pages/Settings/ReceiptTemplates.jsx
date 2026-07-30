@@ -20,7 +20,11 @@ export default function ReceiptTemplates() {
   const [availableTags, setAvailableTags] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [printCfg, setPrintCfg] = useState({ receipt_paper_size: 'A4', receipt_auto_generate: 'true', receipt_footer_note: '' });
+  const [printCfg, setPrintCfg] = useState({
+    receipt_paper_size: 'A4', receipt_auto_generate: 'true', receipt_footer_note: '',
+    receipt_delivery_enabled: 'false', receipt_delivery_channels: 'sms',
+    receipt_delivery_contact: 'auto', receipt_delivery_email_source: 'auto',
+  });
 
   async function refresh() {
     setLoading(true);
@@ -32,10 +36,15 @@ export default function ReceiptTemplates() {
     setTemplates(list);
     setAvailableTags(tags);
     const p = allSettings.print || {};
+    const n = allSettings.notifications || {};
     setPrintCfg({
       receipt_paper_size: p.receipt_paper_size || 'A4',
       receipt_auto_generate: p.receipt_auto_generate || 'true',
       receipt_footer_note: p.receipt_footer_note || '',
+      receipt_delivery_enabled: n.receipt_delivery_enabled || 'false',
+      receipt_delivery_channels: n.receipt_delivery_channels || 'sms',
+      receipt_delivery_contact: n.receipt_delivery_contact || 'auto',
+      receipt_delivery_email_source: n.receipt_delivery_email_source || 'auto',
     });
     setLoading(false);
   }
@@ -126,6 +135,62 @@ export default function ReceiptTemplates() {
             onBlur={e => savePrint('receipt_footer_note', e.target.value)}
             placeholder="Thank you for your payment." />
         </div>
+      </div>
+
+      {/* Automatic electronic delivery */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="section-header">
+          <div className="section-title">Automatic delivery to parents</div>
+          <label className="row gap-2" style={{ alignItems: 'center' }}>
+            <input type="checkbox" checked={printCfg.receipt_delivery_enabled === 'true'}
+              onChange={e => savePrint('receipt_delivery_enabled', e.target.checked ? 'true' : 'false')} />
+            <span className="text-sm">{printCfg.receipt_delivery_enabled === 'true' ? 'Enabled' : 'Disabled'}</span>
+          </label>
+        </div>
+        <p className="text-sm text-muted" style={{ marginTop: 4 }}>
+          When enabled, the moment a student pays, the receipt is sent automatically to the parent —
+          no button-clicking. Choose the channel(s) and which contact/email to use. Parent phone
+          numbers and emails are entered on each student's record (Students → Sheet or the student form).
+        </p>
+        {printCfg.receipt_delivery_enabled === 'true' && (
+          <>
+            <div className="form-row" style={{ marginTop: 10 }}>
+              <div className="form-group">
+                <label className="label">Channel(s)</label>
+                <select className="select" value={printCfg.receipt_delivery_channels}
+                  onChange={e => savePrint('receipt_delivery_channels', e.target.value)}>
+                  <option value="sms">SMS only</option>
+                  <option value="email">Email only</option>
+                  <option value="sms,email">SMS and Email</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">SMS recipient (phone)</label>
+                <select className="select" value={printCfg.receipt_delivery_contact}
+                  onChange={e => savePrint('receipt_delivery_contact', e.target.value)}>
+                  <option value="auto">Auto — first available</option>
+                  <option value="father">Father's contact</option>
+                  <option value="mother">Mother's contact</option>
+                  <option value="guardian">Guardian's contact</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">Email recipient</label>
+                <select className="select" value={printCfg.receipt_delivery_email_source}
+                  onChange={e => savePrint('receipt_delivery_email_source', e.target.value)}>
+                  <option value="auto">Auto — first available</option>
+                  <option value="father">Father's email</option>
+                  <option value="mother">Mother's email</option>
+                  <option value="guardian">Guardian's email</option>
+                </select>
+              </div>
+            </div>
+            <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+              Delivery is logged under Notifications. Configure your SMS/email provider in
+              Settings → Notifications for live sending (otherwise messages are recorded in simulation mode).
+            </div>
+          </>
+        )}
       </div>
 
       <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)', marginTop: 16 }}>

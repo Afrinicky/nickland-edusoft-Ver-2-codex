@@ -87,8 +87,9 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
       const fields = [
         'surname', 'first_name', 'other_names', 'gender', 'denomination', 'date_of_birth',
         'age', 'place_of_birth', 'place_of_residence', 'street_address', 'house_number',
-        'digital_address', 'nhis_number', 'father_name', 'father_contact', 'mother_name',
-        'mother_contact', 'guardian_name', 'guardian_contact', 'current_class_id',
+        'digital_address', 'nhis_number', 'father_name', 'father_contact', 'father_email',
+        'mother_name', 'mother_contact', 'mother_email', 'guardian_name', 'guardian_contact',
+        'guardian_email', 'current_class_id',
         'status', 'inactive_reason', 'admission_date', 'notes', 'index_number',
       ];
       // Guard the UNIQUE index_number so a clash returns a friendly message
@@ -228,10 +229,10 @@ function createStudentInternal(db, data) {
       index_number, admission_year, roll_number, surname, first_name, other_names,
       gender, denomination, age, date_of_birth, place_of_birth, place_of_residence,
       street_address, house_number, digital_address, nhis_number,
-      father_name, father_contact, mother_name, mother_contact,
-      guardian_name, guardian_contact, current_class_id, status,
+      father_name, father_contact, father_email, mother_name, mother_contact, mother_email,
+      guardian_name, guardian_contact, guardian_email, current_class_id, status,
       admission_date, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     indexNumber, admissionYear, rollNumber,
     data.surname || '', data.first_name || '', data.other_names || '',
@@ -239,9 +240,9 @@ function createStudentInternal(db, data) {
     data.date_of_birth || null, data.place_of_birth || '', data.place_of_residence || '',
     data.street_address || '', data.house_number || '', data.digital_address || '',
     data.nhis_number || '',
-    data.father_name || '', data.father_contact || '',
-    data.mother_name || '', data.mother_contact || '',
-    data.guardian_name || '', data.guardian_contact || '',
+    data.father_name || '', data.father_contact || '', data.father_email || '',
+    data.mother_name || '', data.mother_contact || '', data.mother_email || '',
+    data.guardian_name || '', data.guardian_contact || '', data.guardian_email || '',
     data.current_class_id, data.status || 'Active',
     data.admission_date || new Date().toISOString().slice(0, 10),
     data.notes || ''
