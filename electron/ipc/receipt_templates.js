@@ -5,6 +5,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const engine = require('./receipts_engine');
+const { getSetting } = require('../utils/idgen');
 
 // Standard merge tags available in all receipt types
 const MERGE_TAGS = {
@@ -44,7 +46,96 @@ const MERGE_TAGS = {
   ],
 };
 
-module.exports = function registerReceiptTemplatesHandlers(ipcMain, db, userDataPath) {
+module.exports = function registerReceiptTemplatesHandlers(ipcMain, db, userDataPath, getResourcePath) {
+
+  const receiptsDir = () => {
+    const d = path.join(userDataPath, 'receipts');
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+    return d;
+  };
+
+  // ── Standard (built-in, template-free) receipt → PDF ──
+  // Works with NO uploaded template. Honors the configured paper size,
+  // including 80mm / 58mm thermal roll. This is the default receipt path.
+  async function generateStandard(type, paymentId, options = {}) {
+    const model = engine.buildReceiptModel(db, type, paymentId);
+    if (!model) return { ok: false, error: 'Payment not found for receipt.' };
+    const school = engine.schoolInfo(db, getResourcePath);
+    const paperSize = options.paperSize || getSetting(db, 'receipt_paper_size', 'A4');
+    const html = engine.renderReceiptHtml(school, model, paperSize);
+    const safeName = (model.receipt_number || `receipt_${type}_${paymentId}`).replace(/[/\\:*?"<>|]/g, '_');
+    const outPath = path.join(receiptsDir(), `${safeName}.pdf`);
+    await engine.htmlToPdf(html, outPath, paperSize);
+    // Attach the pdf path to the durable receipt row.
+    try {
+      db.prepare('UPDATE receipts SET pdf_path = ? WHERE source = ? AND source_id = ?')
+        .run(outPath, type, paymentId);
+    } catch (_) {}
+    return { ok: true, output_path: outPath, paper_size: paperSize, model, html };
+  }
+
+  ipcMain.handle('receipts:generate-standard', async (_e, { paymentSource, paymentId, paperSize }) => {
+    try { return await generateStandard(paymentSource, paymentId, { paperSize }); }
+    catch (e) { return { ok: false, error: `Receipt generation failed: ${e.message || e}` }; }
+  });
+
+  // Generate + open in the native print-preview window (Print / Save toolbar).
+  ipcMain.handle('receipts:print', async (_e, { paymentSource, paymentId, paperSize }) => {
+    try {
+      const res = await generateStandard(paymentSource, paymentId, { paperSize });
+      if (!res.ok) return res;
+      const { BrowserWindow } = require('electron');
+      const win = new BrowserWindow({
+        width: 720, height: 900, title: 'Receipt — ' + (res.model.receipt_number || ''),
+        autoHideMenuBar: true,
+        webPreferences: { plugins: true, contextIsolation: true, nodeIntegration: false },
+      });
+      win.loadURL('file://' + res.output_path);
+      return { ok: true, output_path: res.output_path, paper_size: res.paper_size };
+    } catch (e) { return { ok: false, error: `Receipt print failed: ${e.message || e}` }; }
+  });
+
+  // Send a receipt electronically (email and/or SMS) via the notifications channel.
+  ipcMain.handle('receipts:send', async (_e, { paymentSource, paymentId, channels, contact, paperSize }) => {
+    try {
+      const res = await generateStandard(paymentSource, paymentId, { paperSize });
+      if (!res.ok) return res;
+      const m = res.model;
+      const school = engine.schoolInfo(db, getResourcePath);
+      const wanted = channels && channels.length ? channels : ['sms'];
+      const to = contact || m.contact || '';
+      const done = [];
+      const smsBody = `Dear Parent, we received GHS ${Number(m.amount).toFixed(2)} for ${m.student_name} (${m.student_index || ''}). Receipt ${m.receipt_number || ''}. -${school.name}`;
+      for (const ch of wanted) {
+        db.prepare(`
+          INSERT INTO notification_log (channel, recipient_type, recipient_name, recipient_contact,
+            message_body, attachment_paths, template_used, delivery_status)
+          VALUES (?, 'parent', ?, ?, ?, ?, 'receipt', ?)
+        `).run(
+          ch, m.student_name || '', to, smsBody, res.output_path,
+          to ? 'queued' : 'no_contact'
+        );
+        done.push(ch);
+      }
+      db.prepare("UPDATE receipts SET delivery_status = 'sent', delivered_channels = ? WHERE source = ? AND source_id = ?")
+        .run(done.join(','), paymentSource, paymentId);
+      return { ok: true, channels: done, contact: to, output_path: res.output_path };
+    } catch (e) { return { ok: false, error: `Receipt send failed: ${e.message || e}` }; }
+  });
+
+  ipcMain.handle('receipts:list', (_e, filters = {}) => {
+    let sql = `
+      SELECT r.*, s.surname, s.first_name, s.index_number
+      FROM receipts r LEFT JOIN students s ON s.id = r.student_id WHERE 1=1
+    `;
+    const params = [];
+    if (filters.type) { sql += ' AND r.receipt_type = ?'; params.push(filters.type); }
+    if (filters.studentId) { sql += ' AND r.student_id = ?'; params.push(filters.studentId); }
+    sql += ' ORDER BY r.issued_at DESC, r.id DESC LIMIT ?';
+    params.push(filters.limit || 100);
+    return db.prepare(sql).all(...params);
+  });
+
 
   ipcMain.handle('receipts:list-templates', (_e, filters = {}) => {
     let sql = `
@@ -113,8 +204,10 @@ module.exports = function registerReceiptTemplatesHandlers(ipcMain, db, userData
     return MERGE_TAGS[templateType] || MERGE_TAGS.fees;
   });
 
-  // Generate a receipt: substitutes merge tags in the docx template
-  ipcMain.handle('receipts:generate', (_e, { templateType, paymentId, paymentSource }) => {
+  // Generate a receipt: substitutes merge tags in an uploaded docx template if
+  // one exists; otherwise falls back to the built-in standard PDF receipt so
+  // printing ALWAYS works even before any template is uploaded.
+  ipcMain.handle('receipts:generate', async (_e, { templateType, paymentId, paymentSource }) => {
     // paymentSource: 'fees' | 'books' | 'canteen'
 
     const tpl = db.prepare(`
@@ -123,11 +216,15 @@ module.exports = function registerReceiptTemplatesHandlers(ipcMain, db, userData
       LIMIT 1
     `).get(templateType);
 
-    if (!tpl) {
-      return { ok: false, error: `No default ${templateType} receipt template uploaded. Go to Settings → Receipt Templates to upload one.` };
-    }
-    if (!fs.existsSync(tpl.file_path)) {
-      return { ok: false, error: `Template file is missing on disk: ${tpl.file_path}` };
+    // No uploaded template (or its file vanished) → built-in standard receipt.
+    if (!tpl || !fs.existsSync(tpl.file_path)) {
+      try {
+        const res = await generateStandard(paymentSource || templateType, paymentId);
+        if (res.ok) return { ok: true, output_path: res.output_path, standard: true, data: res.model };
+        return res;
+      } catch (e) {
+        return { ok: false, error: `Receipt generation failed: ${e.message || e}` };
+      }
     }
 
     // Build the data map

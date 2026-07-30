@@ -1301,6 +1301,81 @@ function runMigrations(db) {
     const cols = db.prepare("PRAGMA table_info(student_term_summary)").all().map(c => c.name);
     if (!cols.includes('promoted_to')) db.exec("ALTER TABLE student_term_summary ADD COLUMN promoted_to TEXT");
   });
+
+  // 8. canteen_payments.term_id — the canteen record-payment flow inserted and
+  //    queried a term_id column that never existed in the schema, which crashed
+  //    both "Record Payment" and the student canteen profile. Add it so canteen
+  //    income is properly attributed to a term.
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(canteen_payments)").all().map(c => c.name);
+    if (!cols.includes('term_id')) db.exec("ALTER TABLE canteen_payments ADD COLUMN term_id INTEGER");
+    // Backfill term_id from the school calendar / date so old rows report correctly.
+    db.prepare(`
+      UPDATE canteen_payments SET term_id = (
+        SELECT t.id FROM terms t
+        WHERE date(t.start_date) <= date(canteen_payments.payment_date)
+          AND date(t.end_date) >= date(canteen_payments.payment_date)
+        ORDER BY date(t.start_date) DESC LIMIT 1
+      ) WHERE term_id IS NULL
+    `).run();
+  });
+
+  // 9. Receipts ledger — every payment gets a durable receipt record so a
+  //    receipt can always be re-printed, re-sent (email/SMS) and audited.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        receipt_number TEXT,
+        receipt_type TEXT NOT NULL DEFAULT 'fees',
+        source TEXT,
+        source_id INTEGER,
+        student_id INTEGER,
+        amount REAL NOT NULL DEFAULT 0,
+        payment_method TEXT,
+        term_id INTEGER,
+        academic_year_id INTEGER,
+        payer_name TEXT,
+        recipient_contact TEXT,
+        issued_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        issued_by INTEGER,
+        pdf_path TEXT,
+        delivery_status TEXT DEFAULT 'issued',
+        delivered_channels TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_receipts_source ON receipts(source, source_id);
+      CREATE INDEX IF NOT EXISTS idx_receipts_number ON receipts(receipt_number);
+    `);
+  });
+
+  // 10. Finance ledger indexes for the date-range + term reports.
+  safe(() => {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_income_txn_date ON income_records(transaction_date);
+      CREATE INDEX IF NOT EXISTS idx_expense_txn_date ON expense_records(transaction_date);
+      CREATE INDEX IF NOT EXISTS idx_income_linked_pay ON income_records(linked_payment_id);
+      CREATE INDEX IF NOT EXISTS idx_income_linked_canteen ON income_records(linked_canteen_payment_id);
+      CREATE INDEX IF NOT EXISTS idx_expense_linked_salary ON expense_records(linked_salary_id);
+    `);
+  });
+
+  // 11. Session / term-automation settings (school-in-session vs vacation).
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'session')");
+    ins.run('session_status_mode', 'auto');      // auto | in_session | vacation
+    ins.run('session_status_manual', '');        // used when mode != auto
+    ins.run('term_auto_migrate', 'prompt');      // prompt | auto | off
+    ins.run('term_last_migrated_to', '');        // id of the last term we migrated into
+    ins.run('use_network_time', 'true');         // fall back to system clock if false/offline
+  });
+
+  // 12. Receipt / print settings.
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'print')");
+    ins.run('receipt_paper_size', 'A4');         // A4 | A5 | Letter | roll80 | roll58
+    ins.run('receipt_auto_generate', 'true');    // auto-make a receipt on every fee payment
+    ins.run('receipt_footer_note', 'Thank you for your payment.');
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {
@@ -1310,6 +1385,12 @@ function initDatabase(userDataPath, getResourcePath) {
   db.exec(SCHEMA);
   runMigrations(db);
   seedDefaults(db);
+  // Repair the finance ledger against the source-of-truth payment tables so
+  // historically-collected money (before the posting fixes) shows up correctly.
+  try {
+    const { reconcileLedger } = require('../ipc/_ledger');
+    reconcileLedger(db);
+  } catch (e) { /* never block startup */ }
   db._getResourcePath = getResourcePath;
   db._userDataPath = userDataPath;
   db._isFirstRun = isFirstRun;

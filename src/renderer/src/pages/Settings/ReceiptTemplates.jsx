@@ -20,17 +20,32 @@ export default function ReceiptTemplates() {
   const [availableTags, setAvailableTags] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const [printCfg, setPrintCfg] = useState({ receipt_paper_size: 'A4', receipt_auto_generate: 'true', receipt_footer_note: '' });
+
   async function refresh() {
     setLoading(true);
-    const [list, tags] = await Promise.all([
+    const [list, tags, allSettings] = await Promise.all([
       window.api.receipts.listTemplates({ templateType: activeType }),
       window.api.receipts.availableTags(activeType),
+      window.api.settings.getAll(),
     ]);
     setTemplates(list);
     setAvailableTags(tags);
+    const p = allSettings.print || {};
+    setPrintCfg({
+      receipt_paper_size: p.receipt_paper_size || 'A4',
+      receipt_auto_generate: p.receipt_auto_generate || 'true',
+      receipt_footer_note: p.receipt_footer_note || '',
+    });
     setLoading(false);
   }
   useEffect(() => { refresh(); }, [activeType]);
+
+  async function savePrint(key, value) {
+    setPrintCfg(prev => ({ ...prev, [key]: value }));
+    await window.api.settings.set(key, value);
+    showToast('Receipt settings saved', 'success');
+  }
 
   async function uploadNew() {
     const res = await window.api.app.showOpenDialog({
@@ -74,8 +89,47 @@ export default function ReceiptTemplates() {
 
   return (
     <div className="receipt-templates-settings">
-      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
-        <strong>How receipt templates work</strong>
+      {/* Built-in receipt + delivery settings */}
+      <div className="card">
+        <div className="section-title">Printing &amp; delivery</div>
+        <p className="text-sm text-muted" style={{ marginTop: 4 }}>
+          Every payment automatically produces a standard receipt — no template upload required.
+          Receipts can be printed on paper or sent to parents by SMS/email. Choose your paper size below
+          (including thermal roll printers). An uploaded Word template, if set as default, overrides the built-in layout.
+        </p>
+        <div className="form-row" style={{ marginTop: 10 }}>
+          <div className="form-group">
+            <label className="label">Paper size</label>
+            <select className="select" value={printCfg.receipt_paper_size}
+              onChange={e => savePrint('receipt_paper_size', e.target.value)}>
+              <option value="A4">A4 (210 × 297 mm)</option>
+              <option value="A5">A5 (148 × 210 mm)</option>
+              <option value="Letter">Letter (8.5 × 11 in)</option>
+              <option value="roll80">Thermal roll — 80 mm</option>
+              <option value="roll58">Thermal roll — 58 mm</option>
+            </select>
+            <div className="form-hint">80/58 mm print continuous receipts on POS/thermal printers.</div>
+          </div>
+          <div className="form-group">
+            <label className="label">Auto-generate receipts</label>
+            <select className="select" value={printCfg.receipt_auto_generate}
+              onChange={e => savePrint('receipt_auto_generate', e.target.value)}>
+              <option value="true">On — every fee payment gets a receipt</option>
+              <option value="false">Off — generate on demand only</option>
+            </select>
+          </div>
+        </div>
+        <div className="form-group">
+          <label className="label">Receipt footer note</label>
+          <input className="input" value={printCfg.receipt_footer_note}
+            onChange={e => setPrintCfg(prev => ({ ...prev, receipt_footer_note: e.target.value }))}
+            onBlur={e => savePrint('receipt_footer_note', e.target.value)}
+            placeholder="Thank you for your payment." />
+        </div>
+      </div>
+
+      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)', marginTop: 16 }}>
+        <strong>Optional: custom Word templates</strong>
         <div className="text-sm" style={{ marginTop: 8, lineHeight: 1.6 }}>
           <ol style={{ marginLeft: 20 }}>
             <li>Design your receipt in Microsoft Word with whatever formatting you want — letterheads, tables, fonts, colors, watermarks, pictures, page sizes — anything Word supports.</li>

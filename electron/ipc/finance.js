@@ -196,19 +196,25 @@ module.exports = function registerFinanceHandlers(ipcMain, db) {
       : db.prepare("SELECT * FROM terms WHERE is_current = 1").get();
     if (!term) return { income_total: 0, expense_total: 0, net: 0 };
 
+    // Match by term_id (authoritative — every ledger row is tagged) OR fall
+    // back to the date window for any legacy row that predates term tagging.
+    // This prevents money collected on a day outside the term's calendar
+    // window (e.g. during vacation) from disappearing off the report.
     const inc = db.prepare(`
       SELECT category, COALESCE(SUM(amount), 0) AS total
       FROM income_records
-      WHERE COALESCE(transaction_date, date) >= ? AND COALESCE(transaction_date, date) <= ?
+      WHERE term_id = ?
+         OR (term_id IS NULL AND COALESCE(transaction_date, date) BETWEEN ? AND ?)
       GROUP BY category
-    `).all(term.start_date, term.end_date);
+    `).all(term.id, term.start_date, term.end_date);
 
     const exp = db.prepare(`
       SELECT category, COALESCE(SUM(amount), 0) AS total
       FROM expense_records
-      WHERE COALESCE(transaction_date, date) >= ? AND COALESCE(transaction_date, date) <= ?
+      WHERE term_id = ?
+         OR (term_id IS NULL AND COALESCE(transaction_date, date) BETWEEN ? AND ?)
       GROUP BY category
-    `).all(term.start_date, term.end_date);
+    `).all(term.id, term.start_date, term.end_date);
 
     const incomeTotal = inc.reduce((s, r) => s + r.total, 0);
     const expenseTotal = exp.reduce((s, r) => s + r.total, 0);

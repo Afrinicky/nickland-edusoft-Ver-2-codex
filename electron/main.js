@@ -32,6 +32,7 @@ const registerReceiptTemplatesHandlers = require('./ipc/receipt_templates');
 const registerPhotosHandlers = require('./ipc/photos');
 const registerStaffActivitiesHandlers = require('./ipc/staff_activities');
 const registerBackupHandlers = require('./ipc/backup');
+const registerSessionHandlers = require('./ipc/session');
 const registerStubHandlers = require('./ipc/_stubs');
 
 const isDev = !app.isPackaged;
@@ -103,7 +104,7 @@ app.whenReady().then(async () => {
   registerFeesBulkPayHandlers(ipcMain, db);
   registerInventoryHandlers(ipcMain, db);
   registerAuditLogHandlers(ipcMain, db);
-  registerReceiptTemplatesHandlers(ipcMain, db, userDataPath);
+  registerReceiptTemplatesHandlers(ipcMain, db, userDataPath, getResourcePath);
   registerPhotosHandlers(ipcMain, db, userDataPath);
   registerStaffActivitiesHandlers(ipcMain, db);
   registerStudentHandlers(ipcMain, db, userDataPath);
@@ -116,6 +117,7 @@ app.whenReady().then(async () => {
   registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath);
   registerNotificationsHandlers(ipcMain, db);
   registerBackupHandlers(ipcMain, db, app, userDataPath);
+  registerSessionHandlers(ipcMain, db);
 
   // Stubs LAST — only register channels not already taken
   registerStubHandlers(ipcMain, db);
