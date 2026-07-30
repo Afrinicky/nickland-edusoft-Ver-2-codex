@@ -368,9 +368,10 @@ function pickRecipient(db, studentId, field, source) {
 }
 
 // Automatically deliver a receipt for a payment via the configured channels.
-// Best-effort: logs to notification_log (the notifications transport handles
-// the actual send/simulation) and stamps the receipts row. Never throws.
-function autoDeliverReceipt(db, type, paymentId) {
+// Logs each message to notification_log, then hands it to the transport layer
+// (Arkesel SMS / SMTP email) asynchronously so the payment never blocks on the
+// network. Stamps the receipts row. Never throws.
+function autoDeliverReceipt(db, type, paymentId, getResourcePath) {
   try {
     if (getSetting(db, 'receipt_delivery_enabled', 'false') !== 'true') return null;
     const channels = getSetting(db, 'receipt_delivery_channels', 'sms')
@@ -380,10 +381,15 @@ function autoDeliverReceipt(db, type, paymentId) {
     const model = buildReceiptModel(db, type, paymentId);
     if (!model || !model.student_id) return null;
 
-    const school = { name: getSetting(db, 'school_name', 'School') };
+    const school = schoolInfo(db, getResourcePath);
     const smsSource = getSetting(db, 'receipt_delivery_contact', 'auto');
     const emailSource = getSetting(db, 'receipt_delivery_email_source', 'auto');
     const smsBody = `Dear Parent, we received GHS ${Number(model.amount).toFixed(2)} for ${model.student_name} (${model.student_index || ''}). Receipt ${model.receipt_number || ''}. -${school.name}`;
+    const emailSubject = `Payment Receipt ${model.receipt_number || ''} — ${school.name}`;
+    let emailHtml = null;
+
+    let transport = null;
+    try { transport = require('./_transport'); } catch (_) {}
 
     const delivered = [];
     for (const ch of channels) {
@@ -391,16 +397,22 @@ function autoDeliverReceipt(db, type, paymentId) {
       const to = ch === 'email'
         ? pickRecipient(db, model.student_id, 'email', emailSource)
         : pickRecipient(db, model.student_id, 'contact', smsSource);
-      db.prepare(`
+      const r = db.prepare(`
         INSERT INTO notification_log (channel, recipient_type, recipient_name, recipient_contact,
           message_body, template_used, delivery_status)
         VALUES (?, 'parent', ?, ?, ?, 'receipt_auto', ?)
-      `).run(ch, model.student_name || '', to || '', smsBody, to ? 'queued' : 'no_contact');
-      if (to) delivered.push(ch);
+      `).run(ch, model.student_name || '', to || '', smsBody, to ? 'pending' : 'no_contact');
+      if (to) {
+        delivered.push(ch);
+        if (transport) {
+          if (ch === 'email' && !emailHtml) emailHtml = renderReceiptHtml(school, model, 'A4');
+          transport.dispatchAsync(db, r.lastInsertRowid, ch, to, smsBody, { subject: emailSubject, html: ch === 'email' ? emailHtml : undefined });
+        }
+      }
     }
     try {
       db.prepare("UPDATE receipts SET delivery_status = ?, delivered_channels = ? WHERE source = ? AND source_id = ?")
-        .run(delivered.length ? 'sent' : 'no_contact', delivered.join(','), type, paymentId);
+        .run(delivered.length ? 'sending' : 'no_contact', delivered.join(','), type, paymentId);
     } catch (_) {}
     return { channels: delivered };
   } catch (e) {

@@ -1,6 +1,6 @@
 // Notifications IPC handlers — SMS, email, WhatsApp, templates, and history.
-const https = require('https');
 const { getSetting } = require('../utils/idgen');
+const transport = require('./_transport');
 
 function registerNotificationsHandlers(ipcMain, db) {
   ipcMain.handle('notifications:get-templates', () => {
@@ -37,6 +37,36 @@ function registerNotificationsHandlers(ipcMain, db) {
     return await sendSmsInternal(db, data);
   });
 
+  // Generic single send routed by channel (matches preload notifications.send).
+  ipcMain.handle('notifications:send', async (_e, data) => {
+    if ((data.channel || 'sms') === 'email') return await sendEmailInternal(db, data);
+    return await sendSmsInternal(db, data);
+  });
+
+  // Send an email directly.
+  ipcMain.handle('notifications:send-email', async (_e, data) => {
+    return await sendEmailInternal(db, data);
+  });
+
+  // Generic bulk send routed by channel (matches preload notifications.sendBulk).
+  ipcMain.handle('notifications:send-bulk', async (_e, data) => {
+    const results = [];
+    for (const r of data.recipients || []) {
+      let body = data.message;
+      if (r.params) {
+        for (const [k, v] of Object.entries(r.params)) {
+          body = body.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v ?? ''));
+        }
+      }
+      const payload = { recipient_name: r.name, recipient_contact: r.contact, message: body, subject: data.subject, html: r.html, template_used: data.templateName || null };
+      const res = (data.channel || 'sms') === 'email'
+        ? await sendEmailInternal(db, payload)
+        : await sendSmsInternal(db, payload);
+      results.push({ contact: r.contact, ...res });
+    }
+    return { ok: true, results };
+  });
+
   ipcMain.handle('notifications:send-bulk-sms', async (_e, data) => {
     // data: { recipients: [{ name, contact, params? }], message, templateName? }
     const results = [];
@@ -61,49 +91,49 @@ function registerNotificationsHandlers(ipcMain, db) {
 }
 
 async function sendSmsInternal(db, data) {
-  // Persist to log as 'pending'; in dev mode, just simulate success.
-  const provider = getSetting(db, 'sms_provider', 'arkesel');
-  const apiKey = getSetting(db, 'sms_api_key', '');
-  const senderId = getSetting(db, 'sms_sender_id', 'AveMariaSch');
-
+  const to = data.recipient_contact || '';
   const logResult = db.prepare(`
     INSERT INTO notification_log (channel, recipient_type, recipient_name, recipient_contact,
       message_body, template_used, delivery_status)
-    VALUES ('sms', ?, ?, ?, ?, ?, ?)
+    VALUES ('sms', ?, ?, ?, ?, ?, 'pending')
   `).run(
     data.recipient_type || 'parent',
     data.recipient_name || '',
-    data.recipient_contact || '',
+    to,
     data.message || '',
-    data.template_used || null,
-    apiKey ? 'pending' : 'no_api_key'
+    data.template_used || null
   );
   const logId = logResult.lastInsertRowid;
-
-  if (!apiKey) {
-    // No API key — return success in dev/simulation mode
-    db.prepare("UPDATE notification_log SET delivery_status = 'simulated' WHERE id = ?")
-      .run(logId);
-    return { ok: true, simulated: true, id: logId };
+  if (!to) {
+    db.prepare("UPDATE notification_log SET delivery_status = 'no_contact' WHERE id = ?").run(logId);
+    return { ok: false, id: logId, error: 'no_contact' };
   }
+  // Real send (Arkesel). Falls back to a logged "simulated" state with no API key.
+  const res = await transport.dispatch(db, logId, 'sms', to, data.message || '', {});
+  return { ok: res.ok, id: logId, simulated: !!res.simulated, error: res.ok ? undefined : (res.error || 'send_failed') };
+}
 
-  // Real send via Arkesel (only if API key is set)
-  if (provider === 'arkesel') {
-    try {
-      const url = `https://sms.arkesel.com/api/v2/sms/send`;
-      // Live integration code would POST here; we keep this safe-by-default.
-      // const body = { sender: senderId, message: data.message, recipients: [data.recipient_contact] };
-      // ... actual fetch using https module ...
-      db.prepare("UPDATE notification_log SET delivery_status = 'queued' WHERE id = ?")
-        .run(logId);
-      return { ok: true, id: logId, queued: true };
-    } catch (err) {
-      db.prepare("UPDATE notification_log SET delivery_status = 'failed', api_response = ? WHERE id = ?")
-        .run(String(err.message), logId);
-      return { ok: false, error: err.message };
-    }
+async function sendEmailInternal(db, data) {
+  const to = data.recipient_contact || data.to || '';
+  const logResult = db.prepare(`
+    INSERT INTO notification_log (channel, recipient_type, recipient_name, recipient_contact,
+      message_body, attachment_paths, template_used, delivery_status)
+    VALUES ('email', ?, ?, ?, ?, ?, ?, 'pending')
+  `).run(
+    data.recipient_type || 'parent',
+    data.recipient_name || '',
+    to,
+    data.message || '',
+    data.attachment_paths || null,
+    data.template_used || null
+  );
+  const logId = logResult.lastInsertRowid;
+  if (!to) {
+    db.prepare("UPDATE notification_log SET delivery_status = 'no_contact' WHERE id = ?").run(logId);
+    return { ok: false, id: logId, error: 'no_contact' };
   }
-  return { ok: true, id: logId };
+  const res = await transport.dispatch(db, logId, 'email', to, data.message || '', { subject: data.subject, html: data.html });
+  return { ok: res.ok, id: logId, simulated: !!res.simulated, error: res.ok ? undefined : (res.error || 'send_failed') };
 }
 
 module.exports = registerNotificationsHandlers;
