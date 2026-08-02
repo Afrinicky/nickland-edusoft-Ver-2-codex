@@ -134,6 +134,21 @@ const api = {
     testServer:        ()                    => ipcRenderer.invoke('mobile-sync:test-server'),
   },
 
+  // ── Mobile API host (embedded server for the mobile client) ──
+  mobile: {
+    status:            ()                    => ipcRenderer.invoke('mobile:status'),
+    start:             ()                    => ipcRenderer.invoke('mobile:start'),
+    stop:              ()                    => ipcRenderer.invoke('mobile:stop'),
+    setConfig:         (data)                => ipcRenderer.invoke('mobile:set-config', data),
+    listDevices:       ()                    => ipcRenderer.invoke('mobile:list-devices'),
+    revokeDevice:      (id)                  => ipcRenderer.invoke('mobile:revoke-device', id),
+    listParents:       ()                    => ipcRenderer.invoke('mobile:list-parents'),
+    createParent:      (data)                => ipcRenderer.invoke('mobile:create-parent', data),
+    resetParent:       (data)                => ipcRenderer.invoke('mobile:reset-parent', data),
+    revokeParent:      (parentId)            => ipcRenderer.invoke('mobile:revoke-parent', parentId),
+    matchStudents:     (data)                => ipcRenderer.invoke('mobile:match-students', data),
+  },
+
   // ── Discounts ─────────────────────────────────────────
   discounts: {
     list:              (filters)             => ipcRenderer.invoke('discounts:list', filters || {}),

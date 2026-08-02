@@ -1393,6 +1393,55 @@ function runMigrations(db) {
     ins.run('receipt_delivery_email_source', 'auto');   // auto | father | mother | guardian
     ins.run('email_from', '');                          // From: address for SMTP email
   });
+
+  // 14. Mobile API host: parent accounts, parent↔student links, device tokens.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS parents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name TEXT NOT NULL,
+        phone TEXT,
+        email TEXT,
+        password_hash TEXT,
+        is_active INTEGER DEFAULT 1,
+        must_change_password INTEGER DEFAULT 0,
+        last_login TEXT,
+        created_by INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_parents_phone ON parents(phone) WHERE phone IS NOT NULL AND phone != '';
+      CREATE TABLE IF NOT EXISTS parent_students (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        relationship TEXT,
+        UNIQUE (parent_id, student_id),
+        FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE,
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS api_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash TEXT UNIQUE NOT NULL,
+        subject_type TEXT NOT NULL,      -- 'user' (staff) | 'parent'
+        subject_id INTEGER NOT NULL,
+        device_name TEXT,
+        platform TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TEXT,
+        expires_at TEXT,
+        revoked INTEGER DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_api_tokens_subject ON api_tokens(subject_type, subject_id);
+    `);
+  });
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'mobile')");
+    ins.run('mobile_server_enabled', 'false');   // start the embedded API server
+    ins.run('mobile_server_port', '4747');        // TCP port for the API
+    ins.run('mobile_server_bind', 'lan');         // 'lan' (0.0.0.0) | 'localhost'
+    ins.run('mobile_parent_self_register', 'true'); // parents may self-register if their phone matches a student
+    ins.run('mobile_token_ttl_days', '30');
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {
