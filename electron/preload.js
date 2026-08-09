@@ -410,6 +410,10 @@ const api = {
     restore:           (backupPath)          => ipcRenderer.invoke('backup:restore', backupPath),
     factoryReset:      (data)                => ipcRenderer.invoke('backup:factory-reset', data),
     openFolder:        ()                    => ipcRenderer.invoke('backup:open-folder'),
+    getConfig:         ()                    => ipcRenderer.invoke('backup:get-config'),
+    setConfig:         (patch)               => ipcRenderer.invoke('backup:set-config', patch),
+    runAuto:           ()                    => ipcRenderer.invoke('backup:run-auto'),
+    pickFolder:        ()                    => ipcRenderer.invoke('backup:pick-folder'),
   },
 
   // ── App-level ─────────────────────────────────────────

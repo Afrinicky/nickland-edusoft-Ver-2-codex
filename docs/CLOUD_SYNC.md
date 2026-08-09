@@ -8,6 +8,28 @@ how each school's **local SQLite** stays in step with the shared **cloud Neon
 - **Local-first.** Each school keeps running fully on its desktop SQLite even
   with no internet. The cloud is an *additive* mirror + a reach-anywhere portal,
   never a hard dependency for daily work.
+- **Thin cloud (Neon holds as little as possible).** The **local SQLite is the
+  durable holder of everyone's information** — students, staff, finance, scores,
+  documents. Neon stores only what the portal/app actually needs to *serve a
+  request when the desktop is offline*, and nothing more:
+  - identity/link rows (parent ↔ student, device tokens) and per-school config;
+  - **small, denormalised read snapshots** (a child's current balances, latest
+    report summary, recent receipts/notices) that are overwritten on each sync
+    and can be TTL-expired/pruned — not full history;
+  - **in-flight transactions** (payment intents, portal edits) that pull down to
+    the desktop and can be deleted from the cloud once reconciled.
+  History, attachments, and the full dataset never need to live in Neon; the
+  desktop keeps them and backs them up (see BACKUPS below). This keeps cloud
+  storage — and cost — minimal, and doesn't change any established framework:
+  the outbox just projects a thin view upward.
+
+## Backups (schools own their data)
+Because the local DB is the source of truth, robust backups matter more than a
+fat cloud. The desktop supports **manual and automated** backups (Settings →
+Backup): scheduled hourly/daily/weekly with retention, fanned out to the local
+backups folder, an extra local/LAN/network folder, and a **cloud-sync folder**
+(Google Drive Desktop / OneDrive / Dropbox — any drive of choice). This gives
+off-site durability without putting the full dataset in Neon.
 - **Single source of truth per data class**, not per row globally:
   - *School operational data* (students, bills, payments, scores, attendance,
     staff, finance) → **desktop SQLite is authoritative**.

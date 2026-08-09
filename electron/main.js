@@ -119,6 +119,7 @@ app.whenReady().then(async () => {
   registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath);
   registerNotificationsHandlers(ipcMain, db);
   registerBackupHandlers(ipcMain, db, app, userDataPath);
+  try { require('./ipc/backup').startScheduler(db, userDataPath); } catch (e) { /* scheduler is best-effort */ }
   registerSessionHandlers(ipcMain, db);
   registerMobileHandlers(ipcMain, db);
   registerPaymentsIntentsHandlers(ipcMain, db);
