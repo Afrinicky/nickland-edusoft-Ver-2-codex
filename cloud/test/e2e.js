@@ -18,8 +18,10 @@ function makeDesktopDb() {
   db.transaction = (fn) => (...a) => { db.exec('BEGIN'); try { const r = fn(...a); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; } };
   const schema = fs.readFileSync(path.join(ROOT, 'electron/db/database.js'), 'utf8').match(/const SCHEMA = `([\s\S]*?)`;/)[1];
   db.exec(schema);
+  db.exec("ALTER TABLE students ADD COLUMN father_email TEXT;ALTER TABLE students ADD COLUMN mother_email TEXT;ALTER TABLE students ADD COLUMN guardian_email TEXT;");
   db.exec(`CREATE TABLE sync_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, entity_type TEXT, entity_key TEXT, op TEXT DEFAULT 'upsert', payload_json TEXT, version INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, synced_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT);`);
-  db.exec(`CREATE TABLE parents (id INTEGER PRIMARY KEY AUTOINCREMENT, full_name TEXT, phone TEXT, email TEXT, password_hash TEXT, is_active INTEGER DEFAULT 1);`);
+  db.exec(`CREATE TABLE parents (id INTEGER PRIMARY KEY AUTOINCREMENT, full_name TEXT, phone TEXT, email TEXT, password_hash TEXT, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0, last_login TEXT, created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
+  db.exec(`CREATE TABLE parent_students (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER, student_id INTEGER, relationship TEXT, UNIQUE(parent_id, student_id));`);
   db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
   db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (3,1,3,'T3','2026-04-22','2026-07-31',1);");
   db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10);");
@@ -59,8 +61,8 @@ function makeDesktopDb() {
 
   // Portal read endpoint returns the same read model (what the web page renders).
   const { httpJson } = require(path.join(ROOT, 'electron/server/gateways/http.js'));
-  const portal = await httpJson(`${base}/api/v1/portal/snapshots?type=student_snapshot`, { headers: { 'x-school-key': api_key } });
-  ck('portal read endpoint serves the snapshot', portal.json.ok && portal.json.snapshots[0].payload.name.includes('ANSU'));
+  const portal = await httpJson(`${base}/api/v1/admin/snapshots?type=student_snapshot`, { headers: { 'x-school-key': api_key } });
+  ck('admin read endpoint serves the snapshot', portal.json.ok && portal.json.snapshots[0].payload.name.includes('ANSU'));
 
   // Cloud: a parent edits their profile on the web → enqueue a change.
   await store.enqueueChange(school_id, { type: 'parent_update', payload: { parent_id: 1, full_name: 'Papa Ansu', email: 'papa@mail.com' } });
@@ -74,6 +76,16 @@ function makeDesktopDb() {
   // Idempotent re-pull.
   const q2 = await client.pull(db);
   ck('re-pull applies 0', q2.ok && q2.applied === 0);
+
+  // ── Full chain: desktop provisions a parent → projects auth → website login ──
+  const parents = require(path.join(ROOT, 'electron/server/parents.js'));
+  const prov = parents.provisionParent(db, { full_name: 'Mama', phone: '0209998887', password: 'pass12', studentIds: [1] });
+  ck('desktop provisions a parent', prov.ok);
+  await client.push(db); // projects parent_auth (+ the student snapshot is already up)
+  const login = await httpJson(`${base}/api/v1/portal/login`, { method: 'POST', body: { school_id, identifier: '0209998887', password: 'pass12' } });
+  ck('parent logs into the website (auth projected from desktop)', login.json && login.json.ok && !!login.json.token);
+  const kids = await httpJson(`${base}/api/v1/portal/children`, { headers: { Authorization: 'Bearer ' + login.json.token } });
+  ck('website shows the child pushed from the desktop', kids.json.ok && kids.json.children.length === 1 && kids.json.children[0].fees.balance === 260);
 
   // Wrong key is rejected by the cloud.
   setS('school_api_key', 'sk_wrong');

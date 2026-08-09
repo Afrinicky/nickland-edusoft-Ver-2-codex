@@ -30,6 +30,15 @@ function createMemoryStore() {
       return null;
     },
 
+    async getSchool(school_id) {
+      const s = schools.get(school_id);
+      return s ? { school_id, name: s.name } : null;
+    },
+
+    async listSchools() {
+      return [...schools.entries()].map(([id, s]) => ({ school_id: id, name: s.name }));
+    },
+
     // Idempotent upsert of a thin projection, keyed by entity_key; higher/equal
     // version wins so out-of-order retries never regress the read model.
     async upsertSnapshot(school_id, rec) {

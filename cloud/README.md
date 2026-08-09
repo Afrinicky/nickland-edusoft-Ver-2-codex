@@ -14,16 +14,29 @@ full dataset. Each desktop stays the source of truth (see
 - **No framework.** Node's built-in `http`, matching the desktop's dependency
   discipline. `pg` is the only production dependency and is lazily required.
 
-## API (the desktop client speaks this)
+## API
+**School-key** endpoints (`x-school-key`) — desktop host + portal backend:
 ```
 GET  /health
 GET  /api/v1/sync/ping                     → { ok, school }
 POST /api/v1/sync/push                     → { ok, accepted:[uuid] }
 GET  /api/v1/sync/pull?since=<cursor>      → { ok, cursor, changes }
-GET  /api/v1/portal/snapshots[?type=]      → { ok, snapshots }   (portal read model)
-POST /api/v1/portal/enqueue-change         → { ok, id }          (queue a cloud→local change)
+GET  /api/v1/admin/snapshots[?type=]       → { ok, snapshots }   (read model)
+POST /api/v1/admin/enqueue-change          → { ok, id }          (queue a cloud→local change)
 ```
-All `/api/v1/*` require a valid `x-school-key`.
+**Parent portal** endpoints — the public website:
+```
+GET  /                                     → the parent web app (SPA)
+GET  /api/v1/portal/schools                → { ok, schools }     (login picker)
+POST /api/v1/portal/login                  → { ok, token, parent }   { school_id, identifier, password }
+GET  /api/v1/portal/me            (Bearer) → { ok, parent, school }
+GET  /api/v1/portal/children      (Bearer) → { ok, children }    (thin snapshots)
+GET  /api/v1/portal/receipts      (Bearer) → { ok, receipts }
+POST /api/v1/portal/profile       (Bearer) → { ok }              (queues parent_update to desktop)
+```
+Parents authenticate against a **`parent_auth` projection** the desktop pushes
+up (scrypt hash + linked student keys) — the account stays owned by the school's
+desktop; the cloud only verifies and issues a signed session token.
 
 ## Run
 ```bash

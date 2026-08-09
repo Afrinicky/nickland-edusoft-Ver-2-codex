@@ -8,6 +8,7 @@
 // and testable).
 
 const crypto = require('crypto');
+const { postToOutbox, syncEnabled } = require('./sync/outbox');
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -87,6 +88,7 @@ function registerParent(db, { full_name, phone, email, password }) {
     INSERT INTO parents (full_name, phone, email, password_hash) VALUES (?, ?, ?, ?)
   `).run(full_name || 'Parent', np, (email || '').trim().toLowerCase() || null, hashPassword(password));
   linkStudents(db, r.lastInsertRowid, matches);
+  enqueueParentAuth(db, r.lastInsertRowid);
   return { ok: true, parent_id: r.lastInsertRowid, linked: matches.length };
 }
 
@@ -107,6 +109,7 @@ function provisionParent(db, { full_name, phone, email, password, studentIds = [
   const explicit = (studentIds || []).map(id => ({ student_id: id, relationship: 'Guardian' }));
   const matched = matchStudentsByContact(db, { phone, email });
   linkStudents(db, parentId, [...explicit, ...matched]);
+  enqueueParentAuth(db, parentId);
   return { ok: true, parent_id: parentId, temp_password: password ? undefined : pass };
 }
 
@@ -126,6 +129,27 @@ function studentIdsForParent(db, parentId) {
   return db.prepare('SELECT student_id FROM parent_students WHERE parent_id = ?').all(parentId).map(r => r.student_id);
 }
 
+// Project a thin parent auth record to the cloud so the web portal can log the
+// parent in even when the desktop is offline. No-op unless cloud sync is on.
+// The desktop remains the source of truth for the account.
+function enqueueParentAuth(db, parentId) {
+  try {
+    if (!syncEnabled(db)) return null;
+    const p = db.prepare('SELECT id, full_name, phone, email, password_hash, is_active FROM parents WHERE id = ?').get(parentId);
+    if (!p) return null;
+    const studentKeys = studentIdsForParent(db, parentId).map(id => `student:${id}`);
+    return postToOutbox(db, {
+      entity_type: 'parent_auth',
+      entity_key: `parent:${parentId}`,
+      op: p.is_active ? 'upsert' : 'delete',
+      payload: {
+        parent_id: parentId, full_name: p.full_name, phone: p.phone, email: p.email,
+        password_hash: p.password_hash, is_active: p.is_active, student_keys: studentKeys,
+      },
+    });
+  } catch (_) { return null; }
+}
+
 function listParents(db) {
   return db.prepare(`
     SELECT p.id, p.full_name, p.phone, p.email, p.is_active, p.last_login, p.created_at,
@@ -138,11 +162,12 @@ function setParentPassword(db, parentId, newPassword) {
   if (!newPassword || String(newPassword).length < 4) return { ok: false, error: 'Password too short.' };
   db.prepare('UPDATE parents SET password_hash = ?, must_change_password = 0 WHERE id = ?')
     .run(hashPassword(newPassword), parentId);
+  enqueueParentAuth(db, parentId);
   return { ok: true };
 }
 
 module.exports = {
   hashPassword, verifyPassword, normPhone, matchStudentsByContact,
   registerParent, provisionParent, loginParent, studentIdsForParent,
-  listParents, setParentPassword,
+  listParents, setParentPassword, enqueueParentAuth,
 };

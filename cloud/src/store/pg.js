@@ -28,6 +28,16 @@ function createPgStore(connectionString) {
       return rows[0] || null;
     },
 
+    async getSchool(school_id) {
+      const { rows } = await pool.query('SELECT school_id, name FROM schools WHERE school_id = $1', [school_id]);
+      return rows[0] || null;
+    },
+
+    async listSchools() {
+      const { rows } = await pool.query('SELECT school_id, name FROM schools ORDER BY name');
+      return rows;
+    },
+
     async upsertSnapshot(school_id, rec) {
       await pool.query(`
         INSERT INTO snapshots (school_id, entity_type, entity_key, uuid, op, version, payload, updated_at)
