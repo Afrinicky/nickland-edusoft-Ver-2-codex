@@ -101,6 +101,17 @@ def create_app(store=None) -> FastAPI:
         kids = [by_key[k] for k in (rec.get("student_keys") or []) if k in by_key]
         return {"ok": True, "children": kids}
 
+    @app.get("/api/v1/portal/announcements")
+    def announcements(authorization: str = Header(None)):
+        claims, rec = require_parent(authorization)
+        mine = set(rec.get("student_keys") or [])
+        items = [s["payload"] for s in S().list_snapshots(claims["school_id"], "announcement")
+                 if s["payload"] and s["payload"].get("is_active")
+                 and (s["payload"].get("audience") == "all"
+                      or (s["payload"].get("audience") == "student" and f"student:{s['payload'].get('student_id')}" in mine))]
+        items.sort(key=lambda a: str(a.get("created_at")), reverse=True)
+        return {"ok": True, "announcements": items}
+
     @app.get("/api/v1/portal/receipts")
     def receipts(authorization: str = Header(None)):
         claims, rec = require_parent(authorization)

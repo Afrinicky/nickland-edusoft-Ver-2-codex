@@ -49,6 +49,8 @@ def main():
                     "updated_at": "2026-07-30T00:00:00Z"}})
     store.upsert_snapshot(sid, {"entity_type": "receipt", "entity_key": "receipt:FE/26/00001", "uuid": "u3", "version": 1,
         "payload": {"receipt_number": "FE/26/00001", "student_id": 1, "amount": 150, "payment_method": "Cash", "date": "2026-07-30"}})
+    store.upsert_snapshot(sid, {"entity_type": "announcement", "entity_key": "announcement:1", "uuid": "a1", "version": 1,
+        "payload": {"id": 1, "title": "PTA Meeting Saturday", "body": "All parents welcome", "audience": "all", "is_active": 1, "created_at": "2026-07-29"}})
 
     app = create_app(store)
     port = 8799
@@ -75,6 +77,7 @@ def main():
             page.wait_for_selector("text=Total outstanding", timeout=5000)
             ck("home shows outstanding total", "GHS 275.00" in page.content())  # 260 fees + 15 canteen
             ck("home lists the child", "ANSU MONALISA" in page.content())
+            ck("home shows school notice", "School notices" in page.content() and "PTA Meeting Saturday" in page.content())
 
             page.click("text=ANSU MONALISA")
             page.wait_for_selector("text=School fees", timeout=5000)

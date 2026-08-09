@@ -35,6 +35,7 @@ const registerBackupHandlers = require('./ipc/backup');
 const registerSessionHandlers = require('./ipc/session');
 const registerMobileHandlers = require('./ipc/mobile');
 const registerPaymentsIntentsHandlers = require('./ipc/payments_intents');
+const registerAnnouncementsHandlers = require('./ipc/announcements');
 const registerCloudSyncHandlers = require('./ipc/cloud_sync');
 const registerStubHandlers = require('./ipc/_stubs');
 
@@ -125,6 +126,7 @@ app.whenReady().then(async () => {
   registerMobileHandlers(ipcMain, db);
   registerPaymentsIntentsHandlers(ipcMain, db);
   registerCloudSyncHandlers(ipcMain, db);
+  registerAnnouncementsHandlers(ipcMain, db);
 
   // Stubs LAST — only register channels not already taken
   registerStubHandlers(ipcMain, db);

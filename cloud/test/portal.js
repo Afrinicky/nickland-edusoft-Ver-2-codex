@@ -35,6 +35,12 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
     payload: { student_id: 1, name: 'ANSU MONA', index_number: 'AVE/17/00001', class_name: 'Basic 5', term: 'Third Term', fees: { billed: 410, paid: 150, balance: 260 }, canteen: { unpaid_days: 3, amount_owed: 15 }, attendance: { present: 40, absent: 2, total: 42 }, report: { term: 'Third Term', subjects: [{ subject: 'Mathematics', total: 82, grade: 'Advanced' }], average: 78.5, rank: 3, number_on_roll: 30, remarks: 'Good work' }, updated_at: new Date().toISOString() } });
   await store.upsertSnapshot(school_id, { entity_type: 'receipt', entity_key: 'receipt:FE/26/00001', uuid: 'u3', version: 1,
     payload: { receipt_number: 'FE/26/00001', student_id: 1, amount: 150, category: 'fees', payment_method: 'Cash', date: '2026-07-30' } });
+  await store.upsertSnapshot(school_id, { entity_type: 'announcement', entity_key: 'announcement:1', uuid: 'a1', version: 1,
+    payload: { id: 1, title: 'PTA Meeting', body: 'Saturday 10am', audience: 'all', is_active: 1, created_at: '2026-07-29' } });
+  await store.upsertSnapshot(school_id, { entity_type: 'announcement', entity_key: 'announcement:2', uuid: 'a2', version: 1,
+    payload: { id: 2, title: 'Well done', body: 'Great result', audience: 'student', student_id: 1, is_active: 1, created_at: '2026-07-30' } });
+  await store.upsertSnapshot(school_id, { entity_type: 'announcement', entity_key: 'announcement:3', uuid: 'a3', version: 1,
+    payload: { id: 3, title: 'Not yours', body: 'Other kid', audience: 'student', student_id: 99, is_active: 1, created_at: '2026-07-30' } });
 
   const server = createServer(store);
   await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -66,6 +72,10 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
 
   r = await req(base, 'GET', '/api/v1/portal/receipts', { token });
   ck('receipts returns the child receipt', r.json.ok && r.json.receipts.length === 1 && r.json.receipts[0].receipt_number === 'FE/26/00001');
+
+  r = await req(base, 'GET', '/api/v1/portal/announcements', { token });
+  const titles = (r.json.announcements || []).map(a => a.title);
+  ck('announcements: school-wide + own child only (not others)', r.json.ok && titles.includes('PTA Meeting') && titles.includes('Well done') && !titles.includes('Not yours'));
 
   r = await req(base, 'POST', '/api/v1/portal/profile', { token, body: { full_name: 'Papa Ansu', email: 'new@mail.com' } });
   ck('profile update ok', r.json.ok);

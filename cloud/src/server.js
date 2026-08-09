@@ -85,6 +85,15 @@ function createServer(store) {
           return json(res, 200, { ok: true, children });
         }
 
+        if (p === '/api/v1/portal/announcements' && req.method === 'GET') {
+          const mine = new Set(authRec.student_keys || []);
+          const items = (await store.listSnapshots(claims.school_id, 'announcement'))
+            .map(s => s.payload)
+            .filter(a => a && a.is_active && (a.audience === 'all' || (a.audience === 'student' && mine.has(`student:${a.student_id}`))))
+            .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+          return json(res, 200, { ok: true, announcements: items });
+        }
+
         if (p === '/api/v1/portal/receipts' && req.method === 'GET') {
           const mine = new Set(authRec.student_keys || []);
           const rcs = (await store.listSnapshots(claims.school_id, 'receipt'))

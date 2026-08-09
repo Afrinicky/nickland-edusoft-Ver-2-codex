@@ -1496,6 +1496,23 @@ function runMigrations(db) {
     ins.run('paystack_callback_url', '');        // optional; app uses a deep link by default
   });
 
+  // 19. Announcements — school → parents notices surfaced on the web portal.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS announcements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        audience TEXT DEFAULT 'all',      -- all | student
+        target_student_id INTEGER,
+        is_active INTEGER DEFAULT 1,
+        created_by INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (target_student_id) REFERENCES students(id)
+      );
+    `);
+  });
+
   // 18. Cloud sync outbox (thin-cloud). Local SQLite stays the source of truth;
   //     the outbox projects a small view (balances, receipts, notices) up to the
   //     cloud portal. Nothing here is required for the app to run offline.

@@ -174,6 +174,13 @@ const api = {
     record:            (data)                => ipcRenderer.invoke('fees:bulk-pay-record', data),
   },
 
+  // ── Announcements (school → parents on the portal) ──
+  announcements: {
+    list:              ()                    => ipcRenderer.invoke('announcements:list'),
+    save:              (data)                => ipcRenderer.invoke('announcements:save', data),
+    delete:            (id)                  => ipcRenderer.invoke('announcements:delete', id),
+  },
+
   // ── Cloud sync (thin-cloud, multi-school portal) ──
   cloud: {
     status:            ()                    => ipcRenderer.invoke('cloud:status'),
