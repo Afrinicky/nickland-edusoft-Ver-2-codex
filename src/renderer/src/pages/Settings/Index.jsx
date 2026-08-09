@@ -14,6 +14,7 @@ import Signatures from './Signatures.jsx';
 import Features from './Features.jsx';
 import MobileApp from './MobileApp.jsx';
 import ReceiptTemplates from './ReceiptTemplates.jsx';
+import Payments from './Payments.jsx';
 import Users from './Users.jsx';
 import Backup from './Backup.jsx';
 
@@ -41,6 +42,7 @@ const SECTIONS = [
     items: [
       { to: 'canteen',    label: 'Canteen',           icon: '🍱' },
       { to: 'payroll',    label: 'Payroll',           icon: '💼' },
+      { to: 'payments',   label: 'Online Payments',   icon: '💳' },
       { to: 'receipts',   label: 'Receipt Templates', icon: '🧾' },
     ],
   },
@@ -97,6 +99,7 @@ export default function SettingsIndex() {
             <Route path="branding" element={<Branding />} />
             <Route path="signatures" element={<Signatures />} />
             <Route path="receipts" element={<ReceiptTemplates />} />
+            <Route path="payments" element={<Payments />} />
             <Route path="features" element={<Features />} />
             <Route path="mobile" element={<MobileApp />} />
             <Route path="classes" element={<Classes />} />

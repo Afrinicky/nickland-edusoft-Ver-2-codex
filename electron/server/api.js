@@ -125,6 +125,8 @@ function createApiServer(db, opts = {}) {
     ok: true,
     school: { name: getSetting(db, 'school_name', 'School'), motto: getSetting(db, 'school_motto', ''), phone: getSetting(db, 'school_phone_1', '') },
     parent_self_register: getSetting(db, 'mobile_parent_self_register', 'true') === 'true',
+    online_payments: require('./gateways').gatewayEnabled(db),
+    payment_currency: getSetting(db, 'payment_currency', 'GHS'),
   }));
 
   add('POST', `${API}/auth/login`, async (ctx, req, res, params, body, ip) => {
@@ -231,6 +233,30 @@ function createApiServer(db, opts = {}) {
       message: 'Payment submitted. You will receive a receipt once the school confirms it.' });
   });
 
+  // Parent starts an ONLINE payment (Paystack by default). Returns a checkout
+  // URL the app opens; settlement happens on verify/webhook.
+  add('POST', `${API}/parent/children/:id/pay/online`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const r = await payments.createOnlineIntent(db, {
+      student_id: sid, parent_id: ctx.parent.id, amount: body.amount,
+      email: body.email || ctx.parent.email,
+    });
+    if (!r.ok) return json(res, 400, r);
+    return json(res, 200, { ok: true, authorization_url: r.authorization_url, reference: r.reference });
+  });
+
+  // Parent-scoped verification (pull) — called after the checkout returns.
+  add('GET', `${API}/parent/pay/verify/:reference`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const intent = db.prepare('SELECT parent_id FROM payment_intents WHERE gateway_reference = ?').get(params.reference);
+    if (!intent) return json(res, 404, { ok: false, error: 'Payment not found.' });
+    if (intent.parent_id && intent.parent_id !== ctx.parent.id) return json(res, 403, { ok: false, error: 'Not your payment.' });
+    const r = await payments.verifyAndSettle(db, params.reference, {});
+    return json(res, r.ok || r.pending ? 200 : 400, r);
+  });
+
   // Parent sees their submitted payment intents + their status.
   add('GET', `${API}/parent/children/:id/intents`, async (ctx, req, res, params) => {
     if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
@@ -306,12 +332,40 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, saved: n });
   });
 
+  function readRaw(req) {
+    return new Promise((resolve) => {
+      let d = ''; let tooBig = false;
+      req.on('data', (c) => { d += c; if (d.length > 1e6) { tooBig = true; req.destroy(); } });
+      req.on('end', () => resolve(tooBig ? '' : d));
+      req.on('error', () => resolve(''));
+    });
+  }
+
+  // Gateway webhook — public, but authenticated by HMAC signature over the RAW
+  // body. Always answers 200 so the gateway stops retrying once received.
+  async function handlePaystackWebhook(req, res) {
+    const raw = await readRaw(req);
+    const g = require('./gateways').getGateway(db);
+    const sig = req.headers['x-paystack-signature'];
+    if (!g || !g.verifyWebhook(db, sig, raw)) return json(res, 401, { ok: false, error: 'invalid signature' });
+    let payload = null; try { payload = JSON.parse(raw); } catch (_) {}
+    if (payload && g.webhookIsSuccess(payload)) {
+      const ref = g.webhookReference(payload);
+      if (ref) { try { await payments.verifyAndSettle(db, ref, {}); } catch (_) {} }
+    }
+    return json(res, 200, { ok: true });
+  }
+
   // ── request dispatcher ──
   const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return json(res, 204, {});
     const parsed = url.parse(req.url, true);
     const reqParts = parsed.pathname.split('/').filter(Boolean);
     const ip = req.socket.remoteAddress || '';
+
+    if (req.method === 'POST' && parsed.pathname === `${API}/webhooks/paystack`) {
+      return handlePaystackWebhook(req, res);
+    }
 
     // find route
     let route = null, routeParams = null;

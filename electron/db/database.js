@@ -1474,6 +1474,27 @@ function runMigrations(db) {
       CREATE INDEX IF NOT EXISTS idx_intents_student ON payment_intents(student_id);
     `);
   });
+
+  // 16. Online payment gateway (Paystack by default; pluggable per school).
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(payment_intents)").all().map(c => c.name);
+    const add = (n, t) => { if (!cols.includes(n)) db.exec(`ALTER TABLE payment_intents ADD COLUMN ${n} ${t}`); };
+    add('gateway', 'TEXT');
+    add('gateway_reference', 'TEXT');
+    add('authorization_url', 'TEXT');
+    add('gateway_status', 'TEXT');
+    add('currency', 'TEXT');
+    add('email', 'TEXT');
+  });
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'payments')");
+    ins.run('payment_gateway', 'none');          // none | paystack | (future: flutterwave, hubtel…)
+    ins.run('payment_currency', 'GHS');
+    ins.run('paystack_secret_key', '');
+    ins.run('paystack_public_key', '');
+    ins.run('paystack_base_url', 'https://api.paystack.co');
+    ins.run('paystack_callback_url', '');        // optional; app uses a deep link by default
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {
