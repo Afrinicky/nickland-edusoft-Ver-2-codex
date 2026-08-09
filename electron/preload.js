@@ -174,6 +174,14 @@ const api = {
     record:            (data)                => ipcRenderer.invoke('fees:bulk-pay-record', data),
   },
 
+  // ── Mobile payment intents (accounts office review) ──
+  paymentIntents: {
+    list:              (status)              => ipcRenderer.invoke('payments:list-intents', status),
+    pendingCount:      ()                    => ipcRenderer.invoke('payments:pending-count'),
+    acknowledge:       (data)                => ipcRenderer.invoke('payments:acknowledge-intent', data),
+    reject:            (data)                => ipcRenderer.invoke('payments:reject-intent', data),
+  },
+
   // ── Inventory ─────────────────────────────────────────
   inventory: {
     listItems:         (filters)             => ipcRenderer.invoke('inventory:list-items', filters || {}),

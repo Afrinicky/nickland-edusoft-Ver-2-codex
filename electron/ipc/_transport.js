@@ -68,15 +68,40 @@ async function sendSms(db, to, message) {
   return { ok: false, error: `unsupported_sms_provider:${provider}` };
 }
 
-// ── Email via SMTP (self-contained client — no external dependency) ──
+// ── Email (provider-selectable: Resend HTTP API or self-contained SMTP) ──
 async function sendEmail(db, opts) {
+  if (!isEmail(opts.to)) return { ok: false, error: 'invalid_recipient' };
+  const provider = getSetting(db, 'email_provider', 'smtp'); // 'smtp' | 'resend'
+  if (provider === 'resend') return await sendEmailResend(db, opts);
+  return await sendEmailSmtp(db, opts);
+}
+
+// Resend (https://resend.com) — cloud-friendly HTTP API, no SMTP handshake.
+async function sendEmailResend(db, opts) {
+  const apiKey = getSetting(db, 'resend_api_key', '');
+  const from = getSetting(db, 'email_from', '');
+  if (!apiKey || !from) return { ok: false, simulated: true, error: 'resend_not_configured' };
+  const payload = JSON.stringify({
+    from, to: [opts.to],
+    subject: opts.subject || 'Payment Receipt',
+    html: opts.html || undefined,
+    text: opts.text || undefined,
+  });
+  const res = await httpsRequest({
+    method: 'POST', host: 'api.resend.com', path: '/emails',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+  }, payload);
+  const ok = res.status >= 200 && res.status < 300;
+  return { ok, status: res.status, response: (res.data || res.error || '').slice(0, 500) };
+}
+
+async function sendEmailSmtp(db, opts) {
   const host = getSetting(db, 'email_smtp_host', '');
   const port = parseInt(getSetting(db, 'email_smtp_port', '587'), 10) || 587;
   const user = getSetting(db, 'email_smtp_user', '');
   const pass = getSetting(db, 'email_smtp_pass', '');
   const from = getSetting(db, 'email_from', '') || user;
   if (!host || !user || !pass) return { ok: false, simulated: true, error: 'smtp_not_configured' };
-  if (!isEmail(opts.to)) return { ok: false, error: 'invalid_recipient' };
   const mime = buildMime({ from, to: opts.to, subject: opts.subject || 'Payment Receipt', text: opts.text || '', html: opts.html || '' });
   try {
     const resp = await smtpSend({ host, port, user, pass, from, to: opts.to, data: mime });
