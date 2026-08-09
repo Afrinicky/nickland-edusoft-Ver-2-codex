@@ -71,11 +71,35 @@ Desktop (SQLite, authoritative for school data)          Cloud (Neon, per-tenant
    receipts, report cards), push *denormalised documents* so the website reads
    fast without live joins and works while the desktop is offline.
 
-### Local additions (desktop side)
-- `sync_outbox` table + a `postToOutbox(db, entity, op, payload)` helper the
-  write paths call (mirrors `_ledger.postIncome`).
-- `uuid` column on synced entities (students, payments, receipts, scores, …).
-- A `sync` IPC/worker with status in Settings → Mobile/Cloud.
+### Local additions (desktop side) — IMPLEMENTED
+- `sync_outbox` table + `postToOutbox()` / `enqueueStudentSnapshot()`
+  (`electron/server/sync/outbox.js`). Enqueue is a **no-op when cloud sync is
+  off**, and collapses an unsynced duplicate of the same `(entity_type,
+  entity_key)` so only the latest snapshot is kept. Each row carries a `uuid`
+  as the cross-DB idempotency key (no need to add uuid to every table).
+- Sync client (`electron/server/sync/client.js`): `push()` batches outbox rows,
+  `pull()` applies whitelisted cloud changes and advances a cursor,
+  `syncOnce()` for the timer. Authority-aware apply: parent profile is
+  cloud-authoritative; school operational data is never overwritten from cloud.
+- Control plane (`electron/ipc/cloud_sync.js`) + Settings → Cloud Sync:
+  enable, URL/school-id/key, test, push/pull now, status; a 5-minute scheduler.
+- The centralised payment path enqueues a `student_snapshot` + `receipt` on
+  every payment (all channels), so the portal's read model stays fresh.
+
+### Cloud API contract (the Neon portal implements this)
+Authenticated with header `x-school-key`; all rows namespaced by `school_id`.
+```
+GET  /api/v1/sync/ping                       → { ok, school }
+POST /api/v1/sync/push                        → { ok, accepted:[uuid…] }
+     body { school_id, records:[{ uuid, entity_type, entity_key, op, version, payload }] }
+     ingest is idempotent on (school_id, uuid); upserts the thin read model.
+GET  /api/v1/sync/pull?since=<cursor>         → { ok, cursor, changes:[{ type, payload }] }
+     returns cloud-origin changes (parent_update, student_contact_update, …).
+```
+`entity_type` values today: `student_snapshot` (balances read model),
+`receipt`. Pull `type` values handled: `parent_update`,
+`student_contact_update` (both field-whitelisted). Unknown types are ignored,
+so the contract is forward-compatible.
 
 ## Notifications (Resend + Arkesel)
 The transport layer (`electron/ipc/_transport.js`) already abstracts this:

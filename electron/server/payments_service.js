@@ -12,6 +12,7 @@ const { postIncome } = require('../ipc/_ledger');
 const { autoReceiptForPayment, autoDeliverReceipt } = require('../ipc/receipts_engine');
 const { getNextReceiptNumber, getSetting } = require('../utils/idgen');
 const { getGateway } = require('./gateways');
+const { enqueueStudentSnapshot, postToOutbox } = require('./sync/outbox');
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
@@ -70,6 +71,15 @@ function recordFeePayment(db, data) {
   try { autoReceiptForPayment(db, 'fees', paymentId); } catch (_) {}
   let delivery = null;
   try { delivery = autoDeliverReceipt(db, 'fees', paymentId); } catch (_) {}
+  // Thin-cloud projection: refresh the student's balance snapshot + log the
+  // receipt for the portal (no-op when cloud sync is off).
+  try {
+    enqueueStudentSnapshot(db, data.student_id);
+    postToOutbox(db, { entity_type: 'receipt', entity_key: `receipt:${receiptNo}`, payload: {
+      receipt_number: receiptNo, student_id: data.student_id, amount, category: 'fees',
+      payment_method: data.payment_method || 'Cash', date: payDate,
+    } });
+  } catch (_) {}
   return { ok: true, payment_id: paymentId, receipt_number: receiptNo, delivered: delivery?.channels || [] };
 }
 

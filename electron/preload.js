@@ -174,6 +174,15 @@ const api = {
     record:            (data)                => ipcRenderer.invoke('fees:bulk-pay-record', data),
   },
 
+  // ── Cloud sync (thin-cloud, multi-school portal) ──
+  cloud: {
+    status:            ()                    => ipcRenderer.invoke('cloud:status'),
+    configure:         (patch)               => ipcRenderer.invoke('cloud:configure', patch),
+    pushNow:           ()                    => ipcRenderer.invoke('cloud:push-now'),
+    pullNow:           ()                    => ipcRenderer.invoke('cloud:pull-now'),
+    test:              ()                    => ipcRenderer.invoke('cloud:test'),
+  },
+
   // ── Mobile payment intents (accounts office review) ──
   paymentIntents: {
     list:              (status)              => ipcRenderer.invoke('payments:list-intents', status),
