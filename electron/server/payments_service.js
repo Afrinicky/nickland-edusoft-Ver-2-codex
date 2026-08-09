@@ -7,9 +7,12 @@
 // bank-deposit slip — in every case, the moment it is ACKNOWLEDGED here the
 // ledger is posted and a receipt is generated + auto-delivered.
 
+const crypto = require('crypto');
 const { postIncome } = require('../ipc/_ledger');
 const { autoReceiptForPayment, autoDeliverReceipt } = require('../ipc/receipts_engine');
-const { getNextReceiptNumber } = require('../utils/idgen');
+const { getNextReceiptNumber, getSetting } = require('../utils/idgen');
+const { getGateway } = require('./gateways');
+const { enqueueStudentSnapshot, postToOutbox } = require('./sync/outbox');
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
@@ -68,6 +71,15 @@ function recordFeePayment(db, data) {
   try { autoReceiptForPayment(db, 'fees', paymentId); } catch (_) {}
   let delivery = null;
   try { delivery = autoDeliverReceipt(db, 'fees', paymentId); } catch (_) {}
+  // Thin-cloud projection: refresh the student's balance snapshot + log the
+  // receipt for the portal (no-op when cloud sync is off).
+  try {
+    enqueueStudentSnapshot(db, data.student_id);
+    postToOutbox(db, { entity_type: 'receipt', entity_key: `receipt:${receiptNo}`, payload: {
+      receipt_number: receiptNo, student_id: data.student_id, amount, category: 'fees',
+      payment_method: data.payment_method || 'Cash', date: payDate,
+    } });
+  } catch (_) {}
   return { ok: true, payment_id: paymentId, receipt_number: receiptNo, delivered: delivery?.channels || [] };
 }
 
@@ -140,9 +152,58 @@ function intentsForStudent(db, studentId) {
 }
 
 function channelToMethod(channel) {
-  return { mobile: 'Mobile Money', mobile_money: 'Mobile Money', bank: 'Bank Transfer', cash: 'Cash' }[channel] || 'Mobile Money';
+  return { mobile: 'Mobile Money', mobile_money: 'Mobile Money', bank: 'Bank Transfer', cash: 'Cash', paystack: 'Paystack' }[channel] || 'Mobile Money';
+}
+
+// ── Online (gateway) payments ──
+// Create an intent AND start a gateway checkout. Returns the authorization URL
+// the client opens. Settlement happens later via verifyAndSettle (pull) or the
+// gateway webhook.
+async function createOnlineIntent(db, { student_id, parent_id, amount, email }) {
+  const g = getGateway(db);
+  if (!g || !g.isConfigured(db)) return { ok: false, error: 'Online payments are not available for this school.' };
+  const base = createIntent(db, { student_id, parent_id, amount, channel: g.id, notes: 'Online payment' });
+  if (!base.ok) return base;
+
+  const reference = `NE-${base.intent_id}-${crypto.randomBytes(4).toString('hex')}`;
+  const init = await g.initialize(db, { amount, email, reference, metadata: { intent_id: base.intent_id, student_id } });
+  if (!init.ok) {
+    db.prepare("UPDATE payment_intents SET status = 'rejected', gateway_status = ? WHERE id = ?").run(init.error || 'init_failed', base.intent_id);
+    return { ok: false, error: 'Could not start the online payment. Please try again.' };
+  }
+  db.prepare(`
+    UPDATE payment_intents SET gateway = ?, gateway_reference = ?, authorization_url = ?, email = ?, currency = ?
+    WHERE id = ?
+  `).run(g.id, init.reference, init.authorization_url, email || null, getSetting(db, 'payment_currency', 'GHS'), base.intent_id);
+
+  return { ok: true, intent_id: base.intent_id, reference: init.reference, authorization_url: init.authorization_url };
+}
+
+// Verify a gateway transaction and, if paid, settle it (record payment +
+// receipt). Idempotent — a settled intent returns its existing payment.
+async function verifyAndSettle(db, reference, { actorUserId } = {}) {
+  const intent = db.prepare('SELECT * FROM payment_intents WHERE gateway_reference = ?').get(reference);
+  if (!intent) return { ok: false, error: 'Payment not found.' };
+  if (intent.status === 'acknowledged') return { ok: true, already: true, payment_id: intent.payment_id, receipt_number: null };
+
+  const g = getGateway(db);
+  if (!g) return { ok: false, error: 'No gateway configured.' };
+  const v = await g.verify(db, reference);
+  if (!v.ok) return { ok: false, error: v.error };
+  if (!v.paid) {
+    db.prepare('UPDATE payment_intents SET gateway_status = ? WHERE id = ?').run(v.gateway_status || 'pending', intent.id);
+    return { ok: false, pending: true, error: 'Payment not completed yet.' };
+  }
+  // Record the amount the gateway actually confirmed.
+  if (Math.round((v.amount || 0) * 100) !== Math.round(intent.amount * 100)) {
+    db.prepare('UPDATE payment_intents SET amount = ? WHERE id = ?').run(v.amount, intent.id);
+  }
+  const ack = acknowledgeIntent(db, intent.id, { actorUserId: actorUserId || null, method: 'Paystack' });
+  if (ack.ok) db.prepare("UPDATE payment_intents SET gateway_status = 'success' WHERE id = ?").run(intent.id);
+  return ack;
 }
 
 module.exports = {
   recordFeePayment, createIntent, acknowledgeIntent, rejectIntent, listIntents, intentsForStudent,
+  createOnlineIntent, verifyAndSettle,
 };

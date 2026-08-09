@@ -174,6 +174,15 @@ const api = {
     record:            (data)                => ipcRenderer.invoke('fees:bulk-pay-record', data),
   },
 
+  // ── Cloud sync (thin-cloud, multi-school portal) ──
+  cloud: {
+    status:            ()                    => ipcRenderer.invoke('cloud:status'),
+    configure:         (patch)               => ipcRenderer.invoke('cloud:configure', patch),
+    pushNow:           ()                    => ipcRenderer.invoke('cloud:push-now'),
+    pullNow:           ()                    => ipcRenderer.invoke('cloud:pull-now'),
+    test:              ()                    => ipcRenderer.invoke('cloud:test'),
+  },
+
   // ── Mobile payment intents (accounts office review) ──
   paymentIntents: {
     list:              (status)              => ipcRenderer.invoke('payments:list-intents', status),
@@ -410,6 +419,10 @@ const api = {
     restore:           (backupPath)          => ipcRenderer.invoke('backup:restore', backupPath),
     factoryReset:      (data)                => ipcRenderer.invoke('backup:factory-reset', data),
     openFolder:        ()                    => ipcRenderer.invoke('backup:open-folder'),
+    getConfig:         ()                    => ipcRenderer.invoke('backup:get-config'),
+    setConfig:         (patch)               => ipcRenderer.invoke('backup:set-config', patch),
+    runAuto:           ()                    => ipcRenderer.invoke('backup:run-auto'),
+    pickFolder:        ()                    => ipcRenderer.invoke('backup:pick-folder'),
   },
 
   // ── App-level ─────────────────────────────────────────

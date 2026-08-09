@@ -44,7 +44,23 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | POST | `/auth/logout` | any | Revoke the calling token. |
 | GET | `/parent/children` | parent | Children with fee + canteen balances. |
 | GET | `/parent/children/:id` | parent | One child: payments, attendance summary. |
+| GET | `/parent/children/:id/report` | parent | Academic performance (scores + summary). |
+| POST | `/parent/children/:id/pay` | parent | Submit a manual payment (office/bank/momo) → pending intent. |
+| POST | `/parent/children/:id/pay/online` | parent | Start a gateway checkout → `{ authorization_url, reference }`. |
+| GET | `/parent/pay/verify/:reference` | parent | Verify + settle an online payment (pull). |
+| GET | `/parent/children/:id/intents` | parent | Track submitted payments + status. |
 | GET | `/parent/notifications` | parent | Messages sent to the parent's contacts. |
+
+### Payment gateway (Paystack by default; pluggable per school)
+- Configured in Settings → Online Payments (`payment_gateway`, `paystack_secret_key`, …).
+- **Online flow:** parent → `pay/online` → open `authorization_url` → after checkout
+  the app calls `pay/verify/:reference`, which verifies with the gateway and, if
+  paid, records the payment + sends the receipt. Settlement is idempotent.
+- **Webhook (public tier):** `POST /webhooks/paystack` — authenticated by the
+  gateway's HMAC-SHA512 signature over the raw body (`x-paystack-signature`);
+  on `charge.success` it verifies and settles. Not needed on LAN (the app
+  verifies directly). Other providers plug in as adapters with the same
+  interface.
 | GET | `/dashboard` | staff (`dashboard.view`) | Term metrics (students, staff, fees). |
 | GET | `/students?classId=` | staff (`students.view`) | Student roster. |
 | GET | `/fees/debtors` | staff (`fees.view`) | Outstanding balances. |

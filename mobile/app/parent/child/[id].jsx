@@ -1,6 +1,7 @@
 // Child detail — fees, canteen, attendance, and academic performance (report).
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, Modal, TouchableOpacity } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../../src/auth';
 import { api, money } from '../../../src/api';
@@ -113,14 +114,51 @@ function PayModal({ open, onClose, token, childId, balance, onDone }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(null);
+  const [online, setOnline] = useState(false);
+  const [currency, setCurrency] = useState('GHS');
 
-  async function submit() {
+  useEffect(() => {
+    if (!open) return;
+    api.info().then(i => { setOnline(!!i.online_payments); setCurrency(i.payment_currency || 'GHS'); }).catch(() => {});
+  }, [open]);
+
+  function validAmount() {
     const amt = parseFloat(amount);
-    if (!amt || amt <= 0) { setError('Enter a valid amount.'); return; }
+    if (!amt || amt <= 0) { setError('Enter a valid amount.'); return null; }
+    return amt;
+  }
+
+  // Manual channel (mobile money / bank / office) — school confirms later.
+  async function submitManual() {
+    const amt = validAmount(); if (!amt) return;
     setBusy(true); setError(null);
     try {
       const r = await api.pay(token, childId, { amount: amt, channel, reference });
-      setDone(r.message || 'Payment submitted.');
+      setDone(r.message || 'Payment submitted for confirmation.');
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // Online checkout (Paystack) — pay now, auto-confirmed.
+  async function payNow() {
+    const amt = validAmount(); if (!amt) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await api.payOnline(token, childId, { amount: amt });
+      const result = await WebBrowser.openBrowserAsync(r.authorization_url);
+      // After the browser closes, verify (poll a few times for the gateway).
+      let settled = null, pending = false;
+      for (let i = 0; i < 5; i++) {
+        try {
+          const v = await api.verifyPayment(token, r.reference);
+          if (v.ok) { settled = v; break; }
+          pending = !!v.pending;
+        } catch (_) { pending = true; }
+        await new Promise(res => setTimeout(res, 2000));
+      }
+      if (settled) setDone(`Payment successful. Receipt ${settled.receipt_number || ''} is on its way.`);
+      else if (pending) setDone('Payment is processing. Your receipt will arrive once it clears.');
+      else setError('We could not confirm the payment. If you were charged, contact the school.');
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
@@ -141,10 +179,17 @@ function PayModal({ open, onClose, token, childId, balance, onDone }) {
             </>
           ) : (
             <>
-              <Muted style={{ marginTop: 4, marginBottom: 8 }}>
-                Submit your payment. The school confirms it and you get a receipt by SMS/email.
-              </Muted>
-              <Field label="Amount (GHS)" value={amount} onChangeText={setAmount} keyboardType="decimal-pad" />
+              <Field label={`Amount (${currency})`} value={amount} onChangeText={setAmount} keyboardType="decimal-pad" />
+
+              {online && (
+                <View style={{ marginBottom: 12 }}>
+                  <Button title={busy ? 'Please wait…' : '💳 Pay now (card / mobile money)'} onPress={payNow} disabled={busy} />
+                  <Muted style={{ textAlign: 'center', marginTop: 6 }}>Instant — receipt sent automatically.</Muted>
+                  <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 14 }} />
+                  <Muted style={{ fontWeight: '700' }}>Or tell the school about a payment you already made:</Muted>
+                </View>
+              )}
+
               <Text style={{ color: colors.muted, fontSize: 12, marginBottom: 4, fontWeight: '600' }}>Method</Text>
               <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
                 {CHANNELS.map(([v, label]) => (
@@ -156,7 +201,7 @@ function PayModal({ open, onClose, token, childId, balance, onDone }) {
               </View>
               <Field label="Reference (transaction ID / slip no.)" value={reference} onChangeText={setReference} />
               <ErrorNote message={error} />
-              <Button title={busy ? 'Submitting…' : 'Submit payment'} onPress={submit} disabled={busy} />
+              <Button title={busy ? 'Submitting…' : 'Submit for confirmation'} onPress={submitManual} disabled={busy} variant="ghost" />
               <Button title="Cancel" variant="ghost" onPress={onClose} />
             </>
           )}

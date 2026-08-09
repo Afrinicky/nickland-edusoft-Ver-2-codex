@@ -1474,6 +1474,73 @@ function runMigrations(db) {
       CREATE INDEX IF NOT EXISTS idx_intents_student ON payment_intents(student_id);
     `);
   });
+
+  // 16. Online payment gateway (Paystack by default; pluggable per school).
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(payment_intents)").all().map(c => c.name);
+    const add = (n, t) => { if (!cols.includes(n)) db.exec(`ALTER TABLE payment_intents ADD COLUMN ${n} ${t}`); };
+    add('gateway', 'TEXT');
+    add('gateway_reference', 'TEXT');
+    add('authorization_url', 'TEXT');
+    add('gateway_status', 'TEXT');
+    add('currency', 'TEXT');
+    add('email', 'TEXT');
+  });
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'payments')");
+    ins.run('payment_gateway', 'none');          // none | paystack | (future: flutterwave, hubtel…)
+    ins.run('payment_currency', 'GHS');
+    ins.run('paystack_secret_key', '');
+    ins.run('paystack_public_key', '');
+    ins.run('paystack_base_url', 'https://api.paystack.co');
+    ins.run('paystack_callback_url', '');        // optional; app uses a deep link by default
+  });
+
+  // 18. Cloud sync outbox (thin-cloud). Local SQLite stays the source of truth;
+  //     the outbox projects a small view (balances, receipts, notices) up to the
+  //     cloud portal. Nothing here is required for the app to run offline.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sync_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT,
+        entity_type TEXT NOT NULL,   -- student_snapshot | receipt | notification | …
+        entity_key TEXT,             -- stable key within the school (e.g. student id)
+        op TEXT DEFAULT 'upsert',    -- upsert | delete
+        payload_json TEXT,
+        version INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        synced_at TEXT,
+        attempts INTEGER DEFAULT 0,
+        last_error TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_outbox_unsynced ON sync_outbox(synced_at);
+    `);
+  });
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'cloud')");
+    ins.run('cloud_sync_enabled', 'false');
+    ins.run('cloud_base_url', '');          // e.g. https://api.nicklandedusoft.app
+    ins.run('school_api_key', '');          // per-school key issued by the portal
+    ins.run('cloud_school_id', '');
+    ins.run('cloud_cursor', '0');           // pull cursor
+    ins.run('cloud_push_batch', '100');
+    ins.run('cloud_last_push_at', '');
+    ins.run('cloud_last_pull_at', '');
+  });
+
+  // 17. Automated backup settings.
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'backup')");
+    ins.run('backup_auto_enabled', 'false');
+    ins.run('backup_frequency', 'daily');   // hourly | daily | weekly
+    ins.run('backup_time', '20:00');        // HH:MM for daily/weekly
+    ins.run('backup_day_of_week', '0');     // 0=Sunday … 6=Saturday (weekly)
+    ins.run('backup_retention', '10');      // keep newest N automatic backups per folder
+    ins.run('backup_folder_path', '');      // custom local / LAN / network folder
+    ins.run('backup_cloud_path', '');       // cloud-sync folder (Google Drive Desktop, etc.)
+    ins.run('backup_last_auto_at', '');
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

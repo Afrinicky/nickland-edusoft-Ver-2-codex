@@ -114,6 +114,7 @@ module.exports = function registerMobileHandlers(ipcMain, db) {
     if (!security.checkPermission(db, 'students', 'edit')) return { ok: false, error: 'Access denied.' };
     db.prepare('UPDATE parents SET is_active = 0 WHERE id = ?').run(parentId);
     tokens.revokeAllForSubject(db, 'parent', parentId);
+    try { parents.enqueueParentAuth(db, parentId); } catch (_) {}
     return { ok: true };
   });
 

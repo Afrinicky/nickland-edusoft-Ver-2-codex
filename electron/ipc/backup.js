@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const security = require('./_security');
+const engine = require('./backup_engine');
 
 const DB_FILE = 'nickland-edusoft.db';
 const BACKUP_DIR_NAME = 'Nickland Edusoft Backups';
@@ -119,6 +120,42 @@ async function createBackup(db, userDataPath, { label } = {}) {
   return { ok: true, path: zipPath, fileName, folder: dir, size: stat.size, format: 'zip' };
 }
 
+// Copy a freshly-made backup to the configured extra destinations (custom
+// folder / LAN / cloud-sync folder) and prune old automatic backups everywhere.
+function fanOutAndPrune(db, userDataPath, srcPath) {
+  const cfg = engine.getConfig(db);
+  const folders = engine.destinationFolders(cfg);
+  const copies = srcPath ? engine.copyToFolders(srcPath, folders) : [];
+  // Prune the default folder + every destination folder.
+  engine.pruneRetention(backupDir(userDataPath), cfg.retention);
+  for (const folder of folders) engine.pruneRetention(folder, cfg.retention);
+  return copies;
+}
+
+// The full automatic backup: snapshot → default folder → destinations → prune.
+async function runAutomaticBackup(db, userDataPath) {
+  const res = await createBackup(db, userDataPath, { label: engine.AUTO_LABEL });
+  if (!res.ok) return res;
+  const copies = fanOutAndPrune(db, userDataPath, res.path);
+  try {
+    db.prepare("UPDATE settings SET value = ? WHERE key = 'backup_last_auto_at'").run(new Date().toISOString());
+    recordAudit(db, 'backup_auto', `Automatic backup: ${res.fileName}`, 'normal');
+  } catch (_) {}
+  return { ...res, copies };
+}
+
+// Called by a 60-second scheduler in the main process.
+async function maybeRunScheduledBackup(db, userDataPath) {
+  try {
+    const cfg = engine.getConfig(db);
+    if (!cfg.enabled) return;
+    const last = cfg.lastAutoAt ? new Date(cfg.lastAutoAt) : null;
+    if (engine.isBackupDue(cfg, new Date(), last)) {
+      await runAutomaticBackup(db, userDataPath);
+    }
+  } catch (_) { /* never let the scheduler crash the app */ }
+}
+
 module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath) {
   // Only full-access roles (Proprietor / Administrator) may use these tools.
   // checkPermission grants settings:edit/delete only to those designations.
@@ -161,16 +198,61 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
     return require('electron').shell.openPath(dir);
   });
 
-  // ── Create a backup ───────────────────────────────────
+  // ── Create a backup (also copies to configured destinations) ──
   ipcMain.handle('backup:create', async () => {
     if (!security.checkPermission(db, 'settings', 'edit')) return denied('create backups');
     try {
       const res = await createBackup(db, userDataPath, {});
-      if (res.ok) recordAudit(db, 'backup_created', `Backup created: ${res.fileName}`, 'normal');
+      if (res.ok) {
+        const copies = fanOutAndPrune(db, userDataPath, res.path);
+        recordAudit(db, 'backup_created', `Backup created: ${res.fileName}`, 'normal');
+        return { ...res, copies };
+      }
       return res;
     } catch (e) {
       return { ok: false, error: 'Backup failed: ' + (e.message || String(e)) };
     }
+  });
+
+  // ── Automated backup config ───────────────────────────
+  ipcMain.handle('backup:get-config', () => {
+    const cfg = engine.getConfig(db);
+    return { ok: true, config: cfg, defaultFolder: backupDir(userDataPath) };
+  });
+
+  ipcMain.handle('backup:set-config', (_e, patch) => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return denied('change backup settings');
+    const map = {
+      enabled: 'backup_auto_enabled', frequency: 'backup_frequency', time: 'backup_time',
+      dayOfWeek: 'backup_day_of_week', retention: 'backup_retention',
+      folderPath: 'backup_folder_path', cloudPath: 'backup_cloud_path',
+    };
+    const up = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
+    for (const [k, key] of Object.entries(map)) {
+      if (patch[k] !== undefined) {
+        const val = typeof patch[k] === 'boolean' ? (patch[k] ? 'true' : 'false') : String(patch[k]);
+        up.run(val, key);
+      }
+    }
+    return { ok: true, config: engine.getConfig(db) };
+  });
+
+  // ── Run an automatic backup now (manual trigger of the fan-out routine) ──
+  ipcMain.handle('backup:run-auto', async () => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return denied('run backups');
+    return await runAutomaticBackup(db, userDataPath);
+  });
+
+  // ── Pick a destination folder (custom / LAN / cloud-sync) ──
+  ipcMain.handle('backup:pick-folder', async () => {
+    const { dialog, BrowserWindow } = require('electron');
+    const win = BrowserWindow.getFocusedWindow();
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Choose a backup destination folder',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+    return { ok: true, folder: res.filePaths[0] };
   });
 
   // ── Restore from a previous backup ────────────────────
@@ -288,3 +370,12 @@ function scheduleRelaunch(app) {
 }
 
 module.exports.createBackup = createBackup;
+module.exports.runAutomaticBackup = runAutomaticBackup;
+
+// Start the 60-second scheduler that runs due automatic backups.
+module.exports.startScheduler = function startScheduler(db, userDataPath) {
+  const tick = () => maybeRunScheduledBackup(db, userDataPath);
+  const timer = setInterval(tick, 60 * 1000);
+  if (timer.unref) timer.unref();
+  return timer;
+};

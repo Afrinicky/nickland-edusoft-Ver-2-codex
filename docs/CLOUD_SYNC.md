@@ -8,6 +8,28 @@ how each school's **local SQLite** stays in step with the shared **cloud Neon
 - **Local-first.** Each school keeps running fully on its desktop SQLite even
   with no internet. The cloud is an *additive* mirror + a reach-anywhere portal,
   never a hard dependency for daily work.
+- **Thin cloud (Neon holds as little as possible).** The **local SQLite is the
+  durable holder of everyone's information** — students, staff, finance, scores,
+  documents. Neon stores only what the portal/app actually needs to *serve a
+  request when the desktop is offline*, and nothing more:
+  - identity/link rows (parent ↔ student, device tokens) and per-school config;
+  - **small, denormalised read snapshots** (a child's current balances, latest
+    report summary, recent receipts/notices) that are overwritten on each sync
+    and can be TTL-expired/pruned — not full history;
+  - **in-flight transactions** (payment intents, portal edits) that pull down to
+    the desktop and can be deleted from the cloud once reconciled.
+  History, attachments, and the full dataset never need to live in Neon; the
+  desktop keeps them and backs them up (see BACKUPS below). This keeps cloud
+  storage — and cost — minimal, and doesn't change any established framework:
+  the outbox just projects a thin view upward.
+
+## Backups (schools own their data)
+Because the local DB is the source of truth, robust backups matter more than a
+fat cloud. The desktop supports **manual and automated** backups (Settings →
+Backup): scheduled hourly/daily/weekly with retention, fanned out to the local
+backups folder, an extra local/LAN/network folder, and a **cloud-sync folder**
+(Google Drive Desktop / OneDrive / Dropbox — any drive of choice). This gives
+off-site durability without putting the full dataset in Neon.
 - **Single source of truth per data class**, not per row globally:
   - *School operational data* (students, bills, payments, scores, attendance,
     staff, finance) → **desktop SQLite is authoritative**.
@@ -49,11 +71,46 @@ Desktop (SQLite, authoritative for school data)          Cloud (Neon, per-tenant
    receipts, report cards), push *denormalised documents* so the website reads
    fast without live joins and works while the desktop is offline.
 
-### Local additions (desktop side)
-- `sync_outbox` table + a `postToOutbox(db, entity, op, payload)` helper the
-  write paths call (mirrors `_ledger.postIncome`).
-- `uuid` column on synced entities (students, payments, receipts, scores, …).
-- A `sync` IPC/worker with status in Settings → Mobile/Cloud.
+### Local additions (desktop side) — IMPLEMENTED
+- `sync_outbox` table + `postToOutbox()` / `enqueueStudentSnapshot()`
+  (`electron/server/sync/outbox.js`). Enqueue is a **no-op when cloud sync is
+  off**, and collapses an unsynced duplicate of the same `(entity_type,
+  entity_key)` so only the latest snapshot is kept. Each row carries a `uuid`
+  as the cross-DB idempotency key (no need to add uuid to every table).
+- Sync client (`electron/server/sync/client.js`): `push()` batches outbox rows,
+  `pull()` applies whitelisted cloud changes and advances a cursor,
+  `syncOnce()` for the timer. Authority-aware apply: parent profile is
+  cloud-authoritative; school operational data is never overwritten from cloud.
+- Control plane (`electron/ipc/cloud_sync.js`) + Settings → Cloud Sync:
+  enable, URL/school-id/key, test, push/pull now, status; a 5-minute scheduler.
+- The centralised payment path enqueues a `student_snapshot` + `receipt` on
+  every payment (all channels), so the portal's read model stays fresh.
+
+### Cloud API contract (the Neon portal implements this)
+Authenticated with header `x-school-key`; all rows namespaced by `school_id`.
+```
+GET  /api/v1/sync/ping                       → { ok, school }
+POST /api/v1/sync/push                        → { ok, accepted:[uuid…] }
+     body { school_id, records:[{ uuid, entity_type, entity_key, op, version, payload }] }
+     ingest is idempotent on (school_id, uuid); upserts the thin read model.
+GET  /api/v1/sync/pull?since=<cursor>         → { ok, cursor, changes:[{ type, payload }] }
+     returns cloud-origin changes (parent_update, student_contact_update, …).
+```
+`entity_type` values today: `student_snapshot` (balances read model),
+`receipt`. Pull `type` values handled: `parent_update`,
+`student_contact_update` (both field-whitelisted). Unknown types are ignored,
+so the contract is forward-compatible.
+
+### Cloud service — IMPLEMENTED (`cloud/`)
+A runnable multi-tenant service implements the contract above: Node `http`, a
+storage abstraction (**Neon/Postgres** when `DATABASE_URL` is set, in-memory
+otherwise), per-school API-key auth, the `snapshots` thin read model + a
+`cloud_changes` queue, and a tenant-provisioning script. It stays thin by
+design — only the read model + change queue per school. An end-to-end test
+boots the real service and the real desktop sync client together and verifies
+push, the portal read endpoint, pull/reconcile, idempotency, and key
+rejection. See `cloud/README.md`. The public website frontend (parent login +
+child pages) is a separate app built against this same API.
 
 ## Notifications (Resend + Arkesel)
 The transport layer (`electron/ipc/_transport.js`) already abstracts this:

@@ -23,6 +23,7 @@ export default function Backup() {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState('');
   const [resetText, setResetText] = useState('');
+  const [cfg, setCfg] = useState(null);
 
   async function loadInfo() {
     try {
@@ -31,10 +32,36 @@ export default function Backup() {
       if (i?.ok) setInfo(i);
       const list = await window.api.backup.list();
       if (list?.ok) setBackups(list.backups || []);
+      const c = await window.api.backup.getConfig();
+      if (c?.ok) setCfg(c.config);
     } catch (e) { /* ignore */ }
   }
 
   useEffect(() => { loadInfo(); }, []);
+
+  async function saveCfg(patch) {
+    setCfg(prev => ({ ...prev, ...patch }));
+    const res = await window.api.backup.setConfig(patch);
+    if (res?.ok) setCfg(res.config);
+  }
+
+  async function pickFolder(key) {
+    const res = await window.api.backup.pickFolder();
+    if (res?.ok) saveCfg({ [key]: res.folder });
+  }
+
+  async function runAutoNow() {
+    setBusy(true);
+    try {
+      const res = await window.api.backup.runAuto();
+      if (res?.ok) {
+        const dests = (res.copies || []).filter(c => c.ok).length;
+        showToast(`Backup done: ${res.fileName}${dests ? ` · copied to ${dests} destination(s)` : ''}`, 'success');
+        await loadInfo();
+      } else showToast(res?.error || 'Backup failed', 'error');
+    } catch (e) { showToast('Backup failed: ' + (e.message || e), 'error'); }
+    finally { setBusy(false); }
+  }
 
   async function openDataFolder() {
     if (paths) await window.api.app.openFolder(paths.userData);
@@ -162,6 +189,75 @@ export default function Backup() {
         </p>
         <button className="btn btn-primary" onClick={handleCreate} disabled={busy}>
           {busy ? 'Working…' : '💾 Create Backup ZIP'}
+        </button>
+      </div>
+
+      {/* Automated backups */}
+      <div className="card">
+        <div className="section-header">
+          <h3 className="card-title">Automated backups</h3>
+          <label className="row gap-2" style={{ alignItems: 'center' }}>
+            <input type="checkbox" checked={cfg?.enabled || false} onChange={e => saveCfg({ enabled: e.target.checked })} />
+            <span className="text-sm">{cfg?.enabled ? 'On' : 'Off'}</span>
+          </label>
+        </div>
+        <p className="text-muted text-sm mb-3">
+          Back up on a schedule to this PC and to extra destinations. A “cloud” backup is simply a
+          folder your computer syncs to a drive of choice (Google Drive Desktop, OneDrive, Dropbox…) —
+          point a destination there and your existing sync app uploads it. Manual backups are also copied
+          to these destinations.
+        </p>
+
+        {cfg?.enabled && (
+          <>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="label">Frequency</label>
+                <select className="select" value={cfg.frequency} onChange={e => saveCfg({ frequency: e.target.value })}>
+                  <option value="hourly">Hourly</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </div>
+              {cfg.frequency !== 'hourly' && (
+                <div className="form-group">
+                  <label className="label">Time</label>
+                  <input className="input" type="time" value={cfg.time} onChange={e => saveCfg({ time: e.target.value })} />
+                </div>
+              )}
+              {cfg.frequency === 'weekly' && (
+                <div className="form-group">
+                  <label className="label">Day</label>
+                  <select className="select" value={cfg.dayOfWeek} onChange={e => saveCfg({ dayOfWeek: parseInt(e.target.value, 10) })}>
+                    {['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((d, i) => <option key={i} value={i}>{d}</option>)}
+                  </select>
+                </div>
+              )}
+              <div className="form-group">
+                <label className="label">Keep newest</label>
+                <input className="input" type="number" min="1" value={cfg.retention} onChange={e => saveCfg({ retention: parseInt(e.target.value, 10) || 1 })} />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="label">Extra local / LAN / network folder</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input className="input" value={cfg.folderPath || ''} onChange={e => saveCfg({ folderPath: e.target.value })} placeholder="e.g. \\\\server\\backups or D:\\Backups" />
+                <button className="btn btn-outline" onClick={() => pickFolder('folderPath')}>Browse…</button>
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="label">Cloud-sync folder (Google Drive / OneDrive / Dropbox)</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input className="input" value={cfg.cloudPath || ''} onChange={e => saveCfg({ cloudPath: e.target.value })} placeholder="e.g. C:\\Users\\you\\Google Drive\\School Backups" />
+                <button className="btn btn-outline" onClick={() => pickFolder('cloudPath')}>Browse…</button>
+              </div>
+            </div>
+            {cfg.lastAutoAt && <p className="text-xs text-muted">Last automatic backup: {new Date(cfg.lastAutoAt).toLocaleString()}</p>}
+          </>
+        )}
+        <button className="btn btn-primary" onClick={runAutoNow} disabled={busy} style={{ marginTop: 8 }}>
+          {busy ? 'Working…' : '☁️ Back up now to all destinations'}
         </button>
       </div>
 

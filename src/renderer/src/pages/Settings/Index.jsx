@@ -14,6 +14,8 @@ import Signatures from './Signatures.jsx';
 import Features from './Features.jsx';
 import MobileApp from './MobileApp.jsx';
 import ReceiptTemplates from './ReceiptTemplates.jsx';
+import Payments from './Payments.jsx';
+import Cloud from './Cloud.jsx';
 import Users from './Users.jsx';
 import Backup from './Backup.jsx';
 
@@ -41,6 +43,7 @@ const SECTIONS = [
     items: [
       { to: 'canteen',    label: 'Canteen',           icon: '🍱' },
       { to: 'payroll',    label: 'Payroll',           icon: '💼' },
+      { to: 'payments',   label: 'Online Payments',   icon: '💳' },
       { to: 'receipts',   label: 'Receipt Templates', icon: '🧾' },
     ],
   },
@@ -61,6 +64,7 @@ const SECTIONS = [
     title: 'System',
     items: [
       { to: 'mobile',     label: 'Mobile App',        icon: '📱' },
+      { to: 'cloud',      label: 'Cloud Sync',        icon: '☁️' },
       { to: 'backup',     label: 'Backup',            icon: '💾' },
     ],
   },
@@ -97,8 +101,10 @@ export default function SettingsIndex() {
             <Route path="branding" element={<Branding />} />
             <Route path="signatures" element={<Signatures />} />
             <Route path="receipts" element={<ReceiptTemplates />} />
+            <Route path="payments" element={<Payments />} />
             <Route path="features" element={<Features />} />
             <Route path="mobile" element={<MobileApp />} />
+            <Route path="cloud" element={<Cloud />} />
             <Route path="classes" element={<Classes />} />
             <Route path="terms" element={<Terms />} />
             <Route path="subjects" element={<Subjects />} />
