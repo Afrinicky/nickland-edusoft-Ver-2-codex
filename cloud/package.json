@@ -1,0 +1,16 @@
+{
+  "name": "nickland-edusoft-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Nickland Edusoft multi-school cloud portal + sync API (Neon/Postgres).",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "create-school": "node scripts/create-school.js",
+    "test": "node test/e2e.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "pg": "^8.12.0"
+  }
+}

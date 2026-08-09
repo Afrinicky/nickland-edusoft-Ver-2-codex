@@ -101,6 +101,17 @@ GET  /api/v1/sync/pull?since=<cursor>         → { ok, cursor, changes:[{ type,
 `student_contact_update` (both field-whitelisted). Unknown types are ignored,
 so the contract is forward-compatible.
 
+### Cloud service — IMPLEMENTED (`cloud/`)
+A runnable multi-tenant service implements the contract above: Node `http`, a
+storage abstraction (**Neon/Postgres** when `DATABASE_URL` is set, in-memory
+otherwise), per-school API-key auth, the `snapshots` thin read model + a
+`cloud_changes` queue, and a tenant-provisioning script. It stays thin by
+design — only the read model + change queue per school. An end-to-end test
+boots the real service and the real desktop sync client together and verifies
+push, the portal read endpoint, pull/reconcile, idempotency, and key
+rejection. See `cloud/README.md`. The public website frontend (parent login +
+child pages) is a separate app built against this same API.
+
 ## Notifications (Resend + Arkesel)
 The transport layer (`electron/ipc/_transport.js`) already abstracts this:
 - **SMS:** Arkesel (or equivalent) via HTTP.
