@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nickland Edusoft — Parent Portal</title>
+<style>
+  :root { --navy:#1B3A6B; --gold:#C9961A; --bg:#F4F6FA; --card:#fff; --muted:#64748B; --ok:#15803D; --bad:#B91C1C; --line:#E2E8F0; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:'Segoe UI',system-ui,Arial,sans-serif; background:var(--bg); color:#0F172A; }
+  header { background:var(--navy); color:#fff; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; }
+  header .brand { font-weight:800; letter-spacing:.3px; }
+  header button { background:transparent; border:1px solid rgba(255,255,255,.4); color:#fff; border-radius:8px; padding:6px 12px; cursor:pointer; }
+  main { max-width:760px; margin:0 auto; padding:18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
+  h1 { font-size:22px; margin:.2em 0; } h2 { font-size:16px; margin:.2em 0; }
+  label { display:block; font-size:12px; font-weight:700; color:var(--muted); margin:10px 0 4px; }
+  input,select { width:100%; padding:11px; border:1px solid var(--line); border-radius:9px; font-size:15px; }
+  button.primary { background:var(--navy); color:#fff; border:none; border-radius:9px; padding:12px 16px; font-weight:700; cursor:pointer; width:100%; margin-top:14px; }
+  button.ghost { background:transparent; border:1px solid var(--line); border-radius:9px; padding:10px 14px; cursor:pointer; }
+  .muted { color:var(--muted); font-size:13px; }
+  .row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:none; }
+  .pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700; }
+  .bad { color:var(--bad); } .ok { color:var(--ok); }
+  .err { background:#FEF2F2; color:var(--bad); border:1px solid #FECACA; padding:10px; border-radius:9px; margin-top:10px; font-size:14px; }
+  .center { text-align:center; }
+  .logo { width:56px; height:56px; border-radius:14px; background:var(--navy); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:26px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">🎓 Nickland Edusoft</div>
+  <button id="logoutBtn" class="hidden" onclick="logout()">Sign out</button>
+</header>
+<main id="app"><div class="card center muted">Loading…</div></main>
+
+<script>
+const API = '/api/v1';
+let token = localStorage.getItem('portal_token') || null;
+let schoolId = localStorage.getItem('portal_school') || '';
+
+async function api(pathname, { method='GET', body, auth=true } = {}) {
+  const headers = { 'Content-Type':'application/json' };
+  if (auth && token) headers.Authorization = 'Bearer ' + token;
+  const res = await fetch(API + pathname, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let data = null; try { data = await res.json(); } catch {}
+  if (!res.ok) throw new Error((data && data.error) || ('Error ' + res.status));
+  return data;
+}
+const money = n => 'GHS ' + (Number(n)||0).toLocaleString('en-GH',{minimumFractionDigits:2,maximumFractionDigits:2});
+const el = document.getElementById('app');
+function esc(s){ return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function logout(){ token=null; localStorage.removeItem('portal_token'); render(); }
+
+async function render() {
+  document.getElementById('logoutBtn').classList.toggle('hidden', !token);
+  if (!token) return renderLogin();
+  try {
+    const me = await api('/portal/me');
+    const kids = await api('/portal/children');
+    renderHome(me, kids.children || []);
+  } catch (e) { logout(); }
+}
+
+async function renderLogin() {
+  let schools = [];
+  try { schools = (await api('/portal/schools', { auth:false })).schools || []; } catch {}
+  el.innerHTML = `
+    <div class="card center">
+      <div class="logo">🎓</div>
+      <h1>Parent Portal</h1>
+      <div class="muted">See your child's fees, canteen, attendance & performance.</div>
+    </div>
+    <div class="card">
+      <label>School</label>
+      <select id="school">${schools.map(s=>`<option value="${esc(s.school_id)}" ${s.school_id===schoolId?'selected':''}>${esc(s.name)}</option>`).join('')||'<option value="">(no schools)</option>'}</select>
+      <label>Phone or email</label>
+      <input id="ident" placeholder="0244… or you@email.com" autocomplete="username">
+      <label>Password</label>
+      <input id="pw" type="password" autocomplete="current-password">
+      <div id="err"></div>
+      <button class="primary" onclick="doLogin()">Sign in</button>
+      <div class="muted" style="margin-top:10px">First time? Register in the school's mobile app, then sign in here.</div>
+    </div>`;
+}
+
+async function doLogin() {
+  const school_id = document.getElementById('school').value;
+  const identifier = document.getElementById('ident').value.trim();
+  const password = document.getElementById('pw').value;
+  const errEl = document.getElementById('err');
+  errEl.innerHTML = '';
+  try {
+    const r = await api('/portal/login', { method:'POST', auth:false, body:{ school_id, identifier, password } });
+    token = r.token; schoolId = school_id;
+    localStorage.setItem('portal_token', token); localStorage.setItem('portal_school', school_id);
+    render();
+  } catch (e) { errEl.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+function childCard(c) {
+  const feeBad = (c.fees?.balance||0) > 0, canBad = (c.canteen?.amount_owed||0) > 0;
+  return `<div class="card">
+    <h2>${esc(c.name)}</h2>
+    <div class="muted">${esc(c.class_name||'')} · ${esc(c.index_number||'')} ${c.term?('· '+esc(c.term)):''}</div>
+    <div class="row"><span>Fees balance</span><strong class="${feeBad?'bad':'ok'}">${money(c.fees?.balance)}</strong></div>
+    <div class="row"><span>Fees paid</span><span class="ok">${money(c.fees?.paid)}</span></div>
+    <div class="row"><span>Canteen owed</span><strong class="${canBad?'bad':'ok'}">${money(c.canteen?.amount_owed)}</strong></div>
+    <div class="muted" style="margin-top:8px">Updated ${c.updated_at?new Date(c.updated_at).toLocaleString():'—'}</div>
+  </div>`;
+}
+
+function renderHome(me, children) {
+  const p = me.parent || {};
+  el.innerHTML = `
+    <div class="card">
+      <h1>Hello, ${esc(p.full_name||'Parent')}</h1>
+      <div class="muted">${esc(me.school?.name||'')}</div>
+    </div>
+    ${children.length ? children.map(childCard).join('') : '<div class="card muted">No children linked yet. Ask the school to link your child.</div>'}
+    <div class="card">
+      <h2>Your details</h2>
+      <label>Name</label><input id="pname" value="${esc(p.full_name||'')}">
+      <label>Email</label><input id="pemail" value="${esc(p.email||'')}">
+      <div id="perr"></div>
+      <button class="primary" onclick="saveProfile()">Save changes</button>
+      <div class="muted" style="margin-top:8px">Updates are sent to the school.</div>
+    </div>`;
+}
+
+async function saveProfile() {
+  const full_name = document.getElementById('pname').value.trim();
+  const email = document.getElementById('pemail').value.trim();
+  const errEl = document.getElementById('perr'); errEl.innerHTML='';
+  try { await api('/portal/profile', { method:'POST', body:{ full_name, email } }); errEl.innerHTML = `<div class="err" style="background:#ECFDF5;color:#15803D;border-color:#A7F3D0">Saved.</div>`; }
+  catch (e) { errEl.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+render();
+</script>
+</body>
+</html>

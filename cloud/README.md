@@ -1,5 +1,9 @@
 # Nickland Edusoft — Cloud (multi-school portal + sync API)
 
+> **Note:** a Python/FastAPI port (the going-forward implementation for the
+> team's Python migration) lives in [`../cloud-python/`](../cloud-python/) and
+> speaks the identical contract. This Node version remains as reference.
+
 The hosted service each school's desktop syncs to, and the backend for the
 multi-school website. It is deliberately **thin**: it holds only a small read
 model (balances, receipts, notices) + a change queue per tenant — never the
