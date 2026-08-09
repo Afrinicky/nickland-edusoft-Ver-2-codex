@@ -329,6 +329,7 @@ function createApiServer(db, opts = {}) {
     let n = 0;
     const tx = db.transaction(() => { for (const m of marks) { up.run(m.student_id, date, m.status || 'present', ctx.user.id, term?.id || null); n++; } });
     try { tx(); } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
+    try { const { enqueueStudentSnapshot } = require('./sync/outbox'); for (const m of marks) enqueueStudentSnapshot(db, m.student_id); } catch (_) {}
     return json(res, 200, { ok: true, saved: n });
   });
 

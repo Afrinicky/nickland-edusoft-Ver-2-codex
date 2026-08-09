@@ -48,7 +48,11 @@ def main():
     store.upsert_snapshot(sid, {"entity_type": "student_snapshot", "entity_key": "student:1", "uuid": "u2", "version": 1,
         "payload": {"student_id": 1, "name": "ANSU MONA", "index_number": "AVE/17/00001", "class_name": "Basic 5",
                     "term": "Third Term", "fees": {"billed": 410, "paid": 150, "balance": 260},
-                    "canteen": {"unpaid_days": 3, "amount_owed": 15}, "updated_at": "2026-07-30T00:00:00Z"}})
+                    "canteen": {"unpaid_days": 3, "amount_owed": 15},
+                    "attendance": {"present": 40, "absent": 2, "total": 42},
+                    "report": {"term": "Third Term", "subjects": [{"subject": "Mathematics", "total": 82, "grade": "Advanced"}],
+                               "average": 78.5, "rank": 3, "number_on_roll": 30, "remarks": "Good work"},
+                    "updated_at": "2026-07-30T00:00:00Z"}})
     store.upsert_snapshot(sid, {"entity_type": "receipt", "entity_key": "receipt:FE/26/00001", "uuid": "u3", "version": 1,
         "payload": {"receipt_number": "FE/26/00001", "student_id": 1, "amount": 150, "category": "fees", "payment_method": "Cash", "date": "2026-07-30"}})
 
@@ -74,6 +78,7 @@ def main():
 
     kids = c.get("/api/v1/portal/children", headers=hdr).json()
     ck("children shows linked child (balance 260)", kids["ok"] and len(kids["children"]) == 1 and kids["children"][0]["fees"]["balance"] == 260)
+    ck("child snapshot carries attendance + performance", kids["children"][0]["attendance"]["present"] == 40 and kids["children"][0]["report"]["average"] == 78.5)
 
     rcs = c.get("/api/v1/portal/receipts", headers=hdr).json()
     ck("receipts returns the child receipt", rcs["ok"] and len(rcs["receipts"]) == 1 and rcs["receipts"][0]["receipt_number"] == "FE/26/00001")

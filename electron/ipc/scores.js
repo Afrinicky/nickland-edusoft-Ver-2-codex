@@ -2,6 +2,7 @@
 const ExcelJS = require('exceljs');
 const path = require('path');
 const fs = require('fs');
+const { enqueueStudentSnapshot } = require('../server/sync/outbox');
 function registerScoresHandlers(ipcMain, db) {
   ipcMain.handle('scores:list-subjects', () => {
     return db.prepare('SELECT * FROM subjects WHERE is_active = 1 ORDER BY name').all();
@@ -85,6 +86,11 @@ function registerScoresHandlers(ipcMain, db) {
       }
     });
     tx();
+    // Refresh cloud snapshots for the affected students (portal performance view).
+    try {
+      const ids = new Set([...(entries || []).map(e => e.student_id), ...(summaries || []).map(s => s.student_id)]);
+      for (const id of ids) enqueueStudentSnapshot(db, id);
+    } catch (_) {}
     return { ok: true };
   });
 
@@ -214,6 +220,7 @@ function registerScoresHandlers(ipcMain, db) {
           class_group_id    = COALESCE(student_term_summary.class_group_id, excluded.class_group_id)
       `).run(studentId, termId, classGroupId, conduct, interests, talents, remarks);
 
+      try { enqueueStudentSnapshot(db, studentId); } catch (_) {}
       return { ok: true };
     } catch (err) {
       console.warn(`[scores:save-term-summary] failed for student ${studentId}, term ${termId}: ${err.message}`);

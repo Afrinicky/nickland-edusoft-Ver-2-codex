@@ -42,7 +42,11 @@ def main():
     store.upsert_snapshot(sid, {"entity_type": "student_snapshot", "entity_key": "student:1", "uuid": "u2", "version": 1,
         "payload": {"student_id": 1, "name": "ANSU MONALISA", "index_number": "AVE/17/00001", "class_name": "Basic 5",
                     "term": "Third Term", "fees": {"billed": 410, "paid": 150, "balance": 260},
-                    "canteen": {"unpaid_days": 3, "amount_owed": 15}, "updated_at": "2026-07-30T00:00:00Z"}})
+                    "canteen": {"unpaid_days": 3, "amount_owed": 15},
+                    "attendance": {"present": 40, "absent": 2, "total": 42},
+                    "report": {"term": "Third Term", "subjects": [{"subject": "Mathematics", "total": 82, "grade": "Advanced"}],
+                               "average": 78.5, "rank": 3, "number_on_roll": 30, "remarks": "Excellent term"},
+                    "updated_at": "2026-07-30T00:00:00Z"}})
     store.upsert_snapshot(sid, {"entity_type": "receipt", "entity_key": "receipt:FE/26/00001", "uuid": "u3", "version": 1,
         "payload": {"receipt_number": "FE/26/00001", "student_id": 1, "amount": 150, "payment_method": "Cash", "date": "2026-07-30"}})
 
@@ -75,6 +79,8 @@ def main():
             page.click("text=ANSU MONALISA")
             page.wait_for_selector("text=School fees", timeout=5000)
             ck("child detail shows fees balance", "GHS 260.00" in page.content())
+            ck("child detail shows attendance rate", "Attendance" in page.content() and "95%" in page.content())  # 40/42
+            ck("child detail shows performance", "Performance" in page.content() and "Mathematics" in page.content() and "Excellent term" in page.content())
             ck("child detail shows receipt", "FE/26/00001" in page.content())
 
             page.click("#backBtn")

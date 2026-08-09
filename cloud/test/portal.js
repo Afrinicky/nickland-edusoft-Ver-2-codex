@@ -32,7 +32,7 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
   await store.upsertSnapshot(school_id, { entity_type: 'parent_auth', entity_key: 'parent:1', uuid: 'u1', version: 1,
     payload: { parent_id: 1, full_name: 'Papa', phone: '233244123456', email: 'papa@mail.com', password_hash: makeHash('pass12'), is_active: 1, student_keys: ['student:1'] } });
   await store.upsertSnapshot(school_id, { entity_type: 'student_snapshot', entity_key: 'student:1', uuid: 'u2', version: 1,
-    payload: { student_id: 1, name: 'ANSU MONA', index_number: 'AVE/17/00001', class_name: 'Basic 5', term: 'Third Term', fees: { billed: 410, paid: 150, balance: 260 }, canteen: { unpaid_days: 3, amount_owed: 15 }, updated_at: new Date().toISOString() } });
+    payload: { student_id: 1, name: 'ANSU MONA', index_number: 'AVE/17/00001', class_name: 'Basic 5', term: 'Third Term', fees: { billed: 410, paid: 150, balance: 260 }, canteen: { unpaid_days: 3, amount_owed: 15 }, attendance: { present: 40, absent: 2, total: 42 }, report: { term: 'Third Term', subjects: [{ subject: 'Mathematics', total: 82, grade: 'Advanced' }], average: 78.5, rank: 3, number_on_roll: 30, remarks: 'Good work' }, updated_at: new Date().toISOString() } });
   await store.upsertSnapshot(school_id, { entity_type: 'receipt', entity_key: 'receipt:FE/26/00001', uuid: 'u3', version: 1,
     payload: { receipt_number: 'FE/26/00001', student_id: 1, amount: 150, category: 'fees', payment_method: 'Cash', date: '2026-07-30' } });
 
@@ -62,6 +62,7 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
 
   r = await req(base, 'GET', '/api/v1/portal/children', { token });
   ck('children returns the linked child w/ balance 260', r.json.ok && r.json.children.length === 1 && r.json.children[0].fees.balance === 260);
+  ck('child snapshot carries attendance + performance', r.json.children[0].attendance.present === 40 && r.json.children[0].report.average === 78.5);
 
   r = await req(base, 'GET', '/api/v1/portal/receipts', { token });
   ck('receipts returns the child receipt', r.json.ok && r.json.receipts.length === 1 && r.json.receipts[0].receipt_number === 'FE/26/00001');

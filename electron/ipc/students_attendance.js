@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const ExcelJS = require('exceljs');
+const { enqueueStudentSnapshot } = require('../server/sync/outbox');
 
 module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDataPath, getResourcePath) {
 
@@ -55,6 +56,7 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
         marked_by = excluded.marked_by,
         notes = excluded.notes
     `).run(studentId, date, status, markedBy || null, termId || null, notes || null);
+    try { enqueueStudentSnapshot(db, studentId); } catch (_) {}
     return { ok: true };
   });
 
@@ -74,6 +76,7 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
       }
     });
     tx();
+    try { for (const e of (entries || [])) enqueueStudentSnapshot(db, e.student_id); } catch (_) {}
     return { ok: true, count: (entries || []).length };
   });
 

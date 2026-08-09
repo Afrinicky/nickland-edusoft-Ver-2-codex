@@ -198,6 +198,8 @@ async function renderChild(studentId) {
       <div class="row"><span>Unpaid days</span><span>${c.canteen?.unpaid_days||0}</span></div>
       <div class="row"><strong>Amount owed</strong><strong class="${(c.canteen?.amount_owed||0)>0?'bad':'ok'}">${money(c.canteen?.amount_owed)}</strong></div>
     </div>
+    ${attendanceCard(c.attendance)}
+    ${reportCard(c.report)}
     <div class="card"><h3>Receipts</h3><div id="rcpts"><div class="spin"></div></div></div>
     <div class="muted center">Updated ${c.updated_at?new Date(c.updated_at).toLocaleString():'—'}</div>`;
   // Load receipts (shared endpoint; filter to this child)
@@ -210,6 +212,31 @@ async function renderChild(studentId) {
       <div><div class="n">${esc(r.receipt_number||'Receipt')}</div><div class="d">${esc(r.date||'')} · ${esc(r.payment_method||'')}</div></div>
       <div class="ok" style="font-weight:800">${money(r.amount)}</div>
     </div>`).join('') : '<div class="muted">No receipts yet.</div>';
+}
+
+function attendanceCard(a) {
+  if (!a || !a.total) return '';
+  const pct = a.total ? Math.round((a.present / a.total) * 100) : 0;
+  return `<div class="card">
+    <h3>Attendance ${a.term? '· '+esc(a.term):''}</h3>
+    <div class="grid2">
+      <div class="stat"><div class="l">Present</div><div class="v ok">${a.present||0}</div></div>
+      <div class="stat"><div class="l">Absent</div><div class="v ${(a.absent||0)>0?'bad':''}">${a.absent||0}</div></div>
+    </div>
+    <div class="row" style="margin-top:6px"><span>Attendance rate</span><strong>${pct}%</strong></div>
+  </div>`;
+}
+function reportCard(r) {
+  if (!r || (!(r.subjects||[]).length && r.average==null)) return '';
+  const rows = (r.subjects||[]).map(s=>`<div class="row"><span>${esc(s.subject)}</span><strong>${s.total!=null?Number(s.total).toFixed(0):'—'}${s.grade?(' · '+esc(s.grade)):''}</strong></div>`).join('');
+  const pos = r.rank!=null ? `Position ${r.rank}${r.number_on_roll?(' / '+r.number_on_roll):''}` : '';
+  return `<div class="card">
+    <h3>Performance ${r.term?('· '+esc(r.term)):''}</h3>
+    ${rows || '<div class="muted">No subject scores yet.</div>'}
+    ${(r.average!=null||pos)?`<div class="row" style="border-top:2px solid var(--line); margin-top:4px; padding-top:10px">
+      <strong>Average ${r.average!=null?Number(r.average).toFixed(1):'—'}</strong><span class="muted">${esc(pos)}</span></div>`:''}
+    ${r.remarks?`<div class="muted" style="margin-top:8px">“${esc(r.remarks)}”</div>`:''}
+  </div>`;
 }
 
 function renderAccount() {
