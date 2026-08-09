@@ -195,6 +195,24 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, child: summary, payments, attendance });
   });
 
+  // Child academic performance (report) — current or specified term.
+  add('GET', `${API}/parent/children/:id/report`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const term = query.termId
+      ? db.prepare('SELECT * FROM terms WHERE id = ?').get(query.termId)
+      : db.prepare('SELECT * FROM terms WHERE is_current = 1').get();
+    if (!term) return json(res, 200, { ok: true, term: null, subjects: [], summary: null });
+    const subjects = db.prepare(`
+      SELECT sub.name AS subject, sc.class_score, sc.exam_score, sc.total_score, sc.grade_remark
+      FROM scores sc JOIN subjects sub ON sub.id = sc.subject_id
+      WHERE sc.student_id = ? AND sc.term_id = ? ORDER BY sub.name
+    `).all(sid, term.id);
+    const summary = db.prepare('SELECT * FROM student_term_summary WHERE student_id = ? AND term_id = ?').get(sid, term.id);
+    return json(res, 200, { ok: true, term: { id: term.id, label: term.label }, subjects, summary: summary || null });
+  });
+
   add('GET', `${API}/parent/notifications`, async (ctx, req, res) => {
     if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
     const contacts = [ctx.parent.phone, ctx.parent.email].filter(Boolean);

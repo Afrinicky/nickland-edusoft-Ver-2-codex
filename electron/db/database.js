@@ -1391,7 +1391,9 @@ function runMigrations(db) {
     ins.run('receipt_delivery_channels', 'sms');        // comma list: sms,email
     ins.run('receipt_delivery_contact', 'auto');        // auto | father | mother | guardian
     ins.run('receipt_delivery_email_source', 'auto');   // auto | father | mother | guardian
-    ins.run('email_from', '');                          // From: address for SMTP email
+    ins.run('email_from', '');                          // From: address for email
+    ins.run('email_provider', 'smtp');                  // 'smtp' | 'resend'
+    ins.run('resend_api_key', '');                      // Resend HTTP API key
   });
 
   // 14. Mobile API host: parent accounts, parent↔student links, device tokens.
