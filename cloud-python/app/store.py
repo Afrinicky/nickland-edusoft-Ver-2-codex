@@ -90,7 +90,9 @@ class PgStore:
     def __init__(self, dsn):
         import psycopg  # noqa: F401
         from psycopg_pool import ConnectionPool
-        self._pool = ConnectionPool(dsn, min_size=1, max_size=8, kwargs={"autocommit": True})
+        # min_size=0 so a scaled-to-zero Neon / temporarily-down DB never blocks
+        # boot; connections open on first use. /health stays DB-independent.
+        self._pool = ConnectionPool(dsn, min_size=0, max_size=8, open=True, kwargs={"autocommit": True})
 
     def _q(self, sql, params=(), fetch=None):
         with self._pool.connection() as conn:

@@ -1,0 +1,18 @@
+# Render.com blueprint — one-click deploy of the Nickland Edusoft cloud.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: nickland-edusoft-cloud
+    runtime: docker
+    rootDir: cloud-python
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: PORTAL_SECRET
+        generateValue: true          # signs parent session tokens
+      - key: DATABASE_URL
+        sync: false                  # paste your Neon connection string (with ?sslmode=require)
+      - key: WEB_CONCURRENCY
+        value: "2"
