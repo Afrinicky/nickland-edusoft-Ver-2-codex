@@ -80,6 +80,40 @@ function enqueueStudentSnapshot(db, studentId) {
       LEFT JOIN canteen_day_status cds ON cds.date = sc.date AND cds.student_id = ?
       WHERE sc.term_id = ? AND sc.day_type = 'school_day' AND (cds.status IS NULL OR cds.status = 'unpaid')
     `).get(studentId, term.id).c : 0;
+    // Attendance summary (current term).
+    let attendance = { present: 0, absent: 0, total: 0 };
+    try {
+      attendance = db.prepare(`
+        SELECT COUNT(*) FILTER (WHERE status='present') AS present,
+               COUNT(*) FILTER (WHERE status='absent')  AS absent,
+               COUNT(*) AS total
+        FROM student_attendance WHERE student_id = ?${term ? ' AND term_id = ?' : ''}
+      `).get(...(term ? [studentId, term.id] : [studentId]));
+    } catch (_) {}
+
+    // Academic performance (current term): per-subject scores + summary.
+    let report = null;
+    try {
+      if (term) {
+        const subjects = db.prepare(`
+          SELECT sub.name AS subject, sc.total_score, sc.grade_remark
+          FROM scores sc JOIN subjects sub ON sub.id = sc.subject_id
+          WHERE sc.student_id = ? AND sc.term_id = ? ORDER BY sub.name
+        `).all(studentId, term.id);
+        const summary = db.prepare('SELECT average_score, class_rank, number_on_roll, teacher_remarks FROM student_term_summary WHERE student_id = ? AND term_id = ?').get(studentId, term.id);
+        if (subjects.length || summary) {
+          report = {
+            term: term.label,
+            subjects: subjects.map(x => ({ subject: x.subject, total: x.total_score, grade: x.grade_remark })),
+            average: summary?.average_score ?? null,
+            rank: summary?.class_rank ?? null,
+            number_on_roll: summary?.number_on_roll ?? null,
+            remarks: summary?.teacher_remarks ?? null,
+          };
+        }
+      }
+    } catch (_) {}
+
     return postToOutbox(db, {
       entity_type: 'student_snapshot',
       entity_key: `student:${studentId}`,
@@ -91,6 +125,8 @@ function enqueueStudentSnapshot(db, studentId) {
         term: term ? term.label : null,
         fees: { billed: bill?.total_billed || 0, paid: bill?.total_paid || 0, balance: bill?.balance || 0 },
         canteen: { unpaid_days: canteenUnpaid, amount_owed: canteenUnpaid * rate },
+        attendance,
+        report,
         updated_at: new Date().toISOString(),
       },
     });

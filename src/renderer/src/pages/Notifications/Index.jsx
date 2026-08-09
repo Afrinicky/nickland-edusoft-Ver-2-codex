@@ -15,12 +15,97 @@ export default function NotificationsIndex() {
       </div>
       <div className="tabs">
         <button className={'tab' + (tab === 'send' ? ' active' : '')} onClick={() => setTab('send')}>Send</button>
+        <button className={'tab' + (tab === 'announce' ? ' active' : '')} onClick={() => setTab('announce')}>Announcements</button>
         <button className={'tab' + (tab === 'templates' ? ' active' : '')} onClick={() => setTab('templates')}>Templates</button>
         <button className={'tab' + (tab === 'history' ? ' active' : '')} onClick={() => setTab('history')}>History</button>
       </div>
       {tab === 'send' && <SendTab />}
+      {tab === 'announce' && <AnnouncementsTab />}
       {tab === 'templates' && <TemplatesTab />}
       {tab === 'history' && <HistoryTab />}
+    </div>
+  );
+}
+
+function AnnouncementsTab() {
+  const showToast = useStore(s => s.showToast);
+  const classes = useStore(s => s.classes);
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [students, setStudents] = useState([]);
+
+  async function refresh() { setItems(await window.api.announcements.list()); }
+  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    if (editing?.audience === 'student') window.api.students.list({}).then(setStudents);
+  }, [editing?.audience]);
+
+  async function save() {
+    const res = await window.api.announcements.save(editing);
+    if (!res.ok) return showToast(res.error || 'Failed', 'error');
+    showToast('Announcement posted — visible on the parent portal', 'success');
+    setEditing(null); refresh();
+  }
+  async function remove(id) {
+    if (!confirm('Delete this announcement?')) return;
+    await window.api.announcements.delete(id); refresh();
+  }
+
+  return (
+    <div>
+      <div className="card">
+        <div className="section-header">
+          <div>
+            <div className="section-title">Announcements &amp; notices</div>
+            <div className="text-sm text-muted">Posted to the parent web portal. School-wide or targeted to one student.</div>
+          </div>
+          <button className="btn btn-primary" onClick={() => setEditing({ title: '', body: '', audience: 'all', is_active: 1 })}>+ New notice</button>
+        </div>
+      </div>
+      <div className="card" style={{ marginTop: 12, padding: 0 }}>
+        {items.length === 0
+          ? <div className="empty-state" style={{ padding: 24 }}>No announcements yet.</div>
+          : <table className="reports-table" style={{ width: '100%' }}>
+              <thead><tr><th>Title</th><th>Audience</th><th>Posted</th><th></th></tr></thead>
+              <tbody>
+                {items.map(a => (
+                  <tr key={a.id}>
+                    <td><strong>{a.title}</strong><div className="text-xs text-muted">{a.body}</div></td>
+                    <td>{a.audience === 'student' ? `${a.surname || ''} ${a.first_name || ''}`.trim() || 'Student' : 'All parents'}</td>
+                    <td className="text-sm">{fmtDate(a.created_at)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setEditing(a)}>Edit</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => remove(a.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>}
+      </div>
+      {editing && (
+        <Modal title={editing.id ? 'Edit announcement' : 'New announcement'} onClose={() => setEditing(null)}
+          footer={<>
+            <button className="btn btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
+            <button className="btn btn-primary" onClick={save}>Post</button>
+          </>}>
+          <div className="form-group"><label className="label">Title</label>
+            <input className="input" value={editing.title} onChange={e => setEditing({ ...editing, title: e.target.value })} /></div>
+          <div className="form-group"><label className="label">Message</label>
+            <textarea className="input" rows={4} value={editing.body} onChange={e => setEditing({ ...editing, body: e.target.value })} /></div>
+          <div className="form-group"><label className="label">Audience</label>
+            <select className="select" value={editing.audience} onChange={e => setEditing({ ...editing, audience: e.target.value })}>
+              <option value="all">All parents (school-wide)</option>
+              <option value="student">One student's parents</option>
+            </select></div>
+          {editing.audience === 'student' && (
+            <div className="form-group"><label className="label">Student</label>
+              <select className="select" value={editing.target_student_id || ''} onChange={e => setEditing({ ...editing, target_student_id: parseInt(e.target.value, 10) })}>
+                <option value="">— Select —</option>
+                {students.map(s => <option key={s.id} value={s.id}>{s.surname} {s.first_name} ({s.index_number})</option>)}
+              </select></div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

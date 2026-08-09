@@ -48,9 +48,19 @@ def main():
     store.upsert_snapshot(sid, {"entity_type": "student_snapshot", "entity_key": "student:1", "uuid": "u2", "version": 1,
         "payload": {"student_id": 1, "name": "ANSU MONA", "index_number": "AVE/17/00001", "class_name": "Basic 5",
                     "term": "Third Term", "fees": {"billed": 410, "paid": 150, "balance": 260},
-                    "canteen": {"unpaid_days": 3, "amount_owed": 15}, "updated_at": "2026-07-30T00:00:00Z"}})
+                    "canteen": {"unpaid_days": 3, "amount_owed": 15},
+                    "attendance": {"present": 40, "absent": 2, "total": 42},
+                    "report": {"term": "Third Term", "subjects": [{"subject": "Mathematics", "total": 82, "grade": "Advanced"}],
+                               "average": 78.5, "rank": 3, "number_on_roll": 30, "remarks": "Good work"},
+                    "updated_at": "2026-07-30T00:00:00Z"}})
     store.upsert_snapshot(sid, {"entity_type": "receipt", "entity_key": "receipt:FE/26/00001", "uuid": "u3", "version": 1,
         "payload": {"receipt_number": "FE/26/00001", "student_id": 1, "amount": 150, "category": "fees", "payment_method": "Cash", "date": "2026-07-30"}})
+    store.upsert_snapshot(sid, {"entity_type": "announcement", "entity_key": "announcement:1", "uuid": "a1", "version": 1,
+        "payload": {"id": 1, "title": "PTA Meeting", "body": "Saturday 10am", "audience": "all", "is_active": 1, "created_at": "2026-07-29"}})
+    store.upsert_snapshot(sid, {"entity_type": "announcement", "entity_key": "announcement:2", "uuid": "a2", "version": 1,
+        "payload": {"id": 2, "title": "Well done", "body": "Great result", "audience": "student", "student_id": 1, "is_active": 1, "created_at": "2026-07-30"}})
+    store.upsert_snapshot(sid, {"entity_type": "announcement", "entity_key": "announcement:3", "uuid": "a3", "version": 1,
+        "payload": {"id": 3, "title": "Not yours", "body": "Other kid", "audience": "student", "student_id": 99, "is_active": 1, "created_at": "2026-07-30"}})
 
     c = TestClient(create_app(store))
 
@@ -74,9 +84,14 @@ def main():
 
     kids = c.get("/api/v1/portal/children", headers=hdr).json()
     ck("children shows linked child (balance 260)", kids["ok"] and len(kids["children"]) == 1 and kids["children"][0]["fees"]["balance"] == 260)
+    ck("child snapshot carries attendance + performance", kids["children"][0]["attendance"]["present"] == 40 and kids["children"][0]["report"]["average"] == 78.5)
 
     rcs = c.get("/api/v1/portal/receipts", headers=hdr).json()
     ck("receipts returns the child receipt", rcs["ok"] and len(rcs["receipts"]) == 1 and rcs["receipts"][0]["receipt_number"] == "FE/26/00001")
+
+    ann = c.get("/api/v1/portal/announcements", headers=hdr).json()
+    titles = [a["title"] for a in ann.get("announcements", [])]
+    ck("announcements: school-wide + own child only", ann["ok"] and "PTA Meeting" in titles and "Well done" in titles and "Not yours" not in titles)
 
     ck("profile update ok", c.post("/api/v1/portal/profile", headers=hdr, json={"full_name": "Papa Ansu", "email": "new@mail.com"}).json()["ok"])
     changes = store.changes_since(sid, "0")["changes"]

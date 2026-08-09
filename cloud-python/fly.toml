@@ -1,0 +1,25 @@
+# Fly.io config — deploy with: fly launch --copy-config --now  (from cloud-python/)
+# Set secrets first:
+#   fly secrets set PORTAL_SECRET=$(openssl rand -hex 32) DATABASE_URL="postgres://…?sslmode=require"
+app = "nickland-edusoft-cloud"
+primary_region = "jnb"   # Johannesburg — closest to Ghana; change as needed
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  WEB_CONCURRENCY = "2"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.checks]
+    [[http_service.checks.http]]
+      path = "/health"
+      interval = "15s"
+      timeout = "3s"

@@ -56,6 +56,19 @@ python tests/browser_smoke.py    # optional: real-browser (Playwright) UI smoke 
 ```
 
 ## Deploy
-Any Python host (Render / Railway / Fly / a VPS / serverless with a persistent
-process) behind HTTPS, pointed at a **Neon** database via `DATABASE_URL`. The
-desktop's Cloud Sync just needs the base URL + the school's key.
+Container image (`Dockerfile`) + one-click configs for **Render** (`render.yaml`)
+and **Fly.io** (`fly.toml`). Point it at a **Neon** database via `DATABASE_URL`
+and set `PORTAL_SECRET` (signs parent session tokens). `/health` is
+DB-independent so platform health checks pass during cold starts.
+
+```bash
+# Local container
+docker build -t nickland-cloud .
+docker run -p 8080:8080 -e PORTAL_SECRET=dev -e DATABASE_URL="postgres://…?sslmode=require" nickland-cloud
+
+# Render:  push repo → New Blueprint → picks up render.yaml (set DATABASE_URL)
+# Fly.io:  cd cloud-python && fly launch --copy-config --now
+#          fly secrets set PORTAL_SECRET=$(openssl rand -hex 32) DATABASE_URL="postgres://…?sslmode=require"
+```
+Run `schema.sql` once against Neon before first use, then provision schools with
+`scripts/create_school.py`.
