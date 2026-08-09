@@ -52,6 +52,7 @@ DATABASE_URL=…  python scripts/create_school.py "Ave Maria School Acherensua"
 ```bash
 python tests/test_portal.py     # FastAPI TestClient: portal + sync + cross-lang scrypt
 bash   tests/cross_lang.sh       # boots this server; the REAL Node desktop client drives it
+python tests/browser_smoke.py    # optional: real-browser (Playwright) UI smoke of the portal
 ```
 
 ## Deploy

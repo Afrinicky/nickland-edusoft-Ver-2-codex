@@ -33,6 +33,8 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
     payload: { parent_id: 1, full_name: 'Papa', phone: '233244123456', email: 'papa@mail.com', password_hash: makeHash('pass12'), is_active: 1, student_keys: ['student:1'] } });
   await store.upsertSnapshot(school_id, { entity_type: 'student_snapshot', entity_key: 'student:1', uuid: 'u2', version: 1,
     payload: { student_id: 1, name: 'ANSU MONA', index_number: 'AVE/17/00001', class_name: 'Basic 5', term: 'Third Term', fees: { billed: 410, paid: 150, balance: 260 }, canteen: { unpaid_days: 3, amount_owed: 15 }, updated_at: new Date().toISOString() } });
+  await store.upsertSnapshot(school_id, { entity_type: 'receipt', entity_key: 'receipt:FE/26/00001', uuid: 'u3', version: 1,
+    payload: { receipt_number: 'FE/26/00001', student_id: 1, amount: 150, category: 'fees', payment_method: 'Cash', date: '2026-07-30' } });
 
   const server = createServer(store);
   await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -60,6 +62,9 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
 
   r = await req(base, 'GET', '/api/v1/portal/children', { token });
   ck('children returns the linked child w/ balance 260', r.json.ok && r.json.children.length === 1 && r.json.children[0].fees.balance === 260);
+
+  r = await req(base, 'GET', '/api/v1/portal/receipts', { token });
+  ck('receipts returns the child receipt', r.json.ok && r.json.receipts.length === 1 && r.json.receipts[0].receipt_number === 'FE/26/00001');
 
   r = await req(base, 'POST', '/api/v1/portal/profile', { token, body: { full_name: 'Papa Ansu', email: 'new@mail.com' } });
   ck('profile update ok', r.json.ok);
