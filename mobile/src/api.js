@@ -45,6 +45,8 @@ export const api = {
   children: (token) => request('/parent/children', { token }),
   child: (token, id) => request(`/parent/children/${id}`, { token }),
   childReport: (token, id) => request(`/parent/children/${id}/report`, { token }),
+  childIntents: (token, id) => request(`/parent/children/${id}/intents`, { token }),
+  pay: (token, id, { amount, channel, reference }) => request(`/parent/children/${id}/pay`, { method: 'POST', token, body: { amount, channel, reference } }),
   parentNotifications: (token) => request('/parent/notifications', { token }),
 
   // Staff

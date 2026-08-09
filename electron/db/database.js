@@ -1444,6 +1444,36 @@ function runMigrations(db) {
     ins.run('mobile_parent_self_register', 'true'); // parents may self-register if their phone matches a student
     ins.run('mobile_token_ttl_days', '30');
   });
+
+  // 15. Payment intents — parents submit a payment (mobile money / bank / cash
+  //     at office) that the accountant (or a future gateway webhook) acknowledges.
+  //     On acknowledgment the payment is recorded via the ledger and a receipt is
+  //     auto-generated + delivered, so every channel behaves identically.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS payment_intents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT,
+        student_id INTEGER NOT NULL,
+        parent_id INTEGER,
+        term_id INTEGER,
+        amount REAL NOT NULL,
+        channel TEXT DEFAULT 'mobile',       -- mobile_money | bank | cash | other
+        reference TEXT,
+        notes TEXT,
+        status TEXT DEFAULT 'pending',        -- pending | acknowledged | rejected
+        payment_id INTEGER,
+        acknowledged_by INTEGER,
+        acknowledged_at TEXT,
+        reject_reason TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES parents(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_intents_status ON payment_intents(status);
+      CREATE INDEX IF NOT EXISTS idx_intents_student ON payment_intents(student_id);
+    `);
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

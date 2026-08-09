@@ -12,6 +12,7 @@ const http = require('http');
 const url = require('url');
 const tokens = require('./tokens');
 const parents = require('./parents');
+const payments = require('./payments_service');
 const { getSetting } = require('../utils/idgen');
 // Required at call-time (not destructured at load) to avoid a load-order
 // circular-dependency warning: auth.js attaches resolveEffectivePermissions
@@ -211,6 +212,31 @@ function createApiServer(db, opts = {}) {
     `).all(sid, term.id);
     const summary = db.prepare('SELECT * FROM student_term_summary WHERE student_id = ? AND term_id = ?').get(sid, term.id);
     return json(res, 200, { ok: true, term: { id: term.id, label: term.label }, subjects, summary: summary || null });
+  });
+
+  // Parent submits a payment (mobile money / bank / cash-at-office). This
+  // creates a PENDING intent; the school acknowledges it (or a gateway webhook
+  // does), which records the payment and sends the receipt.
+  add('POST', `${API}/parent/children/:id/pay`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const r = payments.createIntent(db, {
+      student_id: sid, parent_id: ctx.parent.id,
+      amount: body.amount, channel: body.channel || 'mobile',
+      reference: body.reference, notes: body.notes,
+    });
+    if (!r.ok) return json(res, 400, r);
+    return json(res, 200, { ok: true, intent_id: r.intent_id, status: 'pending',
+      message: 'Payment submitted. You will receive a receipt once the school confirms it.' });
+  });
+
+  // Parent sees their submitted payment intents + their status.
+  add('GET', `${API}/parent/children/:id/intents`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    return json(res, 200, { ok: true, intents: payments.intentsForStudent(db, sid) });
   });
 
   add('GET', `${API}/parent/notifications`, async (ctx, req, res) => {
