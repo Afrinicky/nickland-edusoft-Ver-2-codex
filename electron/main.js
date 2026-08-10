@@ -77,7 +77,7 @@ process.on('unhandledRejection', (reason) => {
 // revoked mobile tokens, synced outbox rows, and the log mirror. On a school
 // PC that runs for years this is the difference between a snappy database and
 // a slow one. Runs once shortly after boot, then daily.
-function startMaintenance(db, userDataPath) {
+function startMaintenance(db) {
   const outbox = require('./server/sync/outbox');
 
   const sweep = () => {
@@ -271,7 +271,7 @@ app.whenReady().then(async () => {
     logger.info('startup', 'All modules registered');
   }
 
-  startMaintenance(db, userDataPath);
+  startMaintenance(db);
 
   ipcMain.handle('app:get-paths', () => ({
     userData: userDataPath,
