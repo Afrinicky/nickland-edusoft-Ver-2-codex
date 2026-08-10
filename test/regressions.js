@@ -4,9 +4,23 @@
 // Runs on plain Node (node:sqlite, no native build) so CI can execute it
 // without compiling better-sqlite3 for the runner's ABI.
 //
-//   node test/regressions.js
+//   node test/regressions.js       (requires Node >= 22.5)
 //
 // Every case here corresponds to a defect that was live in the shipped code.
+
+// `node:sqlite` first shipped in Node 22.5. Check for it up front: the bare
+// module-not-found stack trace gives no hint that the Node version is the
+// problem, and the cloud suites in cloud/test and cloud-python/tests share
+// this requirement.
+const [major, minor] = process.versions.node.split('.').map(Number);
+if (major < 22 || (major === 22 && minor < 5)) {
+  console.error(
+    `These tests need Node >= 22.5 for the built-in node:sqlite module ` +
+    `(running ${process.versions.node}).\n` +
+    `The Windows installer job still builds on Node 20 — only the test job needs 22.`
+  );
+  process.exit(1);
+}
 
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path');

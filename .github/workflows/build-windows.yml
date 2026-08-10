@@ -23,10 +23,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 20
+      # Node 22, not the 20 the installer job uses: the suites build their
+      # fixtures on the built-in `node:sqlite`, which first shipped in 22.5.
+      # That keeps them free of a native better-sqlite3 build on the runner.
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -67,6 +70,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Node 20 matches what Electron 32 is built against; leave it alone.
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
