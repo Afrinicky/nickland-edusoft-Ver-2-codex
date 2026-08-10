@@ -40,6 +40,24 @@ function getSetting(db, key, fallback = '') {
   return row ? row.value : fallback;
 }
 
+// Write a setting, creating the row if it does not exist.
+//
+// The codebase used to write settings with `UPDATE settings SET value = ?
+// WHERE key = ?`, which silently affects zero rows when the key was never
+// seeded — the UI reported success and the value was lost. Every config writer
+// should go through this instead. Booleans are stored as 'true' / 'false' to
+// match how getSetting callers compare them.
+function setSetting(db, key, value, category = 'system') {
+  const val = typeof value === 'boolean' ? (value ? 'true' : 'false')
+    : value == null ? ''
+    : String(value);
+  db.prepare(`
+    INSERT INTO settings (key, value, category) VALUES (?, ?, ?)
+    ON CONFLICT (key) DO UPDATE SET value = excluded.value
+  `).run(key, val, category);
+  return val;
+}
+
 function getSchoolAbbreviation(db) {
   return getSetting(db, 'school_abbreviation', 'AVE');
 }
@@ -68,4 +86,5 @@ module.exports = {
   setNextRollNumber,
   getNextReceiptNumber,
   getSetting,
+  setSetting,
 };

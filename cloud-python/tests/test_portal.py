@@ -7,6 +7,10 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Tests opt into the shared development signing secret; production refuses it.
+os.environ.setdefault("ALLOW_DEV_SECRET", "1")
+os.environ.setdefault("ALLOW_MEMORY_STORE", "1")
+
 from fastapi.testclient import TestClient
 from app.main import create_app
 from app.store import MemoryStore

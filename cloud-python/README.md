@@ -30,17 +30,35 @@ full endpoint list. In short: `x-school-key` for `/api/v1/sync/*` and
 public). Parents authenticate against a `parent_auth` projection the desktop
 pushes up (scrypt hash + linked student keys).
 
+## Required configuration
+
+The service **refuses to start** without these two. Both failures used to be
+silent, and both were dangerous:
+
+| Variable | Why it is mandatory |
+|---|---|
+| `PORTAL_SECRET` | Signs parent session tokens. It previously fell back to a constant published in this repository — anyone who read the source could mint a valid session for any parent of any school. Generate with `openssl rand -hex 32`. |
+| `DATABASE_URL` | Postgres/Neon connection string (append `?sslmode=require`). Without it the service used to fall back to in-memory storage: every school, parent and receipt vanished on each restart, and since the image runs several uvicorn workers, each worker held its own copy — so the same request succeeded or 401'd depending on which worker answered. |
+
+For a throwaway local run or a test, opt in explicitly instead:
+`ALLOW_DEV_SECRET=1 ALLOW_MEMORY_STORE=1`.
+
 ## Run
 ```bash
 cd cloud-python
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-# Dev (in-memory):
-uvicorn app.main:app --reload --port 8080
+
+# Dev (in-memory, explicit opt-in — data is discarded on exit):
+ALLOW_DEV_SECRET=1 ALLOW_MEMORY_STORE=1 uvicorn app.main:app --reload --port 8080
+
 # Production (Neon):
 psql "$DATABASE_URL" -f schema.sql            # once
-DATABASE_URL=postgres://…  uvicorn app.main:app --host 0.0.0.0 --port 8080
+PORTAL_SECRET="$(openssl rand -hex 32)" DATABASE_URL=postgres://…?sslmode=require \
+  uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
+
+Keep `PORTAL_SECRET` stable across deploys — changing it signs every parent out.
 
 ## Provision a school
 ```bash

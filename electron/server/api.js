@@ -45,13 +45,33 @@ function readBody(req) {
 }
 
 // ── very small in-memory rate limiter for auth endpoints ──
+// Keyed by IP *and* by the account being targeted: an IP-only limit lets a
+// single attacker rotate source addresses, and lets one busy NAT'd school
+// network lock everybody out. Entries are swept so the map cannot grow without
+// bound on a long-running host.
+const WINDOW_MS = 60000;
+const MAX_PER_WINDOW = 20;
 const attempts = new Map();
-function rateLimited(ip) {
+
+function sweepAttempts(now) {
+  if (attempts.size < 1000) return;
+  for (const [k, v] of attempts) if (now - v.t > WINDOW_MS) attempts.delete(k);
+}
+
+function bump(key, now) {
+  const rec = attempts.get(key) || { n: 0, t: now };
+  if (now - rec.t > WINDOW_MS) { rec.n = 0; rec.t = now; }
+  rec.n++;
+  attempts.set(key, rec);
+  return rec.n > MAX_PER_WINDOW;
+}
+
+function rateLimited(ip, identifier) {
   const now = Date.now();
-  const rec = attempts.get(ip) || { n: 0, t: now };
-  if (now - rec.t > 60000) { rec.n = 0; rec.t = now; }
-  rec.n++; attempts.set(ip, rec);
-  return rec.n > 20;
+  sweepAttempts(now);
+  let limited = bump(`ip:${ip}`, now);
+  if (identifier) limited = bump(`id:${String(identifier).toLowerCase().slice(0, 120)}`, now) || limited;
+  return limited;
 }
 
 function subjectContext(db, subject) {
@@ -107,7 +127,12 @@ function childSummary(db, studentId) {
 
 function createApiServer(db, opts = {}) {
   const routes = [];
-  const add = (method, pattern, handler) => routes.push({ method, parts: pattern.split('/').filter(Boolean), handler });
+  // `public: true` marks a route reachable without a bearer token. It used to
+  // be inferred by scanning the pattern for segments named health/info/login/
+  // register, which would silently expose any future route that happened to
+  // contain one of those words. Authentication is now opt-out, per route.
+  const add = (method, pattern, handler, routeOpts = {}) =>
+    routes.push({ method, parts: pattern.split('/').filter(Boolean), handler, public: !!routeOpts.public });
 
   const match = (parts, reqParts) => {
     if (parts.length !== reqParts.length) return null;
@@ -120,17 +145,17 @@ function createApiServer(db, opts = {}) {
   };
 
   // ── Public ──
-  add('GET', `${API}/health`, async (ctx, req, res) => json(res, 200, { ok: true, name: getSetting(db, 'school_name', 'School'), api: 'v1' }));
+  add('GET', `${API}/health`, async (ctx, req, res) => json(res, 200, { ok: true, name: getSetting(db, 'school_name', 'School'), api: 'v1' }), { public: true });
   add('GET', `${API}/info`, async (ctx, req, res) => json(res, 200, {
     ok: true,
     school: { name: getSetting(db, 'school_name', 'School'), motto: getSetting(db, 'school_motto', ''), phone: getSetting(db, 'school_phone_1', '') },
     parent_self_register: getSetting(db, 'mobile_parent_self_register', 'true') === 'true',
     online_payments: require('./gateways').gatewayEnabled(db),
     payment_currency: getSetting(db, 'payment_currency', 'GHS'),
-  }));
+  }), { public: true });
 
   add('POST', `${API}/auth/login`, async (ctx, req, res, params, body, ip) => {
-    if (rateLimited(ip)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+    if (rateLimited(ip, body.username)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
     let bcrypt; try { bcrypt = require('bcryptjs'); } catch { return json(res, 500, { ok: false, error: 'auth unavailable' }); }
     const u = db.prepare(`
       SELECT u.*, d.name AS designation FROM users u LEFT JOIN designations d ON d.id = u.designation_id
@@ -142,10 +167,10 @@ function createApiServer(db, opts = {}) {
     const t = tokens.issueToken(db, 'user', u.id, { deviceName: body.device, platform: body.platform });
     return json(res, 200, { ok: true, token: t.token, expires_at: t.expires_at,
       user: { id: u.id, full_name: u.full_name, designation: u.designation, role: 'staff' } });
-  });
+  }, { public: true });
 
   add('POST', `${API}/auth/parent/register`, async (ctx, req, res, params, body, ip) => {
-    if (rateLimited(ip)) return json(res, 429, { ok: false, error: 'Too many attempts.' });
+    if (rateLimited(ip, body.phone || body.email)) return json(res, 429, { ok: false, error: 'Too many attempts.' });
     if (getSetting(db, 'mobile_parent_self_register', 'true') !== 'true') {
       return json(res, 403, { ok: false, error: 'Self-registration is disabled. Ask the school to register you.' });
     }
@@ -153,15 +178,15 @@ function createApiServer(db, opts = {}) {
     if (!r.ok) return json(res, 400, r);
     const t = tokens.issueToken(db, 'parent', r.parent_id, { deviceName: body.device, platform: body.platform });
     return json(res, 200, { ok: true, token: t.token, expires_at: t.expires_at, linked: r.linked });
-  });
+  }, { public: true });
 
   add('POST', `${API}/auth/parent/login`, async (ctx, req, res, params, body, ip) => {
-    if (rateLimited(ip)) return json(res, 429, { ok: false, error: 'Too many attempts.' });
+    if (rateLimited(ip, body.identifier)) return json(res, 429, { ok: false, error: 'Too many attempts.' });
     const r = parents.loginParent(db, body);
     if (!r.ok) return json(res, 401, r);
     const t = tokens.issueToken(db, 'parent', r.parent.id, { deviceName: body.device, platform: body.platform });
     return json(res, 200, { ok: true, token: t.token, expires_at: t.expires_at, parent: r.parent });
-  });
+  }, { public: true });
 
   // ── Authed ──
   add('GET', `${API}/me`, async (ctx, req, res) => {
@@ -189,12 +214,15 @@ function createApiServer(db, opts = {}) {
       SELECT amount, payment_date, payment_method, receipt_number FROM payments
       WHERE student_id = ? AND is_reversed = 0 ORDER BY payment_date DESC LIMIT 20
     `).all(sid);
+    // Attendance is reported for the CURRENT TERM. The term was looked up but
+    // never used in the filter, so parents were shown a running total across
+    // every term the child had ever attended.
     const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
     const attendance = term ? db.prepare(`
       SELECT COUNT(*) FILTER (WHERE status='present') AS present,
              COUNT(*) FILTER (WHERE status='absent') AS absent, COUNT(*) AS total
-      FROM student_attendance WHERE student_id = ?
-    `).get(sid) : { present: 0, absent: 0, total: 0 };
+      FROM student_attendance WHERE student_id = ? AND term_id = ?
+    `).get(sid, term.id) : { present: 0, absent: 0, total: 0 };
     return json(res, 200, { ok: true, child: summary, payments, attendance });
   });
 
@@ -377,11 +405,8 @@ function createApiServer(db, opts = {}) {
     }
     if (!route) return json(res, 404, { ok: false, error: 'Not found' });
 
-    const isPublic = route.parts.includes('health') || route.parts.includes('info') ||
-      (route.parts.includes('auth') && (route.parts.includes('login') || route.parts.includes('register')));
-
     let ctx = null, tokenId = null;
-    if (!isPublic) {
+    if (!route.public) {
       const auth = req.headers['authorization'] || '';
       const raw = auth.startsWith('Bearer ') ? auth.slice(7) : null;
       const subject = tokens.verifyToken(db, raw);

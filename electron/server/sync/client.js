@@ -12,7 +12,7 @@
 //   GET  {base}/api/v1/sync/pull?since=<cursor>   headers: x-school-key
 //        → { ok:true, cursor:<next>, changes:[{type, payload}] }
 
-const { getSetting } = require('../../utils/idgen');
+const { getSetting, setSetting } = require('../../utils/idgen');
 const { httpJson } = require('../gateways/http');
 const outbox = require('./outbox');
 
@@ -27,15 +27,39 @@ function config(db) {
   };
 }
 
+function retentionDays(db) {
+  return Math.max(1, parseInt(getSetting(db, 'cloud_outbox_retention_days', '14'), 10) || 14);
+}
+
+// The cloud must be reached over TLS: the school API key and the projected
+// parent password hashes both travel in these requests. Plain http is allowed
+// only for loopback, which is what the test suites point at.
+function insecureBase(base) {
+  try {
+    const u = new URL(base);
+    if (u.protocol === 'https:') return false;
+    return !['localhost', '127.0.0.1', '::1', '[::1]'].includes(u.hostname);
+  } catch (_) { return true; }
+}
+
 function configured(db) {
   const c = config(db);
   return !!(c.base && c.key);
 }
 
-async function push(db) {
+// Shared guard for push/pull: returns an error string, or null when good to go.
+function blockedReason(db) {
   const c = config(db);
-  if (!c.enabled) return { ok: false, error: 'disabled' };
-  if (!configured(db)) return { ok: false, error: 'not_configured' };
+  if (!c.enabled) return 'disabled';
+  if (!configured(db)) return 'not_configured';
+  if (insecureBase(c.base)) return 'insecure_url';
+  return null;
+}
+
+async function push(db) {
+  const blocked = blockedReason(db);
+  if (blocked) return { ok: false, error: blocked };
+  const c = config(db);
   const rows = outbox.listUnsynced(db, c.batch);
   if (!rows.length) return { ok: true, pushed: 0 };
   const records = rows.map(r => ({
@@ -53,17 +77,23 @@ async function push(db) {
     const accepted = new Set(res.json.accepted || records.map(r => r.uuid));
     const okIds = rows.filter(r => accepted.has(r.uuid)).map(r => r.id);
     outbox.markSynced(db, okIds);
-    try { db.prepare("UPDATE settings SET value = datetime('now') WHERE key = 'cloud_last_push_at'").run(); } catch (_) {}
-    return { ok: true, pushed: okIds.length };
+    // Records the cloud silently declined (missing from `accepted`) used to be
+    // left untouched, so they were re-sent on every tick forever. Count them as
+    // failures so they take the normal backoff and eventually park.
+    const rejectedIds = rows.filter(r => !accepted.has(r.uuid)).map(r => r.id);
+    if (rejectedIds.length) outbox.markFailed(db, rejectedIds, 'not_accepted_by_cloud');
+    try { setSetting(db, 'cloud_last_push_at', new Date().toISOString(), 'cloud'); } catch (_) {}
+    try { outbox.pruneSynced(db, retentionDays(db)); } catch (_) {}
+    return { ok: true, pushed: okIds.length, rejected: rejectedIds.length };
   }
   outbox.markFailed(db, rows.map(r => r.id), (res.json && res.json.error) || res.error || `http_${res.status}`);
   return { ok: false, error: (res.json && res.json.error) || res.error || `push_failed_${res.status}` };
 }
 
 async function pull(db) {
+  const blocked = blockedReason(db);
+  if (blocked) return { ok: false, error: blocked };
   const c = config(db);
-  if (!c.enabled) return { ok: false, error: 'disabled' };
-  if (!configured(db)) return { ok: false, error: 'not_configured' };
   const res = await httpJson(`${c.base}/api/v1/sync/pull?since=${encodeURIComponent(c.cursor)}`, {
     headers: { 'x-school-key': c.key },
   });
@@ -74,9 +104,9 @@ async function pull(db) {
   let applied = 0;
   for (const ch of changes) { if (applyChange(db, ch)) applied++; }
   if (res.json.cursor != null) {
-    try { db.prepare("UPDATE settings SET value = ? WHERE key = 'cloud_cursor'").run(String(res.json.cursor)); } catch (_) {}
+    try { setSetting(db, 'cloud_cursor', String(res.json.cursor), 'cloud'); } catch (_) {}
   }
-  try { db.prepare("UPDATE settings SET value = datetime('now') WHERE key = 'cloud_last_pull_at'").run(); } catch (_) {}
+  try { setSetting(db, 'cloud_last_pull_at', new Date().toISOString(), 'cloud'); } catch (_) {}
   return { ok: true, applied, cursor: res.json.cursor };
 }
 
@@ -121,4 +151,4 @@ async function syncOnce(db) {
   return { push: p, pull: q };
 }
 
-module.exports = { config, configured, push, pull, applyChange, syncOnce };
+module.exports = { config, configured, blockedReason, insecureBase, push, pull, applyChange, syncOnce };

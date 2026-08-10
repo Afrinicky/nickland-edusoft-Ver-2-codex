@@ -1,6 +1,8 @@
 // Nickland Edusoft — Database Layer
 // Copyright © 2026 Nickland Sales. All rights reserved.
-const Database = require('better-sqlite3');
+// better-sqlite3 is a native module, loaded lazily so that SCHEMA and
+// runMigrations can be imported (by the sync test suites, for instance)
+// without needing a compiled binary for the current runtime.
 const path = require('path');
 const fs = require('fs');
 
@@ -1239,9 +1241,37 @@ function seedDefaults(db) {
 }
 
 function runMigrations(db) {
+  // The diagnostics table has to exist before anything else so migration
+  // failures below have somewhere to land.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS system_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        level   TEXT NOT NULL DEFAULT 'info',
+        source  TEXT,
+        message TEXT NOT NULL,
+        detail  TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_system_log_created ON system_log(created_at);
+    `);
+  } catch (e) { /* logging is best-effort and must never block startup */ }
+
   // Additive migrations for users upgrading from an older database.
-  // Each is wrapped so a failure (e.g. column already exists) doesn't abort the rest.
-  const safe = (fn) => { try { fn(); } catch (e) { /* already applied */ } };
+  // Each is wrapped so a failure (e.g. column already exists) doesn't abort the
+  // rest. Failures used to vanish entirely; they are now recorded so a broken
+  // upgrade is diagnosable after the fact instead of showing up as missing data.
+  let step = 0;
+  const safe = (fn) => {
+    step++;
+    const at = step;
+    try { fn(); } catch (e) {
+      try {
+        db.prepare("INSERT INTO system_log (level, source, message, detail) VALUES ('warn', 'migration', ?, ?)")
+          .run(`Migration step ${at} did not apply`, String((e && e.message) || e).slice(0, 500));
+      } catch (_) { /* nothing more we can do */ }
+    }
+  };
 
   // 1. users.photo_path (added in E1)
   safe(() => {
@@ -1546,6 +1576,46 @@ function runMigrations(db) {
     ins.run('cloud_last_pull_at', '');
   });
 
+  // 20. Sync record versions must increase monotonically per entity, forever.
+  //     The cloud stores reject an incoming snapshot whose version is not
+  //     greater than the one they hold (so out-of-order retries can't regress
+  //     the read model). A per-row `version` that restarts at 1 on every new
+  //     outbox row therefore made the cloud silently ignore every later update
+  //     once two changes had ever been collapsed into one un-synced row — the
+  //     parent portal froze on a stale balance while the desktop reported the
+  //     push as accepted. This counter survives outbox pruning.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sync_versions (
+        entity_key TEXT PRIMARY KEY,
+        version    INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    // Seed from any history already in the outbox so upgrading installs keep
+    // counting up from where the cloud left off instead of restarting at 1.
+    db.exec(`
+      INSERT OR IGNORE INTO sync_versions (entity_key, version)
+      SELECT entity_key, MAX(version) FROM sync_outbox
+      WHERE entity_key IS NOT NULL GROUP BY entity_key;
+    `);
+  });
+
+  // 21. Outbox retry scheduling. Without a next-attempt time a permanently
+  //     failing record was retried on every 5-minute tick forever, and an
+  //     un-acceptable ("poison") record at the head of the queue was pushed
+  //     again on every cycle.
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(sync_outbox)").all().map(c => c.name);
+    if (!cols.includes('next_attempt_at')) {
+      db.exec("ALTER TABLE sync_outbox ADD COLUMN next_attempt_at TEXT");
+    }
+    if (!cols.includes('dead')) {
+      db.exec("ALTER TABLE sync_outbox ADD COLUMN dead INTEGER DEFAULT 0");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_outbox_pending ON sync_outbox(synced_at, dead, next_attempt_at)");
+  });
+
   // 17. Automated backup settings.
   safe(() => {
     const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'backup')");
@@ -1561,6 +1631,7 @@ function runMigrations(db) {
 }
 
 function initDatabase(userDataPath, getResourcePath) {
+  const Database = require('better-sqlite3');
   const dbPath = path.join(userDataPath, 'nickland-edusoft.db');
   const isFirstRun = !fs.existsSync(dbPath);
   const db = new Database(dbPath);
@@ -1579,4 +1650,7 @@ function initDatabase(userDataPath, getResourcePath) {
   return db;
 }
 
-module.exports = { initDatabase };
+// SCHEMA and runMigrations are exported so tests can build a database the same
+// way the app does. Hand-rolled test schemas drift from the real one — that is
+// how the sync outbox shipped without its version counter.
+module.exports = { initDatabase, runMigrations, SCHEMA };

@@ -4,6 +4,9 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 
+// Tests opt into the shared development signing secret; production refuses it.
+process.env.ALLOW_DEV_SECRET = '1';
+
 const { createServer } = require('../src/server');
 const { createMemoryStore } = require('../src/store');
 
@@ -16,12 +19,13 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
 function makeDesktopDb() {
   const db = new DatabaseSync(':memory:');
   db.transaction = (fn) => (...a) => { db.exec('BEGIN'); try { const r = fn(...a); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; } };
-  const schema = fs.readFileSync(path.join(ROOT, 'electron/db/database.js'), 'utf8').match(/const SCHEMA = `([\s\S]*?)`;/)[1];
-  db.exec(schema);
-  db.exec("ALTER TABLE students ADD COLUMN father_email TEXT;ALTER TABLE students ADD COLUMN mother_email TEXT;ALTER TABLE students ADD COLUMN guardian_email TEXT;");
-  db.exec(`CREATE TABLE sync_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, entity_type TEXT, entity_key TEXT, op TEXT DEFAULT 'upsert', payload_json TEXT, version INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, synced_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT);`);
-  db.exec(`CREATE TABLE parents (id INTEGER PRIMARY KEY AUTOINCREMENT, full_name TEXT, phone TEXT, email TEXT, password_hash TEXT, is_active INTEGER DEFAULT 1, must_change_password INTEGER DEFAULT 0, last_login TEXT, created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
-  db.exec(`CREATE TABLE parent_students (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER, student_id INTEGER, relationship TEXT, UNIQUE(parent_id, student_id));`);
+  // Build the schema exactly the way the app does — base schema, then the real
+  // migrations — so the tests can never pass against a shape production
+  // doesn't have (parents, parent_students, sync_outbox and sync_versions all
+  // come from the migrations).
+  const { SCHEMA, runMigrations } = require(path.join(ROOT, 'electron/db/database.js'));
+  db.exec(SCHEMA);
+  runMigrations(db);
   db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
   db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (3,1,3,'T3','2026-04-22','2026-07-31',1);");
   db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10);");

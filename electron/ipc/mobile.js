@@ -9,7 +9,8 @@ const os = require('os');
 const { createApiServer } = require('../server/api');
 const tokens = require('../server/tokens');
 const parents = require('../server/parents');
-const { getSetting } = require('../utils/idgen');
+const { getSetting, setSetting } = require('../utils/idgen');
+const logger = require('../utils/logger');
 
 let serverInstance = null;
 let serverPort = null;
@@ -27,27 +28,48 @@ function lanAddresses() {
 }
 
 function startServer(db) {
-  if (serverInstance) return { ok: true, already: true, port: serverPort };
+  if (serverInstance) return Promise.resolve({ ok: true, already: true, port: serverPort });
   const port = parseInt(getSetting(db, 'mobile_server_port', '4747'), 10) || 4747;
   const bind = getSetting(db, 'mobile_server_bind', 'lan') === 'localhost' ? '127.0.0.1' : '0.0.0.0';
   serverError = null;
   try {
     const srv = createApiServer(db);
     return new Promise((resolve) => {
-      srv.once('error', (e) => { serverError = e.message; serverInstance = null; resolve({ ok: false, error: e.message }); });
+      srv.once('error', (e) => {
+        // A half-open server holds the port; close it or the next attempt on
+        // this port fails too, and the operator sees "address in use" forever.
+        try { srv.close(); } catch (_) {}
+        serverError = e.code === 'EADDRINUSE'
+          ? `Port ${port} is already in use. Choose a different port in Settings → Mobile App.`
+          : e.message;
+        serverInstance = null;
+        resolve({ ok: false, error: serverError });
+      });
       srv.listen(port, bind, () => {
         serverInstance = srv; serverPort = port;
         resolve({ ok: true, port, addresses: lanAddresses() });
       });
     });
-  } catch (e) { serverError = e.message; return { ok: false, error: e.message }; }
+  } catch (e) { serverError = e.message; return Promise.resolve({ ok: false, error: e.message }); }
 }
 
+// Resolves only once the listening socket is really closed. Returning before
+// that made a port change fail with EADDRINUSE, because the restart tried to
+// bind while the old socket was still shutting down.
 function stopServer() {
-  if (!serverInstance) return { ok: true, stopped: false };
-  try { serverInstance.close(); } catch (_) {}
+  const srv = serverInstance;
   serverInstance = null; serverPort = null;
-  return { ok: true, stopped: true };
+  if (!srv) return Promise.resolve({ ok: true, stopped: false });
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve({ ok: true, stopped: true }); } };
+    try {
+      srv.close(finish);
+      // close() waits for in-flight connections; don't hang the UI on one.
+      const t = setTimeout(finish, 3000);
+      if (t.unref) t.unref();
+    } catch (_) { finish(); }
+  });
 }
 
 module.exports = function registerMobileHandlers(ipcMain, db) {
@@ -55,7 +77,12 @@ module.exports = function registerMobileHandlers(ipcMain, db) {
 
   // Auto-start on boot if enabled.
   if (getSetting(db, 'mobile_server_enabled', 'false') === 'true') {
-    Promise.resolve(startServer(db)).catch(() => {});
+    startServer(db).then((res) => {
+      if (res.ok) logger.info('mobile', `Mobile API listening on port ${res.port}`);
+      // A silent failure here is why "the mobile app can't connect" was so hard
+      // to diagnose — the toggle still read as ON with nothing listening.
+      else logger.warn('mobile', 'Mobile API failed to start', res.error);
+    }).catch((e) => logger.warn('mobile', 'Mobile API failed to start', (e && e.message) || String(e)));
   }
 
   ipcMain.handle('mobile:status', () => ({
@@ -73,23 +100,39 @@ module.exports = function registerMobileHandlers(ipcMain, db) {
 
   ipcMain.handle('mobile:start', async () => {
     if (!security.checkPermission(db, 'settings', 'edit')) return { ok: false, error: 'Access denied.' };
-    db.prepare("UPDATE settings SET value = 'true' WHERE key = 'mobile_server_enabled'").run();
-    return await startServer(db);
+    const res = await startServer(db);
+    // Only remember "enabled" if it actually came up, so a failed start does
+    // not leave the app trying (and failing) to bind on every launch.
+    setSetting(db, 'mobile_server_enabled', !!res.ok, 'mobile');
+    return res;
   });
 
-  ipcMain.handle('mobile:stop', () => {
+  ipcMain.handle('mobile:stop', async () => {
     if (!security.checkPermission(db, 'settings', 'edit')) return { ok: false, error: 'Access denied.' };
-    db.prepare("UPDATE settings SET value = 'false' WHERE key = 'mobile_server_enabled'").run();
-    return stopServer();
+    setSetting(db, 'mobile_server_enabled', false, 'mobile');
+    return await stopServer();
   });
 
-  ipcMain.handle('mobile:set-config', (_e, { port, bind, selfRegister }) => {
+  ipcMain.handle('mobile:set-config', async (_e, { port, bind, selfRegister }) => {
     if (!security.checkPermission(db, 'settings', 'edit')) return { ok: false, error: 'Access denied.' };
-    if (port) db.prepare("UPDATE settings SET value = ? WHERE key = 'mobile_server_port'").run(String(port));
-    if (bind) db.prepare("UPDATE settings SET value = ? WHERE key = 'mobile_server_bind'").run(bind);
-    if (selfRegister !== undefined) db.prepare("UPDATE settings SET value = ? WHERE key = 'mobile_parent_self_register'").run(selfRegister ? 'true' : 'false');
-    // Restart if running so new port/bind take effect.
-    if (serverInstance) { stopServer(); return startServer(db); }
+    if (port !== undefined) {
+      const p = parseInt(port, 10);
+      if (!Number.isInteger(p) || p < 1024 || p > 65535) {
+        return { ok: false, error: 'Port must be a number between 1024 and 65535.' };
+      }
+      setSetting(db, 'mobile_server_port', p, 'mobile');
+    }
+    if (bind !== undefined) {
+      if (!['lan', 'localhost'].includes(bind)) return { ok: false, error: 'Bind must be "lan" or "localhost".' };
+      setSetting(db, 'mobile_server_bind', bind, 'mobile');
+    }
+    if (selfRegister !== undefined) setSetting(db, 'mobile_parent_self_register', !!selfRegister, 'mobile');
+    // Restart if running so new port/bind take effect. The stop must complete
+    // before the new bind, or the restart fails with the port still in use.
+    if (serverInstance) {
+      await stopServer();
+      return await startServer(db);
+    }
     return { ok: true };
   });
 

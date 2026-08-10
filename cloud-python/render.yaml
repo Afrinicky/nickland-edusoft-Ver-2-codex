@@ -10,6 +10,9 @@ services:
     plan: starter
     autoDeploy: true
     envVars:
+      # Both are mandatory — the service refuses to boot without them.
+      # Do NOT regenerate PORTAL_SECRET on later deploys: it signs parent
+      # session tokens, so changing it signs every parent out.
       - key: PORTAL_SECRET
         generateValue: true          # signs parent session tokens
       - key: DATABASE_URL

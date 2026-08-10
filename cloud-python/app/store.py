@@ -157,5 +157,24 @@ class PgStore:
 
 
 def create_store():
+    """Pick the backing store.
+
+    MemoryStore is for tests and local runs only. Deploying without
+    DATABASE_URL used to fall back to it silently, which fails in two ways that
+    look like random breakage rather than misconfiguration: every school,
+    parent account and receipt disappears on each restart or redeploy, and
+    because the image runs multiple uvicorn workers each worker keeps its own
+    copy — so the same request succeeds or 401s depending on which worker
+    answers it. Refuse to start instead, unless explicitly opted into.
+    """
     dsn = os.environ.get("DATABASE_URL")
-    return PgStore(dsn) if dsn else MemoryStore()
+    if dsn:
+        return PgStore(dsn)
+    if os.environ.get("ALLOW_MEMORY_STORE") == "1":
+        return MemoryStore()
+    raise RuntimeError(
+        "DATABASE_URL is not set. The cloud service needs Postgres/Neon — "
+        "without it nothing is persisted and each worker process would serve "
+        "different data. Set DATABASE_URL (with ?sslmode=require), or set "
+        "ALLOW_MEMORY_STORE=1 for a throwaway local/test run."
+    )

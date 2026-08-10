@@ -13,6 +13,37 @@ function syncEnabled(db) {
   return getSetting(db, 'cloud_sync_enabled', 'false') === 'true';
 }
 
+// Retry policy for records the cloud would not accept. Without this a record
+// that can never succeed was re-sent on every 5-minute tick forever.
+const MAX_ATTEMPTS = 12;                       // then park it as dead
+const BACKOFF_SECONDS = [60, 300, 900, 3600, 10800, 21600];  // 1m → 6h, then 6h
+
+function backoffSeconds(attempts) {
+  return BACKOFF_SECONDS[Math.min(attempts, BACKOFF_SECONDS.length - 1)];
+}
+
+// Allocate the next version for an entity. Versions must increase monotonically
+// FOREVER per entity_key: both cloud stores drop an incoming snapshot whose
+// version is not greater than the stored one, so a version that restarts at 1
+// on each new outbox row silently froze the parent portal on stale data. The
+// counter lives in its own table so pruning synced rows can't reset it.
+function nextVersion(db, entityKey) {
+  if (entityKey == null) return 1;
+  const key = String(entityKey);
+  const row = db.prepare('SELECT version FROM sync_versions WHERE entity_key = ?').get(key);
+  // No counter yet (fresh entity, or an install upgrading mid-flight): start
+  // above anything this entity has already published from the outbox history.
+  const base = row
+    ? row.version
+    : (db.prepare('SELECT COALESCE(MAX(version), 0) v FROM sync_outbox WHERE entity_key = ?').get(key).v || 0);
+  const next = base + 1;
+  db.prepare(`
+    INSERT INTO sync_versions (entity_key, version, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT (entity_key) DO UPDATE SET version = excluded.version, updated_at = CURRENT_TIMESTAMP
+  `).run(key, next);
+  return next;
+}
+
 // Append an outbox record. Collapses an un-synced duplicate of the same
 // (entity_type, entity_key) so repeated balance changes don't pile up — the
 // cloud only wants the latest snapshot.
@@ -21,45 +52,100 @@ function postToOutbox(db, { entity_type, entity_key, op = 'upsert', payload }) {
   try {
     const uuid = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
     const json = payload == null ? null : JSON.stringify(payload);
+    const version = nextVersion(db, entity_key);
     if (entity_key) {
       const existing = db.prepare(
-        'SELECT id, version FROM sync_outbox WHERE entity_type = ? AND entity_key = ? AND synced_at IS NULL ORDER BY id DESC LIMIT 1'
+        'SELECT id FROM sync_outbox WHERE entity_type = ? AND entity_key = ? AND synced_at IS NULL AND dead = 0 ORDER BY id DESC LIMIT 1'
       ).get(entity_type, String(entity_key));
       if (existing) {
-        db.prepare('UPDATE sync_outbox SET payload_json = ?, op = ?, version = version + 1, uuid = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?')
-          .run(json, op, uuid, existing.id);
+        // Replace the queued payload and re-arm it for an immediate attempt.
+        db.prepare(`
+          UPDATE sync_outbox
+             SET payload_json = ?, op = ?, version = ?, uuid = ?,
+                 created_at = CURRENT_TIMESTAMP, attempts = 0, next_attempt_at = NULL
+           WHERE id = ?
+        `).run(json, op, version, uuid, existing.id);
         return existing.id;
       }
     }
     const r = db.prepare(`
-      INSERT INTO sync_outbox (uuid, entity_type, entity_key, op, payload_json)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(uuid, entity_type, entity_key != null ? String(entity_key) : null, op, json);
+      INSERT INTO sync_outbox (uuid, entity_type, entity_key, op, payload_json, version)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(uuid, entity_type, entity_key != null ? String(entity_key) : null, op, json, version);
     return r.lastInsertRowid;
   } catch (_) { return null; }
 }
 
+// Records that are due for a push attempt: never synced, not parked, and past
+// their backoff window.
 function listUnsynced(db, limit = 100) {
-  return db.prepare('SELECT * FROM sync_outbox WHERE synced_at IS NULL ORDER BY id ASC LIMIT ?').all(limit);
+  return db.prepare(`
+    SELECT * FROM sync_outbox
+     WHERE synced_at IS NULL AND COALESCE(dead, 0) = 0
+       AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))
+     ORDER BY id ASC LIMIT ?
+  `).all(limit);
 }
 
 function markSynced(db, ids) {
   if (!ids || !ids.length) return;
-  const stmt = db.prepare("UPDATE sync_outbox SET synced_at = datetime('now'), last_error = NULL WHERE id = ?");
+  const stmt = db.prepare("UPDATE sync_outbox SET synced_at = datetime('now'), last_error = NULL, next_attempt_at = NULL WHERE id = ?");
   const tx = db.transaction(() => { for (const id of ids) stmt.run(id); });
   tx();
 }
 
+// Record a failed attempt and schedule the next one. A record that has failed
+// MAX_ATTEMPTS times is parked (dead = 1) so it stops blocking the queue and
+// stops generating traffic; it stays in the table for inspection.
 function markFailed(db, ids, err) {
   if (!ids || !ids.length) return;
-  const stmt = db.prepare('UPDATE sync_outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?');
-  const tx = db.transaction(() => { for (const id of ids) stmt.run(String(err || 'error').slice(0, 300), id); });
+  const msg = String(err || 'error').slice(0, 300);
+  const stmt = db.prepare(`
+    UPDATE sync_outbox
+       SET attempts = attempts + 1,
+           last_error = ?,
+           next_attempt_at = datetime('now', '+' || ? || ' seconds'),
+           dead = CASE WHEN attempts + 1 >= ? THEN 1 ELSE 0 END
+     WHERE id = ?
+  `);
+  const read = db.prepare('SELECT attempts FROM sync_outbox WHERE id = ?');
+  const tx = db.transaction(() => {
+    for (const id of ids) {
+      const row = read.get(id);
+      stmt.run(msg, backoffSeconds(row ? row.attempts : 0), MAX_ATTEMPTS, id);
+    }
+  });
   tx();
 }
 
+// Un-park every dead record and clear backoff — used by an explicit "Push now"
+// so an operator who has fixed the cause isn't left waiting on a timer.
+function retryAll(db) {
+  try {
+    const r = db.prepare("UPDATE sync_outbox SET dead = 0, attempts = 0, next_attempt_at = NULL WHERE synced_at IS NULL").run();
+    return r.changes;
+  } catch (_) { return 0; }
+}
+
 function pendingCount(db) {
-  try { return db.prepare('SELECT COUNT(*) c FROM sync_outbox WHERE synced_at IS NULL').get().c; }
+  try { return db.prepare('SELECT COUNT(*) c FROM sync_outbox WHERE synced_at IS NULL AND COALESCE(dead, 0) = 0').get().c; }
   catch (_) { return 0; }
+}
+
+function deadCount(db) {
+  try { return db.prepare('SELECT COUNT(*) c FROM sync_outbox WHERE synced_at IS NULL AND dead = 1').get().c; }
+  catch (_) { return 0; }
+}
+
+// Drop successfully-synced rows after a retention window. The outbox otherwise
+// grew without bound for the life of the installation. Version counters live in
+// sync_versions, so pruning cannot regress an entity's version.
+function pruneSynced(db, days = 14) {
+  try {
+    const r = db.prepare("DELETE FROM sync_outbox WHERE synced_at IS NOT NULL AND synced_at < datetime('now', ?)")
+      .run(`-${Math.max(1, days)} days`);
+    return r.changes;
+  } catch (_) { return 0; }
 }
 
 // Build + enqueue the thin snapshot for one student (current balances). This is
@@ -135,4 +221,5 @@ function enqueueStudentSnapshot(db, studentId) {
 
 module.exports = {
   syncEnabled, postToOutbox, listUnsynced, markSynced, markFailed, pendingCount, enqueueStudentSnapshot,
+  nextVersion, retryAll, deadCount, pruneSynced, backoffSeconds, MAX_ATTEMPTS,
 };

@@ -1,6 +1,12 @@
 # Fly.io config — deploy with: fly launch --copy-config --now  (from cloud-python/)
-# Set secrets first:
+#
+# Set the secrets FIRST — the service refuses to boot without them, by design:
 #   fly secrets set PORTAL_SECRET=$(openssl rand -hex 32) DATABASE_URL="postgres://…?sslmode=require"
+#
+# PORTAL_SECRET signs parent session tokens; keep it stable across deploys or
+# every parent is signed out. DATABASE_URL must point at Neon/Postgres — the
+# machines run multiple workers, so in-memory storage would serve inconsistent
+# data as well as losing it on restart.
 app = "nickland-edusoft-cloud"
 primary_region = "jnb"   # Johannesburg — closest to Ghana; change as needed
 
