@@ -16,7 +16,7 @@ export default function Account() {
         <View style={{ marginTop: 8 }}><Muted>Connected to: {host}</Muted></View>
       </Card>
       <Card>
-        <Muted>Update your contact details or documents from the school's parent portal on the web, or ask the school office.</Muted>
+        <Muted>Update your contact details or documents from the school's student portal on the web, or ask the school office.</Muted>
       </Card>
       <Button title="Sign out" variant="danger" onPress={async () => { await signOut(); router.replace('/login'); }} />
     </Screen>

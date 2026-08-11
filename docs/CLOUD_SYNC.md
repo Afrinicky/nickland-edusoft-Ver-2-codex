@@ -143,7 +143,12 @@ every case the rule is the same and already centralised:
 Because receipt + notification hang off the single ledger-post event, no channel
 is a special case.
 
-## Parent portal (web + mobile app)
+## Student portal (web + mobile app)
+
+The portal is named for the **student** — it shows a child's fees, results,
+attendance, receipts and notices. The account holder is the **parent/guardian**
+(login is a phone/email matched against the student's guardian contacts); for the
+Nursery–JHS age range the responsible adult holds the account, not the pupil.
 - Parents sign in (web or the React Native app) and open **their child's
   portal**: performance/report cards, fees & canteen balances, attendance,
   receipts, and announcements.
@@ -206,5 +211,5 @@ loopback, which is what the test suites use. Sync reports this as
 2. **Next:** `uuid` + `sync_outbox` on the desktop; the cloud ingest/pull API on
    Neon; per-school API keys.
 3. **Then:** the multi-tenant website (per-school pages), online payment
-   gateways (mobile money/bank) with webhooks, and the parent web portal —
+   gateways (mobile money/bank) with webhooks, and the student web portal —
    sharing the same API contract the mobile app uses.

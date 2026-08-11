@@ -43,7 +43,7 @@ function AnnouncementsTab() {
   async function save() {
     const res = await window.api.announcements.save(editing);
     if (!res.ok) return showToast(res.error || 'Failed', 'error');
-    showToast('Announcement posted — visible on the parent portal', 'success');
+    showToast('Announcement posted — visible on the student portal', 'success');
     setEditing(null); refresh();
   }
   async function remove(id) {
@@ -57,7 +57,7 @@ function AnnouncementsTab() {
         <div className="section-header">
           <div>
             <div className="section-title">Announcements &amp; notices</div>
-            <div className="text-sm text-muted">Posted to the parent web portal. School-wide or targeted to one student.</div>
+            <div className="text-sm text-muted">Posted to the student web portal. School-wide or targeted to one student.</div>
           </div>
           <button className="btn btn-primary" onClick={() => setEditing({ title: '', body: '', audience: 'all', is_active: 1 })}>+ New notice</button>
         </div>

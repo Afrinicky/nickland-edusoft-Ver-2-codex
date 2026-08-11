@@ -69,7 +69,7 @@ def main():
     c = TestClient(create_app(store))
 
     r = c.get("/")
-    ck("website served at /", r.status_code == 200 and "Parent Portal" in r.text)
+    ck("website served at /", r.status_code == 200 and "Student Portal" in r.text)
 
     r = c.get("/api/v1/portal/schools").json()
     ck("schools list includes tenant", r["ok"] and any(s["school_id"] == sid for s in r["schools"]))
