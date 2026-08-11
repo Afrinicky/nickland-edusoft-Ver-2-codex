@@ -15,10 +15,10 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
 function makeDb() {
   const db = new DatabaseSync(':memory:');
   db.transaction = (fn) => (...a) => { db.exec('BEGIN'); try { const r = fn(...a); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; } };
-  const schema = fs.readFileSync(path.join(ROOT, 'electron/db/database.js'), 'utf8').match(/const SCHEMA = `([\s\S]*?)`;/)[1];
-  db.exec(schema);
-  db.exec(`CREATE TABLE sync_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, entity_type TEXT, entity_key TEXT, op TEXT DEFAULT 'upsert', payload_json TEXT, version INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, synced_at TEXT, attempts INTEGER DEFAULT 0, last_error TEXT);`);
-  db.exec(`CREATE TABLE parents (id INTEGER PRIMARY KEY AUTOINCREMENT, full_name TEXT, phone TEXT, email TEXT, password_hash TEXT, is_active INTEGER DEFAULT 1);`);
+  // Same schema construction as the app: base schema + the real migrations.
+  const { SCHEMA, runMigrations } = require(path.join(ROOT, 'electron/db/database.js'));
+  db.exec(SCHEMA);
+  runMigrations(db);
   db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
   db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (3,1,3,'T3','2026-04-22','2026-07-31',1);");
   db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10);");

@@ -9,7 +9,28 @@ import os
 import re
 import time
 
-SECRET = os.environ.get("PORTAL_SECRET", "dev-portal-secret-change-me").encode()
+DEV_SECRET = "dev-portal-secret-change-me"
+
+# PORTAL_SECRET signs the parent session tokens. Anyone who knows it can mint a
+# token for any parent of any school on the deployment, so falling back to a
+# published constant is a full account-takeover hole rather than a nuisance.
+# Deployments must set it; only an explicit ALLOW_DEV_SECRET=1 (tests and local
+# runs) permits the shared development value.
+def _load_secret() -> bytes:
+    configured = os.environ.get("PORTAL_SECRET")
+    if configured and configured != DEV_SECRET:
+        return configured.encode()
+    if os.environ.get("ALLOW_DEV_SECRET") == "1":
+        return DEV_SECRET.encode()
+    raise RuntimeError(
+        "PORTAL_SECRET is not set (or is still the development value). "
+        "Generate one with `openssl rand -hex 32` and set it on the service — "
+        "parent session tokens are signed with it. "
+        "For local development or tests, set ALLOW_DEV_SECRET=1 instead."
+    )
+
+
+SECRET = _load_secret()
 
 # scrypt cost params matching Node's crypto.scryptSync defaults (N=16384,r=8,p=1).
 _N, _R, _P, _DKLEN = 16384, 8, 1, 64

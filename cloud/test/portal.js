@@ -2,6 +2,10 @@
 // real cloud server (in-memory store) with a projected parent_auth snapshot.
 const http = require('http');
 const crypto = require('crypto');
+
+// Tests opt into the shared development signing secret; production refuses it.
+process.env.ALLOW_DEV_SECRET = '1';
+
 const { createServer } = require('../src/server');
 const { createMemoryStore } = require('../src/store');
 

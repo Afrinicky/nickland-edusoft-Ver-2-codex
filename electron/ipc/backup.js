@@ -15,6 +15,8 @@ const path = require('path');
 const os = require('os');
 const security = require('./_security');
 const engine = require('./backup_engine');
+const { setSetting } = require('../utils/idgen');
+const { safeExtractPath, verifyDatabaseFile } = require('./backup_archive');
 
 const DB_FILE = 'nickland-edusoft.db';
 const BACKUP_DIR_NAME = 'Nickland Edusoft Backups';
@@ -138,7 +140,7 @@ async function runAutomaticBackup(db, userDataPath) {
   if (!res.ok) return res;
   const copies = fanOutAndPrune(db, userDataPath, res.path);
   try {
-    db.prepare("UPDATE settings SET value = ? WHERE key = 'backup_last_auto_at'").run(new Date().toISOString());
+    setSetting(db, 'backup_last_auto_at', new Date().toISOString(), 'backup');
     recordAudit(db, 'backup_auto', `Automatic backup: ${res.fileName}`, 'normal');
   } catch (_) {}
   return { ...res, copies };
@@ -227,12 +229,8 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
       dayOfWeek: 'backup_day_of_week', retention: 'backup_retention',
       folderPath: 'backup_folder_path', cloudPath: 'backup_cloud_path',
     };
-    const up = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
     for (const [k, key] of Object.entries(map)) {
-      if (patch[k] !== undefined) {
-        const val = typeof patch[k] === 'boolean' ? (patch[k] ? 'true' : 'false') : String(patch[k]);
-        up.run(val, key);
-      }
+      if (patch[k] !== undefined) setSetting(db, key, patch[k], 'backup');
     }
     return { ok: true, config: engine.getConfig(db) };
   });
@@ -279,43 +277,82 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
       return { ok: false, error: 'This backup does not contain a database and cannot be restored.' };
     }
 
+    const uploadsPath = path.join(userDataPath, UPLOADS_DIR_NAME);
+    let stagedDbPath = null;
     try {
-      // 2. Safety backup of the CURRENT data before we overwrite anything.
+      // 2. Read the archive and stage its database to a temp file. Everything
+      //    that can fail is done BEFORE the live data is touched.
+      const dbBuffer = dbEntry.asNodeBuffer();
+      stagedDbPath = path.join(os.tmpdir(), `nickland-edusoft-restore-${Date.now()}.db`);
+      fs.writeFileSync(stagedDbPath, dbBuffer);
+
+      // 3. Refuse to restore something that is not a sound database. Without
+      //    this, a corrupt archive replaced good data with an unopenable file.
+      const check = verifyDatabaseFile(stagedDbPath);
+      if (!check.ok) {
+        return { ok: false, error: `This backup cannot be restored — ${check.error}. Your current data has not been changed.` };
+      }
+
+      // 4. Resolve upload entries, rejecting any that would escape the data
+      //    folder, before we delete the existing uploads.
+      const uploadEntries = [];
+      for (const name of Object.keys(zip.files)) {
+        if (zip.files[name].dir) continue;
+        const normalized = name.replace(/\\/g, '/');
+        if (!normalized.startsWith(UPLOADS_DIR_NAME + '/')) continue;
+        const dest = safeExtractPath(userDataPath, normalized);
+        if (!dest || !dest.startsWith(path.resolve(uploadsPath) + path.sep)) {
+          recordAudit(db, 'restore_rejected', `Backup contains an unsafe file path: ${normalized}`, 'high');
+          return { ok: false, error: 'This backup contains an unsafe file path and was rejected. Your current data has not been changed.' };
+        }
+        uploadEntries.push({ dest, buffer: zip.files[name].asNodeBuffer() });
+      }
+
+      // 5. Safety backup of the CURRENT data before we overwrite anything.
       const safety = await createBackup(db, userDataPath, { label: 'safety-before-restore' });
       if (!safety.ok) return { ok: false, error: 'Could not create a safety backup, restore aborted.' };
 
-      // 3. Read everything we need from the archive into memory.
-      const dbBuffer = dbEntry.asNodeBuffer();
-      const uploadEntries = Object.keys(zip.files)
-        .filter((name) => name.startsWith(UPLOADS_DIR_NAME + '/') && !zip.files[name].dir)
-        .map((name) => ({ name, buffer: zip.files[name].asNodeBuffer() }));
+      recordAudit(db, 'restore', `Restoring from ${path.basename(backupPath)}; safety backup: ${safety.fileName}`, 'high');
 
-      // 4. Close the live database so the file can be replaced safely (Windows-safe).
+      // 6. Close the live database so the file can be replaced safely (Windows-safe).
+      //    From here on the app cannot keep running against the old handle, so
+      //    every exit path below has to relaunch.
       try { db.close(); } catch (e) { /* already closed */ }
 
-      // 5. Replace the database file (and clear stale WAL/SHM side files).
-      const dbPath = path.join(userDataPath, DB_FILE);
-      fs.writeFileSync(dbPath, dbBuffer);
-      for (const side of ['-wal', '-shm']) {
-        const sp = dbPath + side;
-        if (fs.existsSync(sp)) { try { fs.unlinkSync(sp); } catch (e) {} }
+      try {
+        // 7. Replace the database file (and clear stale WAL/SHM side files).
+        const dbPath = path.join(userDataPath, DB_FILE);
+        fs.copyFileSync(stagedDbPath, dbPath);
+        for (const side of ['-wal', '-shm']) {
+          const sp = dbPath + side;
+          if (fs.existsSync(sp)) { try { fs.unlinkSync(sp); } catch (e) {} }
+        }
+
+        // 8. Replace the uploads folder with the backed-up files.
+        try { fs.rmSync(uploadsPath, { recursive: true, force: true }); } catch (e) {}
+        ensureDir(uploadsPath);
+        for (const entry of uploadEntries) {
+          ensureDir(path.dirname(entry.dest));
+          fs.writeFileSync(entry.dest, entry.buffer);
+        }
+      } catch (e) {
+        // The database handle is already closed, so the app cannot continue in
+        // this state either way — restart so it reopens against whatever is on
+        // disk, and tell the operator which safety backup to fall back to.
+        scheduleRelaunch(app);
+        return {
+          ok: false, restartRequired: true, safetyBackup: safety.fileName,
+          error: `Restore failed part-way: ${e.message || String(e)}. The app will restart; if data looks wrong, restore ${safety.fileName}.`,
+        };
       }
 
-      // 6. Replace the uploads folder with the backed-up files.
-      const uploadsPath = path.join(userDataPath, UPLOADS_DIR_NAME);
-      try { fs.rmSync(uploadsPath, { recursive: true, force: true }); } catch (e) {}
-      ensureDir(uploadsPath);
-      for (const entry of uploadEntries) {
-        const dest = path.join(userDataPath, entry.name);
-        ensureDir(path.dirname(dest));
-        fs.writeFileSync(dest, entry.buffer);
-      }
-
-      // 7. Relaunch so the app reopens against the restored data.
+      // 9. Relaunch so the app reopens against the restored data.
       scheduleRelaunch(app);
       return { ok: true, restartRequired: true, safetyBackup: safety.fileName };
     } catch (e) {
       return { ok: false, error: 'Restore failed: ' + (e.message || String(e)) };
+    } finally {
+      try { if (stagedDbPath && fs.existsSync(stagedDbPath)) fs.unlinkSync(stagedDbPath); } catch (_) {}
     }
   });
 

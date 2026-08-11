@@ -99,7 +99,10 @@ function provisionParent(db, { full_name, phone, email, password, studentIds = [
     const dup = db.prepare('SELECT id FROM parents WHERE phone = ?').get(np);
     if (dup) return { ok: false, error: 'A parent with this phone already exists.' };
   }
-  const pass = password || Math.random().toString(36).slice(2, 8);
+  // Temp passwords are handed to a parent and unlock their children's fee and
+  // academic records, so they come from the CSPRNG — Math.random() is seeded
+  // predictably enough that concurrently-issued passwords are guessable.
+  const pass = password || crypto.randomBytes(6).toString('base64url').slice(0, 8);
   const r = db.prepare(`
     INSERT INTO parents (full_name, phone, email, password_hash, must_change_password, created_by)
     VALUES (?, ?, ?, ?, ?, ?)

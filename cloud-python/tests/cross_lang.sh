@@ -9,6 +9,7 @@ SID="sch_cross"
 KEY="sk_crosstest_key"
 
 SEED_SCHOOL_ID="$SID" SEED_SCHOOL_KEY="$KEY" SEED_SCHOOL_NAME="Ave Maria" \
+  ALLOW_DEV_SECRET=1 ALLOW_MEMORY_STORE=1 \
   python3 -m uvicorn app.main:app --port "$PORT" --log-level warning &
 UV_PID=$!
 trap 'kill $UV_PID 2>/dev/null' EXIT

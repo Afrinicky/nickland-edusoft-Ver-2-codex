@@ -441,6 +441,8 @@ const api = {
     openFile:          (fp)                  => ipcRenderer.invoke('app:open-file', fp),
     openPdfPreview:    (fp)                  => ipcRenderer.invoke('app:open-pdf-preview', fp),
     printToPdf:        (opts)                => ipcRenderer.invoke('app:print-to-pdf', opts),
+    diagnostics:       ()                    => ipcRenderer.invoke('app:diagnostics'),
+    openLogs:          ()                    => ipcRenderer.invoke('app:open-logs'),
   },
 };
 

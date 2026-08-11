@@ -34,10 +34,14 @@ function recordFeePayment(db, data) {
     : null;
   const billId = data.bill_id || (bill ? bill.id : null);
 
-  const counter = getNextReceiptNumber(db);
-  const receiptNo = `FE/${new Date().getFullYear().toString().slice(-2)}/${String(counter).padStart(5, '0')}`;
-
+  // The receipt counter is consumed INSIDE the transaction. Taken outside, a
+  // payment that failed to record still burned a number, leaving gaps in the
+  // receipt sequence — which is exactly what an audit of a school's books
+  // treats as a missing receipt.
+  let receiptNo;
   const tx = db.transaction(() => {
+    const counter = getNextReceiptNumber(db);
+    receiptNo = `FE/${new Date().getFullYear().toString().slice(-2)}/${String(counter).padStart(5, '0')}`;
     const r = db.prepare(`
       INSERT INTO payments (student_id, student_bill_id, term_id, amount, payment_date,
         payment_method, reference, received_by, notes, receipt_number)
@@ -88,7 +92,7 @@ function createIntent(db, { student_id, parent_id, amount, channel, reference, n
   const amt = Number(amount);
   if (!student_id || !amt || amt <= 0) return { ok: false, error: 'A positive amount is required.' };
   const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
-  const uuid = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const uuid = `${Date.now()}-${crypto.randomBytes(5).toString('hex')}`;
   const r = db.prepare(`
     INSERT INTO payment_intents (uuid, student_id, parent_id, term_id, amount, channel, reference, notes, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')

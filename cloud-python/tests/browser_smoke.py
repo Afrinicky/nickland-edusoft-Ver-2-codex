@@ -20,6 +20,10 @@ def find_chromium():
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Tests opt into the shared development signing secret; production refuses it.
+os.environ.setdefault("ALLOW_DEV_SECRET", "1")
+os.environ.setdefault("ALLOW_MEMORY_STORE", "1")
+
 import uvicorn
 from playwright.sync_api import sync_playwright
 from app.main import create_app

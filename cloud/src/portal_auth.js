@@ -4,7 +4,24 @@
 // token (HMAC — no external JWT dependency).
 const crypto = require('crypto');
 
-const SECRET = process.env.PORTAL_SECRET || 'dev-portal-secret-change-me';
+const DEV_SECRET = 'dev-portal-secret-change-me';
+
+// PORTAL_SECRET signs parent session tokens. Anyone who knows it can mint a
+// token for any parent of any school on the deployment, so falling back to a
+// published constant is full account takeover, not a nuisance. Deployments must
+// set it; ALLOW_DEV_SECRET=1 opts local runs and tests into the shared value.
+function loadSecret() {
+  const configured = process.env.PORTAL_SECRET;
+  if (configured && configured !== DEV_SECRET) return configured;
+  if (process.env.ALLOW_DEV_SECRET === '1') return DEV_SECRET;
+  throw new Error(
+    'PORTAL_SECRET is not set (or is still the development value). Generate one ' +
+    'with `openssl rand -hex 32` and set it on the service — parent session ' +
+    'tokens are signed with it. For local development or tests, set ALLOW_DEV_SECRET=1.'
+  );
+}
+
+const SECRET = loadSecret();
 
 function verifyPassword(password, stored) {
   if (!stored || !String(stored).startsWith('scrypt$')) return false;

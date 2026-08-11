@@ -154,6 +154,52 @@ is a special case.
   reminders) and parent → school (messages), surfaced in the portal and mirrored
   to notification channels.
 
+## Sync mechanics (how the outbox actually behaves)
+
+These are contracts, not implementation details — breaking one of them causes
+silent data staleness rather than a visible error.
+
+### Snapshot versions must increase forever, per entity
+Both cloud stores drop an incoming snapshot whose `version` is **not greater**
+than the one they already hold, so that a delayed retry can never regress the
+read model. That means the desktop must never reuse or reset a version.
+
+Versions therefore come from `sync_versions`, a per-`entity_key` counter that is
+independent of the outbox rows themselves — so pruning synced rows cannot reset
+it. `outbox.postToOutbox()` allocates the next value on every enqueue, including
+when it collapses an un-synced duplicate.
+
+> This is the shape of a bug that was live: `version` defaulted to `1` on each
+> new outbox row and was only incremented when two edits collapsed into one
+> un-synced row. After any collapse the cloud held version 2 while every later
+> push arrived as version 1 and was silently discarded. The parent portal froze
+> on a stale balance indefinitely, and the desktop reported each push as
+> **accepted**. Covered by `test/regressions.js`.
+
+### Failed records back off, then park
+A push failure records the attempt and sets `next_attempt_at` on an increasing
+backoff (1m → 5m → 15m → 1h → 3h → 6h, capped). After `MAX_ATTEMPTS` the record
+is marked `dead = 1`: it stops being handed out, stops generating traffic, and
+stops holding up the queue, but stays in the table for inspection. Records the
+cloud accepts-with-omission (present in the batch, missing from `accepted`) are
+treated as failures rather than being retried unconditionally every tick.
+
+Settings → Cloud shows the parked count as **stuck**; **Push now** clears all
+backoff and un-parks everything, which is the operator's retry after fixing a
+cause. A newer edit for the same entity also re-arms its queued row.
+
+### Retention
+Synced outbox rows are pruned after 14 days (`cloud_outbox_retention_days`),
+after each successful push and again in the daily maintenance sweep. Expired and
+long-revoked mobile API tokens, and the `system_log` mirror, are trimmed in the
+same sweep.
+
+### Transport
+The cloud base URL must be `https://` — the school API key and the projected
+parent password hashes travel over it. Plain `http://` is refused except for
+loopback, which is what the test suites use. Sync reports this as
+`blocked: "insecure_url"` rather than failing per-request.
+
 ## Phasing
 1. **Done:** local host API + parent identity + role scoping (LAN); Resend/Arkesel
    transport; centralised receipts on payment acknowledgment.

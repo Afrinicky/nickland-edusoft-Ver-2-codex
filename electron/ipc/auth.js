@@ -4,6 +4,43 @@
 
 const bcrypt = require('bcryptjs');
 const security = require('./_security');
+const { setSetting } = require('../utils/idgen');
+
+// ── Failed-login throttling ─────────────────────────────
+// Per-username, in memory: five wrong passwords buys a 60-second lockout that
+// keeps extending while the guessing continues. Cleared on a successful login
+// and on app restart, which is the right trade-off for a single-machine app.
+const MAX_LOGIN_FAILURES = 5;
+const LOCKOUT_MS = 60 * 1000;
+const loginFailures = new Map();
+
+function loginLock(username) {
+  const rec = loginFailures.get(username);
+  if (!rec || rec.count < MAX_LOGIN_FAILURES) return { locked: false };
+  const remaining = rec.until - Date.now();
+  if (remaining <= 0) { loginFailures.delete(username); return { locked: false }; }
+  return { locked: true, seconds: Math.ceil(remaining / 1000) };
+}
+
+function recordLoginFailure(db, username, reason) {
+  const rec = loginFailures.get(username) || { count: 0, until: 0 };
+  rec.count++;
+  rec.until = Date.now() + LOCKOUT_MS;
+  loginFailures.set(username, rec);
+  // Keep the map from growing without bound on a long-running install.
+  if (loginFailures.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of loginFailures) if (v.until < now) loginFailures.delete(k);
+  }
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+      VALUES ('security', NULL, 'login_failed', NULL, ?, ?)
+    `).run(`Failed sign-in for "${username}" (${reason})`, rec.count >= MAX_LOGIN_FAILURES ? 'high' : 'normal');
+  } catch (_) { /* audit is best-effort */ }
+}
+
+function clearLoginFailures(username) { loginFailures.delete(username); }
 
 module.exports = function registerAuthHandlers(ipcMain, db) {
 
@@ -14,7 +51,21 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   });
 
   // ── Create first admin account (bootstrap) ────────────
+  // Runs exactly once, on a brand-new database. It creates an Administrator
+  // without asking for any credentials, so it must refuse to run again once
+  // setup is complete — otherwise anyone able to reach this channel could mint
+  // themselves a full-access account on a live school database.
   ipcMain.handle('auth:bootstrap', (_e, { fullName, username, password }) => {
+    const done = db.prepare("SELECT value FROM settings WHERE key = 'bootstrap_done'").get();
+    const anyUser = db.prepare('SELECT COUNT(*) c FROM users').get().c;
+    if ((done && done.value === 'true') || anyUser > 0) {
+      return { ok: false, error: 'Setup has already been completed. Sign in, then use Settings → Users & Access to add accounts.' };
+    }
+    if (!username || !String(username).trim()) return { ok: false, error: 'Username is required.' };
+    if (!password || String(password).length < 6) {
+      return { ok: false, error: 'Password must be at least 6 characters.' };
+    }
+
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existing) return { ok: false, error: 'Username already exists.' };
 
@@ -25,12 +76,21 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       VALUES (?, ?, ?, ?, 1, 0)
     `).run(username, hash, fullName, adminDesig ? adminDesig.id : null);
 
-    db.prepare("UPDATE settings SET value = 'true' WHERE key = 'bootstrap_done'").run();
+    setSetting(db, 'bootstrap_done', true, 'system');
     return { ok: true };
   });
 
   // ── Login ─────────────────────────────────────────────
   ipcMain.handle('auth:login', (_e, { username, password }) => {
+    // Office machines are shared. Without a throttle, anyone left alone with a
+    // logged-out app could guess another member of staff's password at full
+    // speed, which is how a teacher account becomes a Proprietor account.
+    const uname = String(username || '');
+    const lock = loginLock(uname);
+    if (lock.locked) {
+      return { ok: false, error: `Too many failed attempts. Try again in ${lock.seconds}s.` };
+    }
+
     const user = db.prepare(`
       SELECT u.*, d.name AS designation_name
       FROM users u
@@ -38,11 +98,12 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       WHERE u.username = ? AND u.is_active = 1
     `).get(username);
 
-    if (!user) return { ok: false, error: 'Invalid username or password.' };
+    if (!user) { recordLoginFailure(db, uname, 'unknown_user'); return { ok: false, error: 'Invalid username or password.' }; }
     if (!user.password_hash) return { ok: false, error: 'Account not set up. Contact administrator.' };
 
-    const match = bcrypt.compareSync(password, user.password_hash);
-    if (!match) return { ok: false, error: 'Invalid username or password.' };
+    const match = bcrypt.compareSync(String(password || ''), user.password_hash);
+    if (!match) { recordLoginFailure(db, uname, 'bad_password'); return { ok: false, error: 'Invalid username or password.' }; }
+    clearLoginFailures(uname);
 
     // Build effective permissions: designation defaults + overrides
     const desigPerms = user.designation_id
@@ -114,6 +175,10 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
     }
 
+    if (!username || !String(username).trim()) return { ok: false, error: 'Username is required.' };
+    if (!password || String(password).length < 6) {
+      return { ok: false, error: 'Password must be at least 6 characters.' };
+    }
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existing) return { ok: false, error: 'Username already taken.' };
     const hash = bcrypt.hashSync(password, 10);
@@ -131,6 +196,9 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     }
 
     if (newPassword) {
+      if (String(newPassword).length < 6) {
+        return { ok: false, error: 'Password must be at least 6 characters.' };
+      }
       const hash = bcrypt.hashSync(newPassword, 10);
       db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, id);
     }
@@ -141,12 +209,18 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 
   // ── Admin/Proprietor reset of another user's password ──
   // Sets a new password and forces the user to change it at next login.
-  ipcMain.handle('auth:reset-password', (_e, { actorUserId, targetUserId, newPassword }) => {
+  ipcMain.handle('auth:reset-password', (_e, { targetUserId, newPassword }) => {
+    // The actor is taken from the signed-in session, never from the caller.
+    // Reading it from the payload let any signed-in user claim to be the
+    // Administrator and reset the Administrator's own password.
+    const actorUserId = security.getCurrentUserId();
+    if (!actorUserId) return { ok: false, error: 'Please sign in again.' };
+
     // Only Admin or Proprietor designations may reset others' passwords
     const actor = db.prepare(`
       SELECT u.id, d.name AS designation
       FROM users u LEFT JOIN designations d ON d.id = u.designation_id
-      WHERE u.id = ?
+      WHERE u.id = ? AND u.is_active = 1
     `).get(actorUserId);
     const allowed = actor && ['Administrator', 'Proprietor'].includes(actor.designation);
     if (!allowed) {
@@ -214,10 +288,23 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   });
 
   // ── Change password ───────────────────────────────────
-  ipcMain.handle('auth:change-password', (_e, { userId, oldPassword, newPassword }) => {
+  // Change your OWN password. The account is taken from the session rather than
+  // the payload: accepting a caller-supplied userId meant a signed-in user
+  // could target somebody else's account, and any account whose password_hash
+  // was still NULL could be taken over outright because the old-password check
+  // was skipped for it. Administrators reset other people via auth:reset-password.
+  ipcMain.handle('auth:change-password', (_e, { oldPassword, newPassword }) => {
+    const userId = security.getCurrentUserId();
+    if (!userId) return { ok: false, error: 'Please sign in again.' };
+    if (!newPassword || String(newPassword).length < 6) {
+      return { ok: false, error: 'New password must be at least 6 characters.' };
+    }
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     if (!user) return { ok: false, error: 'User not found.' };
-    if (user.password_hash && !bcrypt.compareSync(oldPassword, user.password_hash)) {
+    if (!user.password_hash) {
+      return { ok: false, error: 'This account has no password set. Ask an Administrator to reset it.' };
+    }
+    if (!bcrypt.compareSync(String(oldPassword || ''), user.password_hash)) {
       return { ok: false, error: 'Current password is incorrect.' };
     }
     const hash = bcrypt.hashSync(newPassword, 10);
