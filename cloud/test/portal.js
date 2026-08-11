@@ -52,7 +52,7 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
 
   // Site is served
   let r = await new Promise(res => http.get(base + '/', x => { let d=''; x.on('data',c=>d+=c); x.on('end',()=>res({status:x.statusCode,body:d})); }));
-  ck('website served at /', r.status === 200 && /Parent Portal/.test(r.body));
+  ck('website served at /', r.status === 200 && /Student Portal/.test(r.body));
 
   r = await req(base, 'GET', '/api/v1/portal/schools');
   ck('schools list includes tenant', r.json.ok && r.json.schools.some(s => s.school_id === school_id));

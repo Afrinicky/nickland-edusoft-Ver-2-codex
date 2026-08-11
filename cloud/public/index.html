@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nickland Edusoft — Parent Portal</title>
+<title>Nickland Edusoft — Student Portal</title>
 <style>
   :root { --navy:#1B3A6B; --navy2:#122a4f; --gold:#C9961A; --bg:#F4F6FA; --card:#fff; --muted:#64748B; --ok:#15803D; --bad:#B91C1C; --line:#E7EBF1; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -111,8 +111,8 @@ async function renderLogin() {
   app().innerHTML = `
     <div class="card center">
       <div class="logo">🎓</div>
-      <h1>Parent Portal</h1>
-      <div class="muted">Your child's fees, canteen &amp; receipts — anywhere.</div>
+      <h1>Student Portal</h1>
+      <div class="muted">Your child's fees, results, attendance &amp; receipts — anywhere.</div>
     </div>
     <div class="card">
       <label>School</label>
@@ -155,9 +155,9 @@ async function renderHome() {
     <div class="card">
       <h3>Total outstanding</h3>
       <div class="big ${totalDue>0?'bad':'ok'}">${money(totalDue)}</div>
-      <div class="muted">${kids.length} child${kids.length===1?'':'ren'}</div>
+      <div class="muted">${kids.length} student${kids.length===1?'':'s'}</div>
     </div>
-    ${kids.length ? kids.map(kidCard).join('') : '<div class="card muted">No children linked yet. Ask the school to link your child.</div>'}
+    ${kids.length ? kids.map(kidCard).join('') : '<div class="card muted">No students linked yet. Ask the school to link a student to your account.</div>'}
     <button class="ghost" onclick="go('account')">⚙️ Account &amp; details</button>`;
 }
 function kidCard(c) {

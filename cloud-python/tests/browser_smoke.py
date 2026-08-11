@@ -72,7 +72,7 @@ def main():
             page.goto(base)
 
             page.wait_for_selector("#school")
-            ck("login screen renders", "Parent Portal" in page.content())
+            ck("login screen renders", "Student Portal" in page.content())
             page.select_option("#school", sid)
             page.fill("#ident", "0244123456")
             page.fill("#pw", "pass12")
