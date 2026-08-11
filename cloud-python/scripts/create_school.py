@@ -1,6 +1,10 @@
 """Provision a tenant (school) and print its API key.
-  python scripts/create_school.py "Ave Maria School"            (memory — dev)
-  DATABASE_URL=… python scripts/create_school.py "Ave Maria School"
+
+  DATABASE_URL="postgres://…?sslmode=require" python scripts/create_school.py "Ave Maria School"
+
+DATABASE_URL is required: a school provisioned into the in-memory store would
+print an api_key that stops existing the moment this process ends. Set
+ALLOW_MEMORY_STORE=1 as well if you really do want a throwaway dev run.
 """
 import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))

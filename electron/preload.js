@@ -188,6 +188,7 @@ const api = {
     pushNow:           ()                    => ipcRenderer.invoke('cloud:push-now'),
     pullNow:           ()                    => ipcRenderer.invoke('cloud:pull-now'),
     test:              ()                    => ipcRenderer.invoke('cloud:test'),
+    backfill:          ()                    => ipcRenderer.invoke('cloud:backfill'),
   },
 
   // ── Mobile payment intents (accounts office review) ──

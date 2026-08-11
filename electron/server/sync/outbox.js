@@ -219,7 +219,74 @@ function enqueueStudentSnapshot(db, studentId) {
   } catch (_) { return null; }
 }
 
+// Enqueue everything the portal needs to serve a school that already has data.
+//
+// Every other enqueue in the app is event-driven: a payment, a score entry, an
+// attendance mark. That means switching cloud sync on for an existing school
+// projected NOTHING — "Push now" reported 0 records, the school's portal page
+// stayed empty, and parents could not sign in at all, because their auth record
+// is only projected when the parent is created or edited. A school would only
+// trickle into the portal as individual records happened to change.
+//
+// Safe to run repeatedly: each entity collapses onto its queued row, and the
+// version counter keeps moving forward.
+function backfillAll(db, { receiptLimit = 200 } = {}) {
+  const counts = { students: 0, parents: 0, announcements: 0, receipts: 0 };
+  if (!syncEnabled(db)) return { ok: false, error: 'Cloud sync is switched off.' };
+
+  const { enqueueParentAuth } = require('../parents');
+
+  try {
+    const students = db.prepare("SELECT id FROM students WHERE status = 'Active'").all();
+    for (const s of students) { if (enqueueStudentSnapshot(db, s.id)) counts.students++; }
+  } catch (_) {}
+
+  try {
+    const rows = db.prepare('SELECT id FROM parents').all();
+    for (const p of rows) { if (enqueueParentAuth(db, p.id)) counts.parents++; }
+  } catch (_) {}
+
+  try {
+    const rows = db.prepare('SELECT id, title, body, audience, target_student_id, created_at, is_active FROM announcements WHERE is_active = 1').all();
+    for (const a of rows) {
+      const posted = postToOutbox(db, {
+        entity_type: 'announcement',
+        entity_key: `announcement:${a.id}`,
+        payload: {
+          id: a.id, title: a.title, body: a.body, audience: a.audience,
+          student_id: a.target_student_id || null, student_name: null,
+          created_at: a.created_at, is_active: a.is_active,
+        },
+      });
+      if (posted) counts.announcements++;
+    }
+  } catch (_) {}
+
+  // Recent receipts only — the cloud is a thin read model, not an archive.
+  try {
+    const rows = db.prepare(`
+      SELECT receipt_number, student_id, amount, payment_method, payment_date
+      FROM payments
+      WHERE is_reversed = 0 AND receipt_number IS NOT NULL
+      ORDER BY id DESC LIMIT ?
+    `).all(receiptLimit);
+    for (const r of rows) {
+      const posted = postToOutbox(db, {
+        entity_type: 'receipt',
+        entity_key: `receipt:${r.receipt_number}`,
+        payload: {
+          receipt_number: r.receipt_number, student_id: r.student_id, amount: r.amount,
+          category: 'fees', payment_method: r.payment_method, date: r.payment_date,
+        },
+      });
+      if (posted) counts.receipts++;
+    }
+  } catch (_) {}
+
+  return { ok: true, counts, total: Object.values(counts).reduce((a, b) => a + b, 0) };
+}
+
 module.exports = {
   syncEnabled, postToOutbox, listUnsynced, markSynced, markFailed, pendingCount, enqueueStudentSnapshot,
-  nextVersion, retryAll, deadCount, pruneSynced, backoffSeconds, MAX_ATTEMPTS,
+  nextVersion, retryAll, deadCount, pruneSynced, backoffSeconds, MAX_ATTEMPTS, backfillAll,
 };

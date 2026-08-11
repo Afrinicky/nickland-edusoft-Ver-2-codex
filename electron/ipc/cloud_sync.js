@@ -59,8 +59,31 @@ module.exports = function registerCloudSyncHandlers(ipcMain, db) {
       setSetting(db, 'cloud_sync_enabled', false, 'cloud');
       return { ok: false, error: 'The cloud address must start with https://. Sync has been switched off.' };
     }
-    if (getSetting(db, 'cloud_sync_enabled', 'false') === 'true') startScheduler(db);
-    return { ok: true };
+
+    let backfilled = null;
+    if (getSetting(db, 'cloud_sync_enabled', 'false') === 'true') {
+      startScheduler(db);
+      // First time this school is connected, seed the portal with the data it
+      // already has. Otherwise the school's page stays empty until individual
+      // records happen to change, and no parent can sign in.
+      if (!getSetting(db, 'cloud_backfilled_at', '')) {
+        const r = outbox.backfillAll(db);
+        if (r.ok) {
+          setSetting(db, 'cloud_backfilled_at', new Date().toISOString(), 'cloud');
+          backfilled = r.counts;
+        }
+      }
+    }
+    return { ok: true, backfilled };
+  });
+
+  // Re-project everything on demand — after importing a class list, or if the
+  // portal ever looks out of step with the desktop.
+  ipcMain.handle('cloud:backfill', () => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return { ok: false, error: 'Access denied.' };
+    const r = outbox.backfillAll(db);
+    if (r.ok) setSetting(db, 'cloud_backfilled_at', new Date().toISOString(), 'cloud');
+    return r;
   });
 
   ipcMain.handle('cloud:push-now', async () => {
