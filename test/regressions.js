@@ -116,6 +116,61 @@ console.log('\n── Cloud sync: snapshot versions ──');
   ck('separate entities version independently', outbox.listUnsynced(db, 10).find(r => r.entity_key === 'student:2').version === 1);
 }
 
+console.log('\n── Cloud sync: backfill when a school is first connected ──');
+{
+  // A school that has been running offline, switching sync on for the
+  // first time. Every enqueue in the app is event-driven, so without an
+  // explicit backfill the portal page stays empty and no parent can log in.
+  const db = makeDb();
+  setSetting(db, 'cloud_sync_enabled', false, 'cloud');   // sync off while data is entered
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,is_current) VALUES (3,1,3,'T3',1)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10)");
+  for (let i = 1; i <= 5; i++) {
+    db.prepare("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status,guardian_contact) VALUES (?,?,?,?,1,'Active',?)")
+      .run(i, 'SURNAME' + i, 'First' + i, `AVE/17/0000${i}`, `024400000${i}`);
+    db.prepare('INSERT INTO student_bills (student_id,term_id,total_billed,total_paid,balance) VALUES (?,3,400,100,300)').run(i);
+  }
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (99,'GONE','Away','AVE/17/00099',1,'Inactive')");
+  db.prepare('INSERT INTO parents (id,full_name,phone,password_hash,is_active) VALUES (1,?,?,?,1)').run('Papa', '233244000001', 'scrypt$x$y');
+  db.prepare('INSERT INTO parent_students (parent_id,student_id,relationship) VALUES (1,1,?)').run('Father');
+  db.exec("INSERT INTO announcements (id,title,body,audience,is_active) VALUES (1,'Reopening','Term begins Jan 9','all',1)");
+  db.exec("INSERT INTO announcements (id,title,body,audience,is_active) VALUES (2,'Old notice','Archived','all',0)");
+  db.prepare("INSERT INTO payments (student_id,term_id,amount,payment_date,payment_method,receipt_number,is_reversed) VALUES (1,3,100,'2026-01-10','Cash','FE/26/00001',0)").run();
+
+  ck('nothing is queued while sync is off', outbox.pendingCount(db) === 0);
+
+  setSetting(db, 'cloud_sync_enabled', true, 'cloud');
+  ck('turning sync on alone still queues nothing', outbox.pendingCount(db) === 0);
+
+  const r = outbox.backfillAll(db);
+  ck('backfill reports success', r.ok === true);
+  ck('every active student is queued', r.counts.students === 5);
+  ck('inactive students are left out', r.counts.students === 5 && outbox.listUnsynced(db, 100).every(x => x.entity_key !== 'student:99'));
+  ck('parent auth is projected so parents can sign in', r.counts.parents === 1);
+  ck('active notices are queued', r.counts.announcements === 1);
+  ck('inactive notices are left out', r.counts.announcements === 1);
+  ck('recent receipts are queued', r.counts.receipts === 1);
+
+  const queued = outbox.listUnsynced(db, 100);
+  ck('all of it is pending for the next push', queued.length === r.total);
+  ck('parent auth carries the child links',
+    JSON.parse(queued.find(x => x.entity_key === 'parent:1').payload_json).student_keys.join() === 'student:1');
+
+  // Running it twice must not duplicate rows — each entity collapses.
+  const before = outbox.pendingCount(db);
+  outbox.backfillAll(db);
+  ck('re-running does not duplicate queued rows', outbox.pendingCount(db) === before);
+
+  // And versions still move forward, so the second run is not rejected as stale.
+  const v1 = queued.find(x => x.entity_key === 'student:1').version;
+  const v2 = outbox.listUnsynced(db, 100).find(x => x.entity_key === 'student:1').version;
+  ck('re-running advances the version', v2 > v1);
+
+  ck('backfill refuses when sync is off',
+    (setSetting(db, 'cloud_sync_enabled', false, 'cloud'), outbox.backfillAll(db).ok === false));
+}
+
 console.log('\n── Cloud sync: retry behaviour ──');
 {
   const db = makeDb();
