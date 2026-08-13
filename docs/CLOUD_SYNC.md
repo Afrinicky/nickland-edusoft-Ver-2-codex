@@ -96,10 +96,18 @@ POST /api/v1/sync/push                        → { ok, accepted:[uuid…] }
 GET  /api/v1/sync/pull?since=<cursor>         → { ok, cursor, changes:[{ type, payload }] }
      returns cloud-origin changes (parent_update, student_contact_update, …).
 ```
-`entity_type` values today: `student_snapshot` (balances read model),
-`receipt`. Pull `type` values handled: `parent_update`,
-`student_contact_update` (both field-whitelisted). Unknown types are ignored,
-so the contract is forward-compatible.
+`entity_type` values today: `student_snapshot`, `receipt`, `announcement`,
+`message_thread`, and `parent_auth`. The `student_snapshot` read model is **not
+just balances** — its payload carries fees, canteen, the current-term
+**attendance summary** (present/absent/total), the current-term **academic
+report** (per-subject totals + grade, average, class rank, number on roll,
+teacher's remarks), the child's **class timetable** (bell schedule + weekly
+grid), and **upcoming homework**, so the web/mobile portal can show a child's
+results, attendance, timetable and homework while the desktop is offline.
+`message_thread` snapshots carry parent↔school conversations so parents can read
+them off-LAN. Pull `type` values handled: `parent_update`,
+`student_contact_update` (both field-whitelisted). Unknown types are ignored, so
+the contract is forward-compatible.
 
 ### Cloud service — IMPLEMENTED (`cloud/`)
 A runnable multi-tenant service implements the contract above: Node `http`, a

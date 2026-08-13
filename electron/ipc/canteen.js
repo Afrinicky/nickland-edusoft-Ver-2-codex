@@ -116,65 +116,7 @@ function registerCanteenHandlers(ipcMain, db) {
     };
   });
 
-  ipcMain.handle('canteen:record-payment', (_e, data) => {
-    const dailyRate = parseFloat(data.daily_rate ||
-      getSetting(db, 'canteen_daily_rate', '5'));
-    const amount = parseFloat(data.amount);
-    const days = Math.floor(amount / dailyRate);
-
-    // Find next unpaid school day from payment_date forward
-    const startFrom = data.payment_date;
-    const unpaidDays = db.prepare(`
-      SELECT sc.date FROM school_calendar sc
-      LEFT JOIN canteen_day_status cds ON cds.date = sc.date AND cds.student_id = ?
-      WHERE sc.date >= ? AND sc.day_type = 'school_day'
-        AND (cds.status IS NULL OR cds.status = 'unpaid')
-      ORDER BY sc.date
-      LIMIT ?
-    `).all(data.student_id, startFrom, days);
-
-    const tx = db.transaction(() => {
-      const startDate = unpaidDays.length > 0 ? unpaidDays[0].date : startFrom;
-      const endDate = unpaidDays.length > 0 ? unpaidDays[unpaidDays.length - 1].date : startFrom;
-      const paymentResult = db.prepare(`
-        INSERT INTO canteen_payments (student_id, term_id, payment_date, amount,
-          daily_rate, days_covered, start_date, end_date, received_by, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        data.student_id, data.term_id, data.payment_date, amount,
-        dailyRate, days, startDate, endDate,
-        data.received_by || '', data.notes || ''
-      );
-      const paymentId = paymentResult.lastInsertRowid;
-      const insStatus = db.prepare(`
-        INSERT OR REPLACE INTO canteen_day_status (student_id, date, status, payment_id)
-        VALUES (?, ?, 'paid', ?)
-      `);
-      for (const d of unpaidDays) insStatus.run(data.student_id, d.date, paymentId);
-      // Add to income ledger via the central helper — previously this INSERT
-      // omitted transaction_date (a NOT NULL column) which rolled the whole
-      // payment back, so canteen collections never reached Finance.
-      postIncome(db, {
-        category: 'canteen',
-        amount,
-        description: `Canteen payment - ${days} days @ GHS ${dailyRate.toFixed(2)}`,
-        payment_method: data.payment_method || 'Cash',
-        date: data.payment_date,
-        source: 'canteen_payment',
-        student_id: data.student_id,
-        term_id: data.term_id || null,
-        linked_canteen_payment_id: paymentId,
-        recorded_by: data.received_by || null,
-        is_auto: 1,
-      });
-      return paymentId;
-    });
-    const id = tx();
-    let receiptRow = null;
-    try { receiptRow = autoReceiptForPayment(db, 'canteen', id); } catch (_) {}
-    try { autoDeliverReceipt(db, 'canteen', id); } catch (_) {}
-    return { ok: true, id, days_covered: days, receipt_id: receiptRow?.id || null };
-  });
+  ipcMain.handle('canteen:record-payment', (_e, data) => recordCanteenPayment(db, data));
 
   ipcMain.handle('canteen:debtors-report', (_e, termId) => {
     const dailyRate = parseFloat(getSetting(db, 'canteen_daily_rate', '5'));
@@ -199,4 +141,75 @@ function registerCanteenHandlers(ipcMain, db) {
   });
 }
 
+// Core canteen-collection logic, shared by the desktop IPC handler and the
+// mobile API (electron/server/api.js). Computes the number of school days the
+// amount covers, marks the next unpaid days as paid, posts to the income
+// ledger, and generates + delivers a receipt. `term_id` and `payment_date`
+// default to the current term and today so mobile callers can omit them.
+function recordCanteenPayment(db, data) {
+  const dailyRate = parseFloat(data.daily_rate ||
+    getSetting(db, 'canteen_daily_rate', '5'));
+  const amount = parseFloat(data.amount);
+  if (!(amount > 0)) return { ok: false, error: 'A positive amount is required.' };
+  const days = Math.floor(amount / dailyRate);
+  const paymentDate = data.payment_date || new Date().toISOString().slice(0, 10);
+  const termId = data.term_id != null
+    ? data.term_id
+    : (db.prepare('SELECT id FROM terms WHERE is_current = 1').get()?.id || null);
+
+  // Find next unpaid school day from payment_date forward
+  const startFrom = paymentDate;
+  const unpaidDays = db.prepare(`
+    SELECT sc.date FROM school_calendar sc
+    LEFT JOIN canteen_day_status cds ON cds.date = sc.date AND cds.student_id = ?
+    WHERE sc.date >= ? AND sc.day_type = 'school_day'
+      AND (cds.status IS NULL OR cds.status = 'unpaid')
+    ORDER BY sc.date
+    LIMIT ?
+  `).all(data.student_id, startFrom, days);
+
+  const tx = db.transaction(() => {
+    const startDate = unpaidDays.length > 0 ? unpaidDays[0].date : startFrom;
+    const endDate = unpaidDays.length > 0 ? unpaidDays[unpaidDays.length - 1].date : startFrom;
+    const paymentResult = db.prepare(`
+      INSERT INTO canteen_payments (student_id, term_id, payment_date, amount,
+        daily_rate, days_covered, start_date, end_date, received_by, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.student_id, termId, paymentDate, amount,
+      dailyRate, days, startDate, endDate,
+      data.received_by || '', data.notes || ''
+    );
+    const paymentId = paymentResult.lastInsertRowid;
+    const insStatus = db.prepare(`
+      INSERT OR REPLACE INTO canteen_day_status (student_id, date, status, payment_id)
+      VALUES (?, ?, 'paid', ?)
+    `);
+    for (const d of unpaidDays) insStatus.run(data.student_id, d.date, paymentId);
+    // Add to income ledger via the central helper — previously this INSERT
+    // omitted transaction_date (a NOT NULL column) which rolled the whole
+    // payment back, so canteen collections never reached Finance.
+    postIncome(db, {
+      category: 'canteen',
+      amount,
+      description: `Canteen payment - ${days} days @ GHS ${dailyRate.toFixed(2)}`,
+      payment_method: data.payment_method || 'Cash',
+      date: paymentDate,
+      source: 'canteen_payment',
+      student_id: data.student_id,
+      term_id: termId,
+      linked_canteen_payment_id: paymentId,
+      recorded_by: data.received_by || null,
+      is_auto: 1,
+    });
+    return paymentId;
+  });
+  const id = tx();
+  let receiptRow = null;
+  try { receiptRow = autoReceiptForPayment(db, 'canteen', id); } catch (_) {}
+  try { autoDeliverReceipt(db, 'canteen', id); } catch (_) {}
+  return { ok: true, id, days_covered: days, receipt_id: receiptRow?.id || null };
+}
+
 module.exports = registerCanteenHandlers;
+module.exports.recordCanteenPayment = recordCanteenPayment;

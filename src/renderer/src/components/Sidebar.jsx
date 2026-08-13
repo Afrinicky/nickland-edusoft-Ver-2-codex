@@ -8,6 +8,8 @@ const NAV_ITEMS = [
   { to: '/dashboard',     icon: 'dashboard', label: 'Dashboard',             module: 'dashboard'  },
   { to: '/students',      icon: 'students',  label: 'Students',              module: 'students'   },
   { to: '/academics',     icon: 'academics', label: 'Academics',             module: 'academics'  },
+  { to: '/timetable',     icon: 'timetable', label: 'Timetable',             module: 'academics'  },
+  { to: '/homework',      icon: 'homework',  label: 'Homework',              module: 'academics'  },
   { to: '/fees',          icon: 'fees',      label: 'Fees Management',       module: 'fees'       },
   { to: '/canteen',       icon: 'canteen',   label: 'Canteen',               module: 'canteen'    },
   { to: '/staff',         icon: 'staff',     label: 'Staff Management',      module: 'staff'      },
@@ -15,6 +17,7 @@ const NAV_ITEMS = [
   { to: '/finance',       icon: 'finance',   label: 'Finance',               module: 'finance'    },
   { to: '/inventory',     icon: 'inventory', label: 'Purchasing & Inventory',module: 'finance'    },
   { to: '/notifications', icon: 'bell',      label: 'Notifications',         module: 'notifications' },
+  { to: '/messages',      icon: 'messages',  label: 'Messages',              module: 'notifications' },
   { to: '/settings',      icon: 'settings',  label: 'Settings',              module: 'settings'   },
 ];
 
@@ -23,6 +26,8 @@ const ICONS = {
   dashboard: <><rect x="3" y="3" width="7" height="7" rx="1" fill="currentColor" opacity="0.9"/><rect x="14" y="3" width="7" height="7" rx="1" fill="currentColor" opacity="0.6"/><rect x="3" y="14" width="7" height="7" rx="1" fill="currentColor" opacity="0.6"/><rect x="14" y="14" width="7" height="7" rx="1" fill="currentColor" opacity="0.9"/></>,
   students:  <><circle cx="9" cy="7" r="4" fill="currentColor" opacity="0.8"/><path d="M1 20c0-4 4-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="1.8" fill="none"/><circle cx="18" cy="7" r="3" fill="currentColor" opacity="0.5"/><path d="M20 14c2 1 4 3 4 6" stroke="currentColor" strokeWidth="1.8" fill="none" opacity="0.5"/></>,
   academics: <><path d="M12 3l10 5-10 5L2 8z" fill="currentColor" opacity="0.9"/><path d="M5 10v5c0 3 3 5 7 5s7-2 7-5v-5" stroke="currentColor" strokeWidth="1.8" fill="none" opacity="0.7"/></>,
+  timetable: <><rect x="3" y="4" width="18" height="17" rx="2" stroke="currentColor" strokeWidth="1.8" fill="none"/><path d="M3 9h18M8 2v4M16 2v4" stroke="currentColor" strokeWidth="1.8"/><path d="M7 13h4M7 17h4M14 13h3" stroke="currentColor" strokeWidth="1.5" opacity="0.7"/></>,
+  homework:  <><path d="M6 3h9l4 4v14a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1Z" stroke="currentColor" strokeWidth="1.8" fill="none"/><path d="M14 3v5h5M8 13h8M8 17h5" stroke="currentColor" strokeWidth="1.6"/></>,
   fees:      <><rect x="2" y="5" width="20" height="14" rx="3" stroke="currentColor" strokeWidth="1.8" fill="none"/><path d="M2 10h20" stroke="currentColor" strokeWidth="1.8"/><circle cx="12" cy="15" r="2" fill="currentColor"/></>,
   canteen:   <><path d="M5 4v7M5 11c0 4 2 7 7 7s7-3 7-7V4" stroke="currentColor" strokeWidth="1.8" fill="none"/><path d="M19 4v7" stroke="currentColor" strokeWidth="1.8"/><path d="M7 20h10M12 18v4" stroke="currentColor" strokeWidth="1.8"/></>,
   staff:     <><circle cx="12" cy="8" r="4" fill="currentColor" opacity="0.8"/><path d="M3 21c0-5 4-8 9-8s9 3 9 8" stroke="currentColor" strokeWidth="1.8" fill="none"/></>,
@@ -30,6 +35,7 @@ const ICONS = {
   finance:   <><rect x="2" y="16" width="4" height="6" rx="1" fill="currentColor" opacity="0.5"/><rect x="9" y="11" width="4" height="11" rx="1" fill="currentColor" opacity="0.7"/><rect x="16" y="5" width="4" height="17" rx="1" fill="currentColor" opacity="0.9"/></>,
   inventory: <><rect x="3" y="7" width="18" height="13" rx="2" stroke="currentColor" strokeWidth="1.8" fill="none"/><path d="M3 11h18M9 7V4h6v3" stroke="currentColor" strokeWidth="1.8" fill="none"/><circle cx="12" cy="16" r="1.5" fill="currentColor"/></>,
   bell:      <><path d="M4 9c0-4 4-6 8-6s8 2 8 6v7l3 3H1l3-3V9Z" fill="currentColor" opacity="0.7"/><path d="M9 20a3 3 0 006 0" stroke="currentColor" strokeWidth="1.8" fill="none"/></>,
+  messages:  <><path d="M4 4h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-4 4V5a1 1 0 011-1Z" stroke="currentColor" strokeWidth="1.8" fill="none"/><path d="M8 9h8M8 13h5" stroke="currentColor" strokeWidth="1.8"/></>,
   settings:  <><circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" fill="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" stroke="currentColor" strokeWidth="1.8"/></>,
 };
 

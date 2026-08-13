@@ -10,22 +10,27 @@ import { colors } from '../../../src/theme';
 
 export default function ChildDetail() {
   const { id } = useLocalSearchParams();
-  const { token } = useAuth();
+  const { token, mode } = useAuth();
+  const canPay = mode !== 'cloud'; // payments run on the desktop host, not the cloud
   const [data, setData] = useState(null);
   const [report, setReport] = useState(null);
   const [intents, setIntents] = useState([]);
+  const [timetable, setTimetable] = useState(null);
+  const [homework, setHomework] = useState([]);
   const [error, setError] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [d, r, it] = await Promise.all([
+      const [d, r, it, tt, hw] = await Promise.all([
         api.child(token, id),
         api.childReport(token, id).catch(() => null),
         api.childIntents(token, id).catch(() => ({ intents: [] })),
+        api.childTimetable(token, id).catch(() => null),
+        api.childHomework(token, id).catch(() => ({ homework: [] })),
       ]);
-      setData(d); setReport(r); setIntents(it.intents || []);
+      setData(d); setReport(r); setIntents(it.intents || []); setTimetable(tt); setHomework(hw.homework || []);
     } catch (e) { setError(e.message); }
   }, [token, id]);
 
@@ -48,7 +53,7 @@ export default function ChildDetail() {
         <Row left={<Muted>Billed</Muted>} right={<Text>{money(c.fees.billed)}</Text>} />
         <Row left={<Muted>Paid</Muted>} right={<Text style={{ color: colors.success }}>{money(c.fees.paid)}</Text>} />
         <Row left={<Text style={{ fontWeight: '700' }}>Balance</Text>} right={<Text style={{ fontWeight: '800', color: c.fees.balance > 0 ? colors.danger : colors.success }}>{money(c.fees.balance)}</Text>} />
-        <Button title="Make a payment" onPress={() => setPayOpen(true)} />
+        {canPay && <Button title="Make a payment" onPress={() => setPayOpen(true)} />}
         {pendingIntents.length > 0 && (
           <View style={{ marginTop: 10, padding: 10, backgroundColor: '#FFFBEB', borderRadius: 8 }}>
             <Text style={{ color: colors.accent, fontWeight: '700' }}>⏳ {pendingIntents.length} payment(s) awaiting school confirmation</Text>
@@ -89,6 +94,9 @@ export default function ChildDetail() {
         }
       </Card>
 
+      <HomeworkCard items={homework} />
+      <TimetableCard tt={timetable} />
+
       <Card>
         <H2>Payments</H2>
         {(!data.payments || data.payments.length === 0)
@@ -101,9 +109,63 @@ export default function ChildDetail() {
         }
       </Card>
 
-      <PayModal open={payOpen} onClose={() => setPayOpen(false)} token={token} childId={id}
-        balance={c.fees.balance} onDone={() => { setPayOpen(false); load(); }} />
+      {canPay && (
+        <PayModal open={payOpen} onClose={() => setPayOpen(false)} token={token} childId={id}
+          balance={c.fees.balance} onDone={() => { setPayOpen(false); load(); }} />
+      )}
     </Screen>
+  );
+}
+
+// Upcoming homework for the child's class.
+function HomeworkCard({ items }) {
+  if (!items || !items.length) return null;
+  return (
+    <Card>
+      <H2>Homework</H2>
+      {items.map(h => (
+        <View key={h.id} style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={{ fontWeight: '600', flex: 1 }}>{h.title}</Text>
+            {h.due_date ? <Muted>Due {h.due_date}</Muted> : null}
+          </View>
+          {(h.subject_name || h.description) ? (
+            <Muted style={{ marginTop: 2 }}>{[h.subject_name, h.description].filter(Boolean).join(' · ')}</Muted>
+          ) : null}
+        </View>
+      ))}
+    </Card>
+  );
+}
+
+// Class timetable, shown per weekday. Host mode only — the cloud snapshot
+// doesn't carry the timetable yet, so this renders nothing over the internet.
+function TimetableCard({ tt }) {
+  if (!tt || !tt.periods || !tt.periods.length) return null;
+  const days = tt.days || [];
+  const byDay = days.map(d => {
+    const lessons = tt.periods
+      .filter(p => !p.is_break)
+      .map(p => ({ p, cell: tt.entries[`${d.value}:${p.id}`] }))
+      .filter(x => x.cell && (x.cell.subject_name || x.cell.teacher_name));
+    return { ...d, lessons };
+  }).filter(d => d.lessons.length > 0);
+  if (byDay.length === 0) return null;
+
+  return (
+    <Card>
+      <H2>Timetable{tt.class?.name ? ` — ${tt.class.name}` : ''}</H2>
+      {byDay.map(d => (
+        <View key={d.value} style={{ marginTop: 8 }}>
+          <Text style={{ fontWeight: '700', color: colors.primary }}>{d.label}</Text>
+          {d.lessons.map(({ p, cell }, i) => (
+            <Row key={i}
+              left={<><Text>{cell.subject_name || 'Lesson'}</Text><Muted>{cell.teacher_name || ''}</Muted></>}
+              right={<Muted>{p.start_time}–{p.end_time}</Muted>} />
+          ))}
+        </View>
+      ))}
+    </Card>
   );
 }
 

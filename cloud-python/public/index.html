@@ -99,6 +99,7 @@ async function render() {
   try {
     if (!CACHE.me) CACHE.me = await api('/portal/me');
     if (VIEW.name === 'account') return renderAccount();
+    if (VIEW.name === 'messages') return renderMessages();
     if (VIEW.name === 'child') return renderChild(VIEW.childId);
     return renderHome();
   } catch (e) { if (!token) return renderLogin(); app().innerHTML = `<div class="card"><div class="err">${esc(e.message)}</div></div>`; }
@@ -158,6 +159,7 @@ async function renderHome() {
       <div class="muted">${kids.length} student${kids.length===1?'':'s'}</div>
     </div>
     ${kids.length ? kids.map(kidCard).join('') : '<div class="card muted">No students linked yet. Ask the school to link a student to your account.</div>'}
+    <button class="ghost" onclick="go('messages')">💬 Messages from school</button>
     <button class="ghost" onclick="go('account')">⚙️ Account &amp; details</button>`;
 }
 function kidCard(c) {
@@ -202,6 +204,8 @@ async function renderChild(studentId) {
     </div>
     ${attendanceCard(c.attendance)}
     ${reportCard(c.report)}
+    ${homeworkCard(c.homework)}
+    ${timetableCard(c.timetable)}
     <div class="card"><h3>Receipts</h3><div id="rcpts"><div class="spin"></div></div></div>
     <div class="muted center">Updated ${c.updated_at?new Date(c.updated_at).toLocaleString():'—'}</div>`;
   // Load receipts (shared endpoint; filter to this child)
@@ -239,6 +243,37 @@ function attendanceCard(a) {
     <div class="row" style="margin-top:6px"><span>Attendance rate</span><strong>${pct}%</strong></div>
   </div>`;
 }
+function homeworkCard(items) {
+  if (!items || !items.length) return '';
+  return `<div class="card">
+    <h3>Homework</h3>
+    ${items.map(h => `<div class="row">
+      <div><div style="font-weight:600">${esc(h.title)}</div>${(h.subject_name || h.description) ? `<div class="muted" style="font-size:12px">${esc([h.subject_name, h.description].filter(Boolean).join(' · '))}</div>` : ''}</div>
+      ${h.due_date ? `<div class="muted">Due ${esc(h.due_date)}</div>` : ''}
+    </div>`).join('')}
+  </div>`;
+}
+function timetableCard(tt) {
+  if (!tt || !(tt.periods||[]).length) return '';
+  const days = tt.days || [];
+  const byDay = days.map(d => {
+    const lessons = (tt.periods||[]).filter(p => !p.is_break)
+      .map(p => ({ p, cell: (tt.entries||{})[`${d.value}:${p.id}`] }))
+      .filter(x => x.cell && (x.cell.subject_name || x.cell.teacher_name));
+    return { d, lessons };
+  }).filter(x => x.lessons.length);
+  if (!byDay.length) return '';
+  return `<div class="card">
+    <h3>Timetable ${tt.class && tt.class.name ? '· '+esc(tt.class.name) : ''}</h3>
+    ${byDay.map(({d, lessons}) => `<div style="margin-top:8px">
+      <div style="font-weight:700; color:var(--navy)">${esc(d.label)}</div>
+      ${lessons.map(({p, cell}) => `<div class="row">
+        <div><div>${esc(cell.subject_name||'Lesson')}</div><div class="muted" style="font-size:12px">${esc(cell.teacher_name||'')}</div></div>
+        <div class="muted">${esc(p.start_time)}–${esc(p.end_time)}</div>
+      </div>`).join('')}
+    </div>`).join('')}
+  </div>`;
+}
 function reportCard(r) {
   if (!r || (!(r.subjects||[]).length && r.average==null)) return '';
   const rows = (r.subjects||[]).map(s=>`<div class="row"><span>${esc(s.subject)}</span><strong>${s.total!=null?Number(s.total).toFixed(0):'—'}${s.grade?(' · '+esc(s.grade)):''}</strong></div>`).join('');
@@ -250,6 +285,28 @@ function reportCard(r) {
       <strong>Average ${r.average!=null?Number(r.average).toFixed(1):'—'}</strong><span class="muted">${esc(pos)}</span></div>`:''}
     ${r.remarks?`<div class="muted" style="margin-top:8px">“${esc(r.remarks)}”</div>`:''}
   </div>`;
+}
+
+async function renderMessages() {
+  setHeader('💬 Messages', esc(CACHE.me.school?.name || ''), { back: true, out: false });
+  app().innerHTML = '<div class="spin"></div>';
+  let threads = [];
+  try { threads = (await api('/portal/messages')).threads || []; } catch (e) {}
+  if (!threads.length) {
+    app().innerHTML = '<div class="card muted">No messages yet. The school will reach you here and by SMS.</div>';
+    return;
+  }
+  app().innerHTML = threads.map(t => `
+    <div class="card">
+      <h3>${esc(t.subject || (t.student_name ? ('Re: ' + t.student_name) : 'Conversation'))}</h3>
+      ${(t.messages || []).map(m => `
+        <div style="display:flex; justify-content:${m.sender_type === 'parent' ? 'flex-end' : 'flex-start'}; margin:6px 0">
+          <div style="max-width:80%; padding:8px 12px; border-radius:12px; background:${m.sender_type === 'parent' ? 'var(--navy)' : '#F1F5F9'}; color:${m.sender_type === 'parent' ? '#fff' : '#0F172A'}">
+            <div>${esc(m.body)}</div>
+            <div style="font-size:11px; opacity:.7; margin-top:2px">${esc(m.sender_name || (m.sender_type === 'parent' ? 'You' : 'School'))}</div>
+          </div>
+        </div>`).join('')}
+    </div>`).join('') + `<div class="muted center">To reply, use the school's mobile app on the school Wi-Fi.</div>`;
 }
 
 function renderAccount() {

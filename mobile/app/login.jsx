@@ -10,7 +10,8 @@ import { colors } from '../src/theme';
 const DEVICE = Platform.OS + ' app';
 
 export default function Login() {
-  const { host, signIn } = useAuth();
+  const { host, mode: conn, signIn } = useAuth();
+  const isCloud = conn === 'cloud';
   const [mode, setMode] = useState('parent'); // 'parent' | 'staff'
   const [register, setRegister] = useState(false);
   const [form, setForm] = useState({ identifier: '', username: '', password: '', full_name: '', phone: '', email: '' });
@@ -44,10 +45,14 @@ export default function Login() {
         <Muted>{host}</Muted>
       </View>
 
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Tab label="Parent" active={mode === 'parent'} onPress={() => { setMode('parent'); setError(null); }} />
-        <Tab label="Staff / Teacher" active={mode === 'staff'} onPress={() => { setMode('staff'); setError(null); }} />
-      </View>
+      {/* Staff features run on the school desktop, not the hosted portal, so
+          cloud connections are parent-only. */}
+      {!isCloud && (
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Tab label="Parent" active={mode === 'parent'} onPress={() => { setMode('parent'); setError(null); }} />
+          <Tab label="Staff / Teacher" active={mode === 'staff'} onPress={() => { setMode('staff'); setError(null); }} />
+        </View>
+      )}
 
       <Card>
         {mode === 'staff' ? (
@@ -71,12 +76,17 @@ export default function Login() {
         )}
         <ErrorNote message={error} />
         <Button title={busy ? 'Please wait…' : register ? 'Create account' : 'Sign in'} onPress={submit} disabled={busy} />
-        {mode === 'parent' && (
+        {mode === 'parent' && !isCloud && (
           <TouchableOpacity onPress={() => { setRegister(r => !r); setError(null); }} style={{ marginTop: 12, alignItems: 'center' }}>
             <Text style={{ color: colors.primary, fontWeight: '600' }}>
               {register ? 'I already have an account' : "First time? Register with your phone"}
             </Text>
           </TouchableOpacity>
+        )}
+        {mode === 'parent' && isCloud && (
+          <Muted style={{ marginTop: 12, textAlign: 'center' }}>
+            First time? Register in the school's mobile app on the school Wi-Fi, then sign in here.
+          </Muted>
         )}
       </Card>
     </Screen>

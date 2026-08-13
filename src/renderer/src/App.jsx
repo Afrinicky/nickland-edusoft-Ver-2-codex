@@ -18,12 +18,15 @@ import StaffDetail from './pages/Staff/Detail.jsx';
 import Payroll from './pages/Staff/Payroll.jsx';
 import FeesIndex from './pages/Fees/Index.jsx';
 import AcademicsIndex from './pages/Academics/Index.jsx';
+import TimetableIndex from './pages/Timetable/Index.jsx';
+import HomeworkIndex from './pages/Homework/Index.jsx';
 import ScoresEntry from './pages/Scores/Entry.jsx';
 import ScoresReport from './pages/Scores/Report.jsx';
 import CanteenIndex from './pages/Canteen/Index.jsx';
 import FinanceIndex from './pages/Finance/Index.jsx';
 import InventoryIndex from './pages/Inventory/Index.jsx';
 import NotificationsIndex from './pages/Notifications/Index.jsx';
+import MessagesIndex from './pages/Messages/Index.jsx';
 import SettingsIndex from './pages/Settings/Index.jsx';
 import RequirePermission from './components/RequirePermission.jsx';
 
@@ -78,6 +81,8 @@ export default function App() {
           <Route path="students/:id/print" element={<RequirePermission module="students"><PrintableProfile /></RequirePermission>} />
           <Route path="academics" element={<RequirePermission module="academics"><AcademicsIndex /></RequirePermission>} />
           <Route path="academics/report/:studentId" element={<RequirePermission module="academics"><ScoresReport /></RequirePermission>} />
+          <Route path="timetable" element={<RequirePermission module="academics"><TimetableIndex /></RequirePermission>} />
+          <Route path="homework" element={<RequirePermission module="academics"><HomeworkIndex /></RequirePermission>} />
           <Route path="staff" element={<RequirePermission module="staff"><StaffIndex /></RequirePermission>} />
           <Route path="staff/:id" element={<RequirePermission module="staff"><StaffDetail /></RequirePermission>} />
           <Route path="payroll" element={<RequirePermission module="payroll"><Payroll /></RequirePermission>} />
@@ -86,6 +91,7 @@ export default function App() {
           <Route path="finance" element={<RequirePermission module="finance"><FinanceIndex /></RequirePermission>} />
           <Route path="inventory" element={<RequirePermission module="finance"><InventoryIndex /></RequirePermission>} />
           <Route path="notifications" element={<RequirePermission module="notifications"><NotificationsIndex /></RequirePermission>} />
+          <Route path="messages" element={<RequirePermission module="notifications"><MessagesIndex /></RequirePermission>} />
           <Route path="settings/*" element={<RequirePermission module="settings"><SettingsIndex /></RequirePermission>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

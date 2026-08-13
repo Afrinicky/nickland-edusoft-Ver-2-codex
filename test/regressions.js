@@ -320,5 +320,94 @@ console.log('\n── Schema ──');
   ck('re-running migrations logs no failures', errs === 0);
 }
 
+console.log('\n── Timetable ──');
+{
+  const db = makeDb();
+  const tt = require(path.join(ROOT, 'electron/ipc/timetable.js'));
+
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
+  ck('migrations create timetable_periods', tables.includes('timetable_periods'));
+  ck('migrations create timetable_entries', tables.includes('timetable_entries'));
+
+  // Minimal fixture: two periods, one class, one subject, one teacher.
+  db.exec("INSERT INTO timetable_periods (id,label,start_time,end_time,display_order,is_break) VALUES (1,'Period 1','08:00','08:40',0,0),(2,'Break','08:40','09:00',1,1);");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10);");
+  db.exec("INSERT INTO subjects (id,name,code,is_active) VALUES (1,'Mathematics','MATH',1);");
+  db.exec("INSERT INTO staff (id,surname,first_name,role,status) VALUES (7,'Mensah','Ama','teacher','Active');");
+
+  // Assign Monday Period 1 → Maths with teacher 7.
+  db.prepare(`INSERT INTO timetable_entries (class_group_id,day_of_week,period_id,subject_id,teacher_id)
+              VALUES (1,1,1,1,7)`).run();
+
+  const grid = tt.getClassTimetable(db, 1);
+  ck('class grid returns the shared periods', grid.periods.length === 2);
+  ck('class grid keys a cell by day:period with names',
+    grid.entries['1:1'] && grid.entries['1:1'].subject_name === 'Mathematics' && grid.entries['1:1'].teacher_name === 'Ama Mensah');
+  ck('class grid has an empty cell where unset', !grid.entries['2:1']);
+
+  const teacher = tt.getTeacherTimetable(db, 7);
+  const mon = teacher.days.find(d => d.value === 1);
+  ck('teacher timetable groups entries by weekday',
+    mon && mon.periods.length === 1 && mon.periods[0].class_name === 'BS5' && mon.periods[0].subject_name === 'Mathematics');
+  ck('teacher timetable is empty on days with no entries',
+    teacher.days.find(d => d.value === 3).periods.length === 0);
+
+  // UNIQUE(class,day,period): re-assigning the same cell upserts, not duplicates.
+  db.prepare(`INSERT INTO timetable_entries (class_group_id,day_of_week,period_id,subject_id,teacher_id)
+              VALUES (1,1,1,1,7)
+              ON CONFLICT (class_group_id,day_of_week,period_id) DO UPDATE SET subject_id=excluded.subject_id`).run();
+  const count = db.prepare('SELECT COUNT(*) c FROM timetable_entries WHERE class_group_id=1 AND day_of_week=1 AND period_id=1').get().c;
+  ck('one cell holds at most one entry', count === 1);
+}
+
+console.log('\n── Messaging ──');
+{
+  const db = makeDb();
+  const msg = require(path.join(ROOT, 'electron/ipc/messaging.js'));
+  db.exec("INSERT INTO parents (id,full_name,phone) VALUES (1,'Ama','0240000000');");
+
+  // Parent starts a thread → the staff side is flagged unread.
+  const a = msg.postMessage(db, { parentId: 1, subject: 'Fees query', senderType: 'parent', senderName: 'Ama', body: 'Is the term fee GHS 400?' });
+  ck('parent can start a thread', a.ok && a.thread_id);
+  let threads = msg.listThreadsForStaff(db);
+  ck('staff sees the new thread as unread', threads.length === 1 && threads[0].staff_unread === 1);
+
+  // Staff replies → parent side is flagged unread, thread now has two messages.
+  const b = msg.postMessage(db, { threadId: a.thread_id, senderType: 'staff', senderName: 'Bursar', body: 'Yes, GHS 400.', mirror: false });
+  ck('staff can reply on the same thread', b.ok && b.thread_id === a.thread_id);
+  const full = msg.getThread(db, a.thread_id);
+  ck('thread keeps both messages in order', full.messages.length === 2 && full.messages[0].sender_type === 'parent' && full.messages[1].sender_type === 'staff');
+  ck('reply flags the parent unread', full.thread.parent_unread === 1);
+
+  // Marking read clears only that side.
+  msg.markThreadRead(db, a.thread_id, 'staff');
+  ck('marking staff-read clears staff unread only', msg.listThreadsForStaff(db)[0].staff_unread === 0 && msg.getThread(db, a.thread_id).thread.parent_unread === 1);
+
+  // A staff message projects a thread snapshot to the cloud outbox.
+  const snap = db.prepare("SELECT payload_json FROM sync_outbox WHERE entity_type='message_thread' ORDER BY id DESC LIMIT 1").get();
+  ck('staff message projects a message_thread snapshot', !!snap && JSON.parse(snap.payload_json).messages.length === 2);
+
+  ck('parent sees only their own threads', msg.listThreadsForParent(db, 1).length === 1 && msg.listThreadsForParent(db, 999).length === 0);
+}
+
+console.log('\n── Homework ──');
+{
+  const db = makeDb();
+  const hw = require(path.join(ROOT, 'electron/ipc/homework.js'));
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'ANSU','MONA','X1',1,'Active');");
+  db.exec("INSERT INTO subjects (id,name,code,is_active) VALUES (1,'Mathematics','MATH',1);");
+
+  const a = hw.saveHomework(db, { classId: 1, subjectId: 1, title: 'Exercise 4', description: 'Q1-10', dueDate: '2999-01-01' });
+  ck('teacher can set homework', a.ok && a.id);
+  const upcoming = hw.listForClass(db, 1);
+  ck('class homework resolves subject name', upcoming.length === 1 && upcoming[0].subject_name === 'Mathematics' && upcoming[0].title === 'Exercise 4');
+
+  hw.saveHomework(db, { classId: 1, title: 'Old work', dueDate: '2000-01-01' });
+  ck('past homework is hidden from the upcoming view', hw.listForClass(db, 1).length === 1);
+  ck('past homework still shows in the full history', hw.listForClass(db, 1, { all: true }).length === 2);
+  ck('student sees their class homework', hw.listForStudent(db, 1).length === 1);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -154,7 +154,7 @@ function enqueueStudentSnapshot(db, studentId) {
   if (!syncEnabled(db)) return null;
   try {
     const s = db.prepare(`
-      SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names, c.name AS class_name
+      SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names, s.current_class_id, c.name AS class_name
       FROM students s LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?
     `).get(studentId);
     if (!s) return null;
@@ -200,6 +200,24 @@ function enqueueStudentSnapshot(db, studentId) {
       }
     } catch (_) {}
 
+    // Class timetable (so the portal can show it off-LAN). Small enough for the
+    // thin cloud; refreshed whenever this student's snapshot is rebuilt.
+    let timetable = null;
+    try {
+      if (s.current_class_id) {
+        const tt = require('../../ipc/timetable');
+        const grid = tt.getClassTimetable(db, s.current_class_id);
+        if (grid && (grid.periods || []).length) timetable = grid;
+      }
+    } catch (_) {}
+
+    // Upcoming homework for the child's class.
+    let homework = [];
+    try {
+      const hw = require('../../ipc/homework');
+      homework = hw.listForStudent(db, studentId).slice(0, 10);
+    } catch (_) {}
+
     return postToOutbox(db, {
       entity_type: 'student_snapshot',
       entity_key: `student:${studentId}`,
@@ -213,6 +231,8 @@ function enqueueStudentSnapshot(db, studentId) {
         canteen: { unpaid_days: canteenUnpaid, amount_owed: canteenUnpaid * rate },
         attendance,
         report,
+        timetable,
+        homework,
         updated_at: new Date().toISOString(),
       },
     });

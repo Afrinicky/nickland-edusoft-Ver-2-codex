@@ -305,6 +305,42 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, notifications: rows });
   });
 
+  // ── Messaging (parent side) ──
+  add('GET', `${API}/parent/messages`, async (ctx, req, res) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const m = require('../ipc/messaging');
+    return json(res, 200, { ok: true, threads: m.listThreadsForParent(db, ctx.parent.id) });
+  });
+
+  add('GET', `${API}/parent/messages/:id`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const m = require('../ipc/messaging');
+    const tid = parseInt(params.id, 10);
+    const data = m.getThread(db, tid);
+    if (!data || data.thread.parent_id !== ctx.parent.id) return json(res, 403, { ok: false, error: 'Not your thread.' });
+    m.markThreadRead(db, tid, 'parent');
+    return json(res, 200, { ok: true, ...data });
+  });
+
+  add('POST', `${API}/parent/messages`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const m = require('../ipc/messaging');
+    // A parent may only continue their own thread.
+    if (body.threadId) {
+      const existing = m.getThread(db, parseInt(body.threadId, 10));
+      if (!existing || existing.thread.parent_id !== ctx.parent.id) return json(res, 403, { ok: false, error: 'Not your thread.' });
+    }
+    // Scope any student context to one of the parent's own children.
+    const studentId = body.studentId && ctx.student_ids.includes(parseInt(body.studentId, 10)) ? parseInt(body.studentId, 10) : null;
+    const r = m.postMessage(db, {
+      threadId: body.threadId ? parseInt(body.threadId, 10) : null,
+      parentId: ctx.parent.id, studentId, subject: body.subject,
+      senderType: 'parent', senderName: ctx.parent.full_name, body: body.body,
+    });
+    if (!r.ok) return json(res, 400, r);
+    return json(res, 200, r);
+  });
+
   // Staff endpoints (role-scoped)
   add('GET', `${API}/dashboard`, async (ctx, req, res) => {
     if (!can(ctx, 'dashboard', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
@@ -344,21 +380,242 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, debtors: rows });
   });
 
+  // ── Classes list (for teacher pickers: attendance / scores / canteen) ──
+  add('GET', `${API}/classes`, async (ctx, req, res) => {
+    if (!can(ctx, 'students', 'view') && !can(ctx, 'academics', 'view') && !can(ctx, 'canteen', 'view')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const classes = db.prepare('SELECT id, name, short_code FROM class_groups ORDER BY level_order, name').all();
+    return json(res, 200, { ok: true, classes });
+  });
+
+  // ── Attendance register: roster for a class on a date, with any marks set ──
+  add('GET', `${API}/attendance`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!can(ctx, 'students', 'view') && !can(ctx, 'academics', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const classId = parseInt(query.classId, 10);
+    const date = query.date;
+    if (!classId || !date) return json(res, 400, { ok: false, error: 'classId and date are required.' });
+    const students = db.prepare(`
+      SELECT id, index_number, surname, first_name, other_names
+      FROM students WHERE current_class_id = ? AND status = 'Active'
+      ORDER BY surname, first_name
+    `).all(classId);
+    const ph = students.map(() => '?').join(',') || 'NULL';
+    const att = db.prepare(`
+      SELECT student_id, status, notes FROM student_attendance
+      WHERE date = ? AND student_id IN (${ph})
+    `).all(date, ...students.map(s => s.id));
+    const attMap = Object.fromEntries(att.map(a => [a.student_id, a]));
+    return json(res, 200, {
+      ok: true,
+      students: students.map(s => ({
+        id: s.id, index_number: s.index_number,
+        name: `${s.surname} ${s.first_name} ${s.other_names || ''}`.trim(),
+        status: attMap[s.id]?.status || null,
+        notes: attMap[s.id]?.notes || null,
+      })),
+    });
+  });
+
   add('POST', `${API}/attendance`, async (ctx, req, res, params, body) => {
     if (!can(ctx, 'students', 'edit') && !can(ctx, 'academics', 'edit')) return json(res, 403, { ok: false, error: 'Access denied.' });
-    const { date, marks } = body; // marks: [{ student_id, status }]
+    const { date, marks } = body; // marks: [{ student_id, status, notes }]
     if (!date || !Array.isArray(marks)) return json(res, 400, { ok: false, error: 'date and marks[] required.' });
     const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
     const up = db.prepare(`
-      INSERT INTO student_attendance (student_id, date, status, marked_by, term_id)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT (student_id, date) DO UPDATE SET status = excluded.status, marked_by = excluded.marked_by
+      INSERT INTO student_attendance (student_id, date, status, marked_by, term_id, notes)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (student_id, date) DO UPDATE SET
+        status = excluded.status, marked_by = excluded.marked_by, notes = excluded.notes
     `);
     let n = 0;
-    const tx = db.transaction(() => { for (const m of marks) { up.run(m.student_id, date, m.status || 'present', ctx.user.id, term?.id || null); n++; } });
+    const tx = db.transaction(() => {
+      for (const m of marks) {
+        const status = m.status || 'present';
+        const notes = status === 'absent' ? (m.notes || null) : null;
+        up.run(m.student_id, date, status, ctx.user.id, term?.id || null, notes);
+        n++;
+      }
+    });
     try { tx(); } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
     try { const { enqueueStudentSnapshot } = require('./sync/outbox'); for (const m of marks) enqueueStudentSnapshot(db, m.student_id); } catch (_) {}
     return json(res, 200, { ok: true, saved: n });
+  });
+
+  // ── Score entry: subjects mapped to a class ──
+  add('GET', `${API}/scores/subjects`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!can(ctx, 'academics', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const classId = parseInt(query.classId, 10);
+    if (!classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+    let subjects = db.prepare(`
+      SELECT s.id, s.name, s.code FROM subjects s
+      JOIN class_subjects cs ON cs.subject_id = s.id
+      WHERE cs.class_group_id = ? AND s.is_active = 1 ORDER BY s.name
+    `).all(classId);
+    if (subjects.length === 0) subjects = db.prepare('SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name').all();
+    return json(res, 200, { ok: true, subjects });
+  });
+
+  // ── Score entry: roster + current exam marks for a class+subject (current term) ──
+  add('GET', `${API}/scores`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!can(ctx, 'academics', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const classId = parseInt(query.classId, 10);
+    const subjectId = parseInt(query.subjectId, 10);
+    if (!classId || !subjectId) return json(res, 400, { ok: false, error: 'classId and subjectId are required.' });
+    const term = db.prepare('SELECT id, label FROM terms WHERE is_current = 1').get();
+    if (!term) return json(res, 200, { ok: true, term: null, students: [] });
+    const students = db.prepare(`
+      SELECT id, index_number, surname, first_name, other_names
+      FROM students WHERE current_class_id = ? AND status = 'Active'
+      ORDER BY surname, first_name
+    `).all(classId);
+    const scoreMap = Object.fromEntries(
+      db.prepare('SELECT student_id, exam_score, total_score FROM scores WHERE term_id = ? AND subject_id = ?')
+        .all(term.id, subjectId).map(r => [r.student_id, r])
+    );
+    return json(res, 200, {
+      ok: true, term: { id: term.id, label: term.label },
+      students: students.map(s => ({
+        id: s.id, index_number: s.index_number,
+        name: `${s.surname} ${s.first_name} ${s.other_names || ''}`.trim(),
+        exam_score: scoreMap[s.id]?.exam_score ?? null,
+        total_score: scoreMap[s.id]?.total_score ?? null,
+      })),
+    });
+  });
+
+  // ── Score entry: save raw exam marks (0–100) for a class+subject ──
+  add('POST', `${API}/scores`, async (ctx, req, res, params, body) => {
+    if (!can(ctx, 'academics', 'edit')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const subjectId = parseInt(body.subjectId, 10);
+    const marks = body.marks; // [{ student_id, exam_score }]
+    if (!subjectId || !Array.isArray(marks)) return json(res, 400, { ok: false, error: 'subjectId and marks[] required.' });
+    const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
+    if (!term) return json(res, 400, { ok: false, error: 'No current term is set.' });
+    const { saveExamMark } = require('../ipc/scores');
+    let n = 0;
+    try {
+      const tx = db.transaction(() => {
+        for (const m of marks) {
+          if (m.exam_score === '' || m.exam_score == null) continue;
+          const v = Number(m.exam_score);
+          if (!Number.isFinite(v) || v < 0 || v > 100) throw new Error('Exam scores must be between 0 and 100.');
+          saveExamMark(db, { studentId: m.student_id, subjectId, termId: term.id, examScore: v });
+          n++;
+        }
+      });
+      tx();
+    } catch (e) { return json(res, 400, { ok: false, error: e.message }); }
+    return json(res, 200, { ok: true, saved: n });
+  });
+
+  // ── Canteen: a student's collection summary (current term) ──
+  add('GET', `${API}/canteen/student/:id`, async (ctx, req, res, params) => {
+    if (!can(ctx, 'canteen', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const sid = parseInt(params.id, 10);
+    const s = db.prepare(`
+      SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names, c.name AS class_name
+      FROM students s LEFT JOIN class_groups c ON c.id = s.current_class_id
+      WHERE s.id = ? AND s.status = 'Active'
+    `).get(sid);
+    if (!s) return json(res, 404, { ok: false, error: 'Student not found.' });
+    const term = db.prepare('SELECT id, label FROM terms WHERE is_current = 1').get();
+    const rate = parseFloat(getSetting(db, 'canteen_daily_rate', '5'));
+    const unpaidDays = term ? db.prepare(`
+      SELECT COUNT(*) c FROM school_calendar sc
+      LEFT JOIN canteen_day_status cds ON cds.date = sc.date AND cds.student_id = ?
+      WHERE sc.term_id = ? AND sc.day_type = 'school_day' AND (cds.status IS NULL OR cds.status = 'unpaid')
+    `).get(sid, term.id).c : 0;
+    return json(res, 200, {
+      ok: true,
+      student: { id: s.id, index_number: s.index_number, name: `${s.surname} ${s.first_name} ${s.other_names || ''}`.trim(), class_name: s.class_name },
+      daily_rate: rate, unpaid_days: unpaidDays, amount_owed: unpaidDays * rate,
+      term: term ? { id: term.id, label: term.label } : null,
+    });
+  });
+
+  // ── Canteen: collect a payment (records payment, marks days, receipts) ──
+  add('POST', `${API}/canteen/collect`, async (ctx, req, res, params, body) => {
+    if (!can(ctx, 'canteen', 'create')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const sid = parseInt(body.student_id, 10);
+    if (!sid) return json(res, 400, { ok: false, error: 'student_id is required.' });
+    const { recordCanteenPayment } = require('../ipc/canteen');
+    let result;
+    try {
+      result = recordCanteenPayment(db, {
+        student_id: sid,
+        amount: body.amount,
+        payment_method: body.payment_method || 'Cash',
+        notes: body.notes || '',
+        received_by: ctx.user.full_name || ctx.user.username || null,
+      });
+    } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
+    if (!result.ok) return json(res, 400, result);
+    return json(res, 200, result);
+  });
+
+  // ── Timetable: the signed-in teacher's own week (+ today) ──
+  add('GET', `${API}/timetable/mine`, async (ctx, req, res) => {
+    if (ctx.role !== 'staff') return json(res, 403, { ok: false, error: 'Staff only.' });
+    const staffId = ctx.user.staff_id;
+    if (!staffId) return json(res, 200, { ok: true, has_staff: false, days: [], today: null });
+    const tt = require('../ipc/timetable');
+    const data = tt.getTeacherTimetable(db, staffId);
+    const jsDay = new Date().getDay(); // 0=Sun … 6=Sat
+    const todayVal = (jsDay >= 1 && jsDay <= 5) ? jsDay : null;
+    const today = todayVal ? (data.days.find(d => d.value === todayVal) || null) : null;
+    return json(res, 200, { ok: true, has_staff: true, days: data.days, today });
+  });
+
+  // ── Timetable: a class grid (staff who can view students/academics) ──
+  add('GET', `${API}/timetable/class/:id`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'staff' || (!can(ctx, 'academics', 'view') && !can(ctx, 'students', 'view'))) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const tt = require('../ipc/timetable');
+    return json(res, 200, { ok: true, ...tt.getClassTimetable(db, parseInt(params.id, 10)) });
+  });
+
+  // ── Timetable: a parent's child's class grid ──
+  add('GET', `${API}/parent/children/:id/timetable`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const stu = db.prepare('SELECT current_class_id FROM students WHERE id = ?').get(sid);
+    if (!stu || !stu.current_class_id) return json(res, 200, { ok: true, class: null, days: [], periods: [], entries: {} });
+    const tt = require('../ipc/timetable');
+    return json(res, 200, { ok: true, ...tt.getClassTimetable(db, stu.current_class_id) });
+  });
+
+  // ── Homework: list for a class (staff) ──
+  add('GET', `${API}/homework`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const classId = parseInt(query.classId, 10);
+    if (!classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+    const hw = require('../ipc/homework');
+    return json(res, 200, { ok: true, homework: hw.listForClass(db, classId, { all: query.all === '1' }) });
+  });
+
+  // ── Homework: set for a class (staff) ──
+  add('POST', `${API}/homework`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'edit')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const hw = require('../ipc/homework');
+    const r = hw.saveHomework(db, {
+      classId: parseInt(body.classId, 10), subjectId: body.subjectId || null,
+      teacherId: ctx.user.staff_id || null, title: body.title,
+      description: body.description, dueDate: body.dueDate,
+    });
+    if (!r.ok) return json(res, 400, r);
+    return json(res, 200, r);
+  });
+
+  // ── Homework: a parent's child's class homework ──
+  add('GET', `${API}/parent/children/:id/homework`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const hw = require('../ipc/homework');
+    return json(res, 200, { ok: true, homework: hw.listForStudent(db, sid) });
   });
 
   function readRaw(req) {

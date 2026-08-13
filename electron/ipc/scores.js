@@ -243,14 +243,7 @@ function registerScoresHandlers(ipcMain, db) {
 
   // ═══ WHONET-style Class Scores (assessment columns) ═══
 
-  function getWeights() {
-    const cw = db.prepare("SELECT value FROM settings WHERE key = 'class_weight_pct'").get();
-    const ew = db.prepare("SELECT value FROM settings WHERE key = 'exam_weight_pct'").get();
-    return {
-      classWeight: parseFloat(cw?.value || '40'),
-      examWeight: parseFloat(ew?.value || '60'),
-    };
-  }
+  function getWeights() { return readWeights(db); }
 
   ipcMain.handle('scores:get-weights', () => getWeights());
 
@@ -376,15 +369,7 @@ function registerScoresHandlers(ipcMain, db) {
     return { subjects, students: rows, exam_weight: examWeight };
   });
 
-  ipcMain.handle('scores:save-exam-mark', (_e, { studentId, subjectId, termId, examScore }) => {
-    db.prepare(`
-      INSERT INTO scores (student_id, term_id, subject_id, exam_score)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT (student_id, term_id, subject_id) DO UPDATE SET exam_score = excluded.exam_score
-    `).run(studentId, termId, subjectId, examScore || 0);
-    recomputeTotal(db, studentId, subjectId, termId, getWeights());
-    return { ok: true };
-  });
+  ipcMain.handle('scores:save-exam-mark', (_e, args) => saveExamMark(db, args));
 
 
 
@@ -895,6 +880,33 @@ function ensureOutputDir(savePath) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
+// Read the school's class/exam weighting from settings. Top-level so both the
+// desktop IPC handlers and the mobile API (electron/server/api.js) share one
+// definition.
+function readWeights(db) {
+  const cw = db.prepare("SELECT value FROM settings WHERE key = 'class_weight_pct'").get();
+  const ew = db.prepare("SELECT value FROM settings WHERE key = 'exam_weight_pct'").get();
+  return {
+    classWeight: parseFloat(cw?.value || '40'),
+    examWeight: parseFloat(ew?.value || '60'),
+  };
+}
+
+// Save one raw exam mark (0–100) for a student/subject/term and recompute the
+// subject total against the class score already on file. Shared by the desktop
+// exam sheet and the mobile score-entry screen so the WHONET-style weighting
+// stays identical across both. Refreshes the cloud snapshot for the portal.
+function saveExamMark(db, { studentId, subjectId, termId, examScore }) {
+  db.prepare(`
+    INSERT INTO scores (student_id, term_id, subject_id, exam_score)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT (student_id, term_id, subject_id) DO UPDATE SET exam_score = excluded.exam_score
+  `).run(studentId, termId, subjectId, examScore || 0);
+  recomputeTotal(db, studentId, subjectId, termId, readWeights(db));
+  try { enqueueStudentSnapshot(db, studentId); } catch (_) {}
+  return { ok: true };
+}
+
 function recomputeClassScore(db, classId, subjectId, termId, studentId, weights) {
   const cols = db.prepare(`
     SELECT id, max_marks FROM assessment_columns
@@ -924,3 +936,5 @@ function recomputeTotal(db, studentId, subjectId, termId, weights) {
 }
 
 module.exports = registerScoresHandlers;
+module.exports.saveExamMark = saveExamMark;
+module.exports.readWeights = readWeights;
