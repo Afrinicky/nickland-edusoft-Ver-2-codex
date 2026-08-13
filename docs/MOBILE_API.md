@@ -62,9 +62,16 @@ student's guardian contact on file; otherwise an admin provisions the account.
   verifies directly). Other providers plug in as adapters with the same
   interface.
 | GET | `/dashboard` | staff (`dashboard.view`) | Term metrics (students, staff, fees). |
+| GET | `/classes` | staff (`students`/`academics`/`canteen` view) | Class list for the teacher pickers. |
 | GET | `/students?classId=` | staff (`students.view`) | Student roster. |
 | GET | `/fees/debtors` | staff (`fees.view`) | Outstanding balances. |
-| POST | `/attendance` | staff (`students`/`academics` edit) | `{ date, marks:[{student_id,status}] }`. |
+| GET | `/attendance?classId=&date=` | staff (`students`/`academics` view) | Register roster for a class on a date, with any marks already set. |
+| POST | `/attendance` | staff (`students`/`academics` edit) | `{ date, marks:[{student_id,status,notes}] }`. `notes` are kept only for `absent`. |
+| GET | `/scores/subjects?classId=` | staff (`academics.view`) | Subjects mapped to the class (falls back to all active subjects). |
+| GET | `/scores?classId=&subjectId=` | staff (`academics.view`) | Roster + current raw exam mark / total for the current term. |
+| POST | `/scores` | staff (`academics.edit`) | `{ subjectId, marks:[{student_id,exam_score}] }` (raw 0–100). Host converts + totals with the school's weighting and refreshes the cloud snapshot. |
+| GET | `/canteen/student/:id` | staff (`canteen.view`) | A student's canteen balance for the current term (daily rate, unpaid days, amount owed). |
+| POST | `/canteen/collect` | staff (`canteen.create`) | `{ student_id, amount, payment_method, notes }`. Records the payment, marks covered days paid, posts to Finance, and generates + delivers a receipt. |
 
 Every response is `{ ok: boolean, ... }`. Errors use HTTP status codes
 (`401` unauthorized, `403` forbidden/out-of-scope, `429` rate-limited).
@@ -84,8 +91,11 @@ Every response is `{ ok: boolean, ... }`. Errors use HTTP status codes
 2. **Auth:** parent vs staff login; store the token in secure storage.
 3. **Parent tabs:** Children → per-child fees/canteen/attendance/reports,
    Notifications, Pay (initiates a payment the host records + receipts).
-4. **Staff tabs:** role-driven — Dashboard, Classes/Attendance, Scores,
-   Fees/Debtors, based on `/me` permissions.
+4. **Staff tabs:** role-driven — Dashboard (with quick actions), Students,
+   Debtors, Account. The dashboard surfaces **Take Attendance**, **Enter
+   Scores**, and **Collect Canteen** actions based on `/me` permissions
+   (`students`/`academics` edit, `academics` edit, `canteen` create), each
+   opening a task screen that writes back to the host.
 5. Keep all writes idempotent and queue them offline; reconcile to the host.
 
 ## Roadmap → multi-school website (SaaS)

@@ -14,7 +14,7 @@ export function Card({ children, style }) {
 }
 
 export function H1({ children }) { return <Text style={styles.h1}>{children}</Text>; }
-export function H2({ children }) { return <Text style={styles.h2}>{children}</Text>; }
+export function H2({ children, style }) { return <Text style={[styles.h2, style]}>{children}</Text>; }
 export function Muted({ children, style }) { return <Text style={[styles.muted, style]}>{children}</Text>; }
 
 export function Button({ title, onPress, disabled, variant = 'primary' }) {

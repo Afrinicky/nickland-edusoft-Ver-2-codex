@@ -55,7 +55,21 @@ export const api = {
   dashboard: (token) => request('/dashboard', { token }),
   students: (token, classId) => request(`/students${classId ? `?classId=${classId}` : ''}`, { token }),
   debtors: (token) => request('/fees/debtors', { token }),
+  classes: (token) => request('/classes', { token }),
+
+  // Staff — attendance register
+  attendanceRoster: (token, classId, date) => request(`/attendance?classId=${classId}&date=${encodeURIComponent(date)}`, { token }),
   markAttendance: (token, date, marks) => request('/attendance', { method: 'POST', token, body: { date, marks } }),
+
+  // Staff — score entry (raw exam marks 0–100 for a class + subject)
+  scoreSubjects: (token, classId) => request(`/scores/subjects?classId=${classId}`, { token }),
+  scoreSheet: (token, classId, subjectId) => request(`/scores?classId=${classId}&subjectId=${subjectId}`, { token }),
+  saveScores: (token, subjectId, marks) => request('/scores', { method: 'POST', token, body: { subjectId, marks } }),
+
+  // Staff — canteen collection
+  canteenStudent: (token, studentId) => request(`/canteen/student/${studentId}`, { token }),
+  canteenCollect: (token, { student_id, amount, payment_method, notes }) =>
+    request('/canteen/collect', { method: 'POST', token, body: { student_id, amount, payment_method, notes } }),
 };
 
 export function money(n) {
