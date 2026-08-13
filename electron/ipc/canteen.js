@@ -178,7 +178,9 @@ function recordCanteenPayment(db, data) {
     `).run(
       data.student_id, termId, paymentDate, amount,
       dailyRate, days, startDate, endDate,
-      data.received_by || '', data.notes || ''
+      // NULL, not '' — received_by is a users(id) FK; an empty string is never a
+      // valid id and violates the constraint when foreign_keys is enforced.
+      data.received_by || null, data.notes || ''
     );
     const paymentId = paymentResult.lastInsertRowid;
     const insStatus = db.prepare(`

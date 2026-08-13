@@ -100,7 +100,7 @@ Modules where you **match or beat** the standard: payroll with statutory PAYE/SS
 
 ## 4. Cross-cutting concerns
 
-- **Testing is very thin.** One `test/regressions.js` (guarding the sync-version bug) plus cloud portal/e2e tests. The large desktop IPC surface (40+ handlers, a 1,656-line schema) has no unit/integration coverage — risky for a product schools depend on for money and grades.
+- **Testing — improving.** `test/regressions.js` now also covers the core money/grades logic: the finance ledger (`postIncome` idempotency + term resolution, `reconcileLedger`), canteen collection (day computation, ledger posting, edge cases), and score weighting (`saveExamMark`). Writing these **caught a live bug**: `canteen_payments.daily_rate` was written by the record-payment flow but never created in the schema, so canteen collection failed on any fresh database (fixed via migration 25). Coverage of the remaining IPC surface (fees, payroll, reports) is still the next step.
 - **Sync robustness is good.** The outbox (monotonic versions, backoff→park, retention) is well-designed and now carries balances, receipts, attendance, results, announcements, and parent auth. Depth (history, per-assessment) is the remaining ceiling, not breadth (§2.4).
 - **Security posture is reasonable** (bearer tokens hashed at rest, per-device revocation, HMAC webhooks, HTTPS-only cloud, rate-limited auth). Worth a formal review of: token/session expiry on the desktop, parent self-registration matching rules (impersonation risk), and RLS enforcement on the Neon tenant tables.
 - **Multi-school / SaaS** is designed (per-tenant `school_id`, API keys) but the hosted product (billing, per-school onboarding, tenant admin) isn't built yet.
