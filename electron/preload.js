@@ -181,6 +181,18 @@ const api = {
     delete:            (id)                  => ipcRenderer.invoke('announcements:delete', id),
   },
 
+  // ── Timetable (bell schedule + per-class weekly grid) ──
+  timetable: {
+    listPeriods:       ()                    => ipcRenderer.invoke('timetable:list-periods'),
+    seedDefaultPeriods:()                    => ipcRenderer.invoke('timetable:seed-default-periods'),
+    savePeriod:        (data)                => ipcRenderer.invoke('timetable:save-period', data),
+    deletePeriod:      (id)                  => ipcRenderer.invoke('timetable:delete-period', id),
+    getClass:          (classId)             => ipcRenderer.invoke('timetable:get-class', { classId }),
+    saveEntry:         (data)                => ipcRenderer.invoke('timetable:save-entry', data),
+    deleteEntry:       (data)                => ipcRenderer.invoke('timetable:delete-entry', data),
+    getTeacher:        (staffId)             => ipcRenderer.invoke('timetable:get-teacher', { staffId }),
+  },
+
   // ── Cloud sync (thin-cloud, multi-school portal) ──
   cloud: {
     status:            ()                    => ipcRenderer.invoke('cloud:status'),

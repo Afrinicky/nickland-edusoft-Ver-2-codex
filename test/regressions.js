@@ -320,5 +320,45 @@ console.log('\n── Schema ──');
   ck('re-running migrations logs no failures', errs === 0);
 }
 
+console.log('\n── Timetable ──');
+{
+  const db = makeDb();
+  const tt = require(path.join(ROOT, 'electron/ipc/timetable.js'));
+
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
+  ck('migrations create timetable_periods', tables.includes('timetable_periods'));
+  ck('migrations create timetable_entries', tables.includes('timetable_entries'));
+
+  // Minimal fixture: two periods, one class, one subject, one teacher.
+  db.exec("INSERT INTO timetable_periods (id,label,start_time,end_time,display_order,is_break) VALUES (1,'Period 1','08:00','08:40',0,0),(2,'Break','08:40','09:00',1,1);");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10);");
+  db.exec("INSERT INTO subjects (id,name,code,is_active) VALUES (1,'Mathematics','MATH',1);");
+  db.exec("INSERT INTO staff (id,surname,first_name,role,status) VALUES (7,'Mensah','Ama','teacher','Active');");
+
+  // Assign Monday Period 1 → Maths with teacher 7.
+  db.prepare(`INSERT INTO timetable_entries (class_group_id,day_of_week,period_id,subject_id,teacher_id)
+              VALUES (1,1,1,1,7)`).run();
+
+  const grid = tt.getClassTimetable(db, 1);
+  ck('class grid returns the shared periods', grid.periods.length === 2);
+  ck('class grid keys a cell by day:period with names',
+    grid.entries['1:1'] && grid.entries['1:1'].subject_name === 'Mathematics' && grid.entries['1:1'].teacher_name === 'Ama Mensah');
+  ck('class grid has an empty cell where unset', !grid.entries['2:1']);
+
+  const teacher = tt.getTeacherTimetable(db, 7);
+  const mon = teacher.days.find(d => d.value === 1);
+  ck('teacher timetable groups entries by weekday',
+    mon && mon.periods.length === 1 && mon.periods[0].class_name === 'BS5' && mon.periods[0].subject_name === 'Mathematics');
+  ck('teacher timetable is empty on days with no entries',
+    teacher.days.find(d => d.value === 3).periods.length === 0);
+
+  // UNIQUE(class,day,period): re-assigning the same cell upserts, not duplicates.
+  db.prepare(`INSERT INTO timetable_entries (class_group_id,day_of_week,period_id,subject_id,teacher_id)
+              VALUES (1,1,1,1,7)
+              ON CONFLICT (class_group_id,day_of_week,period_id) DO UPDATE SET subject_id=excluded.subject_id`).run();
+  const count = db.prepare('SELECT COUNT(*) c FROM timetable_entries WHERE class_group_id=1 AND day_of_week=1 AND period_id=1').get().c;
+  ck('one cell holds at most one entry', count === 1);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

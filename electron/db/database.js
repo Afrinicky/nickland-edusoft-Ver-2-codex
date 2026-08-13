@@ -1628,6 +1628,36 @@ function runMigrations(db) {
     ins.run('backup_cloud_path', '');       // cloud-sync folder (Google Drive Desktop, etc.)
     ins.run('backup_last_auto_at', '');
   });
+
+  // 22. Timetable — a school-wide bell schedule (periods) plus per-class,
+  //     per-day entries mapping a period to a subject + teacher. Kept simple:
+  //     one grid per class, Mon–Fri, reusing the shared period rows so break /
+  //     lunch line up across classes. teacher_id references staff.id so a
+  //     teacher's own timetable is a straight lookup by their staff record.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS timetable_periods (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        label         TEXT NOT NULL,
+        start_time    TEXT NOT NULL,          -- 'HH:MM' (24h)
+        end_time      TEXT NOT NULL,
+        display_order INTEGER NOT NULL DEFAULT 0,
+        is_break      INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS timetable_entries (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        class_group_id INTEGER NOT NULL,
+        day_of_week    INTEGER NOT NULL,       -- 1=Mon … 5=Fri
+        period_id      INTEGER NOT NULL,
+        subject_id     INTEGER,
+        teacher_id     INTEGER,                -- staff.id
+        notes          TEXT,
+        UNIQUE (class_group_id, day_of_week, period_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_tt_entries_class   ON timetable_entries(class_group_id);
+      CREATE INDEX IF NOT EXISTS idx_tt_entries_teacher ON timetable_entries(teacher_id);
+    `);
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

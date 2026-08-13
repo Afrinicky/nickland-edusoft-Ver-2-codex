@@ -518,6 +518,39 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, result);
   });
 
+  // ── Timetable: the signed-in teacher's own week (+ today) ──
+  add('GET', `${API}/timetable/mine`, async (ctx, req, res) => {
+    if (ctx.role !== 'staff') return json(res, 403, { ok: false, error: 'Staff only.' });
+    const staffId = ctx.user.staff_id;
+    if (!staffId) return json(res, 200, { ok: true, has_staff: false, days: [], today: null });
+    const tt = require('../ipc/timetable');
+    const data = tt.getTeacherTimetable(db, staffId);
+    const jsDay = new Date().getDay(); // 0=Sun … 6=Sat
+    const todayVal = (jsDay >= 1 && jsDay <= 5) ? jsDay : null;
+    const today = todayVal ? (data.days.find(d => d.value === todayVal) || null) : null;
+    return json(res, 200, { ok: true, has_staff: true, days: data.days, today });
+  });
+
+  // ── Timetable: a class grid (staff who can view students/academics) ──
+  add('GET', `${API}/timetable/class/:id`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'staff' || (!can(ctx, 'academics', 'view') && !can(ctx, 'students', 'view'))) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const tt = require('../ipc/timetable');
+    return json(res, 200, { ok: true, ...tt.getClassTimetable(db, parseInt(params.id, 10)) });
+  });
+
+  // ── Timetable: a parent's child's class grid ──
+  add('GET', `${API}/parent/children/:id/timetable`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const stu = db.prepare('SELECT current_class_id FROM students WHERE id = ?').get(sid);
+    if (!stu || !stu.current_class_id) return json(res, 200, { ok: true, class: null, days: [], periods: [], entries: {} });
+    const tt = require('../ipc/timetable');
+    return json(res, 200, { ok: true, ...tt.getClassTimetable(db, stu.current_class_id) });
+  });
+
   function readRaw(req) {
     return new Promise((resolve) => {
       let d = ''; let tooBig = false;
