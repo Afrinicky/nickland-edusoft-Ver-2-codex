@@ -51,6 +51,9 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | GET | `/parent/children/:id/intents` | parent | Track submitted payments + status. |
 | GET | `/parent/notifications` | parent | Messages sent to the parent's contacts. |
 | GET | `/parent/children/:id/timetable` | parent | The child's class timetable (bell schedule + weekly grid). |
+| GET | `/parent/messages` | parent | The parent's message threads with the school. |
+| GET | `/parent/messages/:id` | parent | One thread with its messages (marks it read for the parent). |
+| POST | `/parent/messages` | parent | `{ threadId?, studentId?, subject?, body }` — start or continue a thread. |
 
 ### Payment gateway (Paystack by default; pluggable per school)
 - Configured in Settings → Online Payments (`payment_gateway`, `paystack_secret_key`, …).

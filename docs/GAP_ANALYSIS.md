@@ -84,7 +84,7 @@ Modules that mature commercial SMS products ship and this platform **does not ye
 |---|---|---|
 | **Timetable / scheduling** | ✅ Added (this branch) | School bell schedule + per-class weekly grid; desktop authoring, teacher "today/my week" on mobile, class timetable in the parent view. |
 | **Homework / assignments** | ❌ Absent (only lesson notes) | Parents increasingly expect to see assignments & due dates. |
-| **Two-way communication / messaging** | ❌ Outbound only | Notifications are one-way (SMS/email out). No parent↔school inbox/chat/threads. |
+| **Two-way communication / messaging** | ✅ Added (this branch) | Parent↔school threads: desktop Messages page, parent mobile tab, portal read view; staff replies mirror to SMS/email. (Parent-reply over the cloud portal is a noted follow-up; over LAN it's fully two-way.) |
 | **Library circulation** | ❌ Absent | "Books" today is a fees item, not catalog + loans/returns. |
 | **Transport / bus routes** | ❌ Absent | Common add-on; route, stop, and pickup tracking. |
 | **Online admissions / enquiry intake** | ❌ Absent | A public "apply/enquire" form feeding the admissions pipeline. |
@@ -117,7 +117,7 @@ Modules where you **match or beat** the standard: payroll with statutory PAYE/SS
 
 ### P1 — Close the standard-SMS breadth gap
 4. **Timetable module** ✅ **Done on this branch** — desktop authoring (bell schedule + per-class grid) with **Excel + PDF export**, teacher "today / my week" on mobile, the class timetable in the parent view, **and projected into the cloud snapshot so it shows off-LAN** (web portal + mobile cloud mode).
-5. **Two-way messaging** (parent↔school threads, mirrored to SMS/email; the transport layer is already there).
+5. **Two-way messaging** ✅ **Done on this branch** — parent↔school threads with a desktop Messages page (staff), a parent mobile tab (compose/reply on LAN, read over the internet), and a portal read view; staff replies mirror to SMS/email. Follow-up: the portal/cloud **write** path so parents can reply over the internet (deferred to avoid cloud-authored snapshot version regressions).
 6. **Homework/assignments** surfaced to parents.
 
 ### P2 — Differentiate & harden

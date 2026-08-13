@@ -143,6 +143,34 @@ export const api = {
         }))
       : request('/parent/notifications', { token }),
 
+  // Messaging (parent). Host mode is fully two-way; cloud mode is read-only
+  // (the portal serves thread snapshots; replying over the internet is a
+  // follow-up — parents on LAN reply in-app, and the SMS mirror reaches all).
+  parentThreads: (token) =>
+    MODE === 'cloud'
+      ? request('/portal/messages', { token }).then(r => ({
+          ok: true,
+          threads: (r.threads || []).map(t => ({
+            id: t.uuid, uuid: t.uuid, subject: t.subject, student_name: t.student_name,
+            last_message_at: t.last_message_at, parent_unread: t.parent_unread || 0,
+            preview: (t.messages && t.messages.length) ? String(t.messages[t.messages.length - 1].body).slice(0, 120) : '',
+          })),
+        }))
+      : request('/parent/messages', { token }),
+  parentThread: (token, id) =>
+    MODE === 'cloud'
+      ? request('/portal/messages', { token }).then(r => {
+          const t = (r.threads || []).find(x => String(x.uuid) === String(id));
+          return t
+            ? { ok: true, thread: { id: t.uuid, subject: t.subject, student_name: t.student_name }, messages: t.messages || [] }
+            : { ok: false, error: 'Conversation not found.' };
+        })
+      : request(`/parent/messages/${id}`, { token }),
+  parentSendMessage: (token, { threadId, studentId, subject, body }) =>
+    MODE === 'cloud'
+      ? hostOnly('Sending a message')()
+      : request('/parent/messages', { method: 'POST', token, body: { threadId, studentId, subject, body } }),
+
   // Timetable
   myTimetable: (token) => request('/timetable/mine', { token }),   // staff (host)
   childTimetable: (token, id) =>
