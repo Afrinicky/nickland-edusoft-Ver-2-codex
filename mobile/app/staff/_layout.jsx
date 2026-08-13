@@ -20,6 +20,7 @@ export default function StaffLayout() {
       <Tabs.Screen name="attendance" options={{ href: null, title: 'Attendance' }} />
       <Tabs.Screen name="scores" options={{ href: null, title: 'Enter Scores' }} />
       <Tabs.Screen name="canteen" options={{ href: null, title: 'Canteen' }} />
+      <Tabs.Screen name="timetable" options={{ href: null, title: 'My Timetable' }} />
     </Tabs>
   );
 }

@@ -38,6 +38,7 @@ export default function Dashboard() {
     { key: 'attendance', label: 'Take Attendance', emoji: '📝', show: allowed(profile, 'students', 'edit') || allowed(profile, 'academics', 'edit') },
     { key: 'scores', label: 'Enter Scores', emoji: '✍️', show: allowed(profile, 'academics', 'edit') },
     { key: 'canteen', label: 'Collect Canteen', emoji: '🍽️', show: allowed(profile, 'canteen', 'create') },
+    { key: 'timetable', label: 'My Timetable', emoji: '📅', show: true },
   ].filter(a => a.show);
 
   return (

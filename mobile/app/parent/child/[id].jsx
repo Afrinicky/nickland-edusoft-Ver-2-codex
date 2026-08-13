@@ -15,18 +15,20 @@ export default function ChildDetail() {
   const [data, setData] = useState(null);
   const [report, setReport] = useState(null);
   const [intents, setIntents] = useState([]);
+  const [timetable, setTimetable] = useState(null);
   const [error, setError] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [d, r, it] = await Promise.all([
+      const [d, r, it, tt] = await Promise.all([
         api.child(token, id),
         api.childReport(token, id).catch(() => null),
         api.childIntents(token, id).catch(() => ({ intents: [] })),
+        api.childTimetable(token, id).catch(() => null),
       ]);
-      setData(d); setReport(r); setIntents(it.intents || []);
+      setData(d); setReport(r); setIntents(it.intents || []); setTimetable(tt);
     } catch (e) { setError(e.message); }
   }, [token, id]);
 
@@ -90,6 +92,8 @@ export default function ChildDetail() {
         }
       </Card>
 
+      <TimetableCard tt={timetable} />
+
       <Card>
         <H2>Payments</H2>
         {(!data.payments || data.payments.length === 0)
@@ -107,6 +111,37 @@ export default function ChildDetail() {
           balance={c.fees.balance} onDone={() => { setPayOpen(false); load(); }} />
       )}
     </Screen>
+  );
+}
+
+// Class timetable, shown per weekday. Host mode only — the cloud snapshot
+// doesn't carry the timetable yet, so this renders nothing over the internet.
+function TimetableCard({ tt }) {
+  if (!tt || !tt.periods || !tt.periods.length) return null;
+  const days = tt.days || [];
+  const byDay = days.map(d => {
+    const lessons = tt.periods
+      .filter(p => !p.is_break)
+      .map(p => ({ p, cell: tt.entries[`${d.value}:${p.id}`] }))
+      .filter(x => x.cell && (x.cell.subject_name || x.cell.teacher_name));
+    return { ...d, lessons };
+  }).filter(d => d.lessons.length > 0);
+  if (byDay.length === 0) return null;
+
+  return (
+    <Card>
+      <H2>Timetable{tt.class?.name ? ` — ${tt.class.name}` : ''}</H2>
+      {byDay.map(d => (
+        <View key={d.value} style={{ marginTop: 8 }}>
+          <Text style={{ fontWeight: '700', color: colors.primary }}>{d.label}</Text>
+          {d.lessons.map(({ p, cell }, i) => (
+            <Row key={i}
+              left={<><Text>{cell.subject_name || 'Lesson'}</Text><Muted>{cell.teacher_name || ''}</Muted></>}
+              right={<Muted>{p.start_time}–{p.end_time}</Muted>} />
+          ))}
+        </View>
+      ))}
+    </Card>
   );
 }
 

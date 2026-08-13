@@ -143,6 +143,13 @@ export const api = {
         }))
       : request('/parent/notifications', { token }),
 
+  // Timetable
+  myTimetable: (token) => request('/timetable/mine', { token }),   // staff (host)
+  childTimetable: (token, id) =>
+    MODE === 'cloud'
+      ? Promise.resolve({ ok: true, class: null, days: [], periods: [], entries: {} }) // cloud snapshot doesn't carry the timetable yet
+      : request(`/parent/children/${id}/timetable`, { token }),
+
   // Staff (host only)
   dashboard: (token) => request('/dashboard', { token }),
   students: (token, classId) => request(`/students${classId ? `?classId=${classId}` : ''}`, { token }),

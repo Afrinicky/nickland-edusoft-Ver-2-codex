@@ -50,6 +50,7 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | GET | `/parent/pay/verify/:reference` | parent | Verify + settle an online payment (pull). |
 | GET | `/parent/children/:id/intents` | parent | Track submitted payments + status. |
 | GET | `/parent/notifications` | parent | Messages sent to the parent's contacts. |
+| GET | `/parent/children/:id/timetable` | parent | The child's class timetable (bell schedule + weekly grid). |
 
 ### Payment gateway (Paystack by default; pluggable per school)
 - Configured in Settings → Online Payments (`payment_gateway`, `paystack_secret_key`, …).
@@ -72,6 +73,8 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | POST | `/scores` | staff (`academics.edit`) | `{ subjectId, marks:[{student_id,exam_score}] }` (raw 0–100). Host converts + totals with the school's weighting and refreshes the cloud snapshot. |
 | GET | `/canteen/student/:id` | staff (`canteen.view`) | A student's canteen balance for the current term (daily rate, unpaid days, amount owed). |
 | POST | `/canteen/collect` | staff (`canteen.create`) | `{ student_id, amount, payment_method, notes }`. Records the payment, marks covered days paid, posts to Finance, and generates + delivers a receipt. |
+| GET | `/timetable/mine` | staff | The signed-in teacher's own week, grouped by weekday, plus `today`. |
+| GET | `/timetable/class/:id` | staff (`academics`/`students` view) | A class's timetable grid (periods + entries). |
 
 Every response is `{ ok: boolean, ... }`. Errors use HTTP status codes
 (`401` unauthorized, `403` forbidden/out-of-scope, `429` rate-limited).
