@@ -202,6 +202,7 @@ async function renderChild(studentId) {
     </div>
     ${attendanceCard(c.attendance)}
     ${reportCard(c.report)}
+    ${timetableCard(c.timetable)}
     <div class="card"><h3>Receipts</h3><div id="rcpts"><div class="spin"></div></div></div>
     <div class="muted center">Updated ${c.updated_at?new Date(c.updated_at).toLocaleString():'—'}</div>`;
   // Load receipts (shared endpoint; filter to this child)
@@ -237,6 +238,27 @@ function attendanceCard(a) {
       <div class="stat"><div class="l">Absent</div><div class="v ${(a.absent||0)>0?'bad':''}">${a.absent||0}</div></div>
     </div>
     <div class="row" style="margin-top:6px"><span>Attendance rate</span><strong>${pct}%</strong></div>
+  </div>`;
+}
+function timetableCard(tt) {
+  if (!tt || !(tt.periods||[]).length) return '';
+  const days = tt.days || [];
+  const byDay = days.map(d => {
+    const lessons = (tt.periods||[]).filter(p => !p.is_break)
+      .map(p => ({ p, cell: (tt.entries||{})[`${d.value}:${p.id}`] }))
+      .filter(x => x.cell && (x.cell.subject_name || x.cell.teacher_name));
+    return { d, lessons };
+  }).filter(x => x.lessons.length);
+  if (!byDay.length) return '';
+  return `<div class="card">
+    <h3>Timetable ${tt.class && tt.class.name ? '· '+esc(tt.class.name) : ''}</h3>
+    ${byDay.map(({d, lessons}) => `<div style="margin-top:8px">
+      <div style="font-weight:700; color:var(--navy)">${esc(d.label)}</div>
+      ${lessons.map(({p, cell}) => `<div class="row">
+        <div><div>${esc(cell.subject_name||'Lesson')}</div><div class="muted" style="font-size:12px">${esc(cell.teacher_name||'')}</div></div>
+        <div class="muted">${esc(p.start_time)}–${esc(p.end_time)}</div>
+      </div>`).join('')}
+    </div>`).join('')}
   </div>`;
 }
 function reportCard(r) {

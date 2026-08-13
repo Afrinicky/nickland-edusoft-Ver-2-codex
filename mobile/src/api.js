@@ -147,7 +147,11 @@ export const api = {
   myTimetable: (token) => request('/timetable/mine', { token }),   // staff (host)
   childTimetable: (token, id) =>
     MODE === 'cloud'
-      ? Promise.resolve({ ok: true, class: null, days: [], periods: [], entries: {} }) // cloud snapshot doesn't carry the timetable yet
+      ? cloudChildren(token).then(cs => {
+          const c = cs.find(x => String(x.id) === String(id));
+          const tt = c && c.timetable;
+          return tt ? { ok: true, ...tt } : { ok: true, class: null, days: [], periods: [], entries: {} };
+        })
       : request(`/parent/children/${id}/timetable`, { token }),
 
   // Staff (host only)
