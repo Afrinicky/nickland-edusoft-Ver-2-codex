@@ -56,18 +56,49 @@ export default function TimetableIndex() {
 
       <BellSchedule periods={periods} canEdit={canEdit} onChange={loadPeriods} toast={toast} />
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '24px 0 12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '24px 0 12px', flexWrap: 'wrap' }}>
         <h2 style={{ color: NAVY, margin: 0 }}>Class timetable</h2>
         <select value={classId ?? ''} onChange={e => setClassId(Number(e.target.value))}
           style={selStyle}>
           {(classes || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+        <ExportButtons classId={classId} className={(classes || []).find(c => c.id === classId)?.name} toast={toast} />
       </div>
 
       {grid
         ? <ClassGrid grid={grid} subjects={subjects || []} teachers={teachers}
             classId={classId} canEdit={canEdit} onSaved={() => window.api.timetable.getClass(classId).then(setGrid)} toast={toast} />
         : <div>Select a class.</div>}
+    </div>
+  );
+}
+
+function ExportButtons({ classId, className, toast }) {
+  const [busy, setBusy] = useState(null);
+  async function run(format) {
+    if (!classId) return;
+    const ext = format === 'excel' ? 'xlsx' : 'pdf';
+    const safe = String(className || 'class').replace(/[^a-z0-9]+/gi, '_');
+    const res = await window.api.app.showSaveDialog({
+      title: `Export Timetable as ${format === 'excel' ? 'Excel' : 'PDF'}`,
+      defaultPath: `timetable_${safe}.${ext}`,
+      filters: [{ name: format === 'excel' ? 'Excel Workbook' : 'PDF Document', extensions: [ext] }],
+    });
+    if (res.canceled || !res.filePath) return;
+    setBusy(format);
+    try {
+      const out = format === 'excel'
+        ? await window.api.timetable.exportClassExcel({ classId, savePath: res.filePath })
+        : await window.api.timetable.exportClassPdf({ classId, savePath: res.filePath });
+      if (out.ok) toast(`Timetable exported to ${ext.toUpperCase()}.`, 'success');
+      else toast(out.error || 'Export failed.', 'error');
+    } catch (e) { toast(e?.message || 'Export failed.', 'error'); }
+    finally { setBusy(null); }
+  }
+  return (
+    <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+      <button onClick={() => run('excel')} disabled={!!busy} style={ghostBtn}>{busy === 'excel' ? 'Exporting…' : 'Export Excel'}</button>
+      <button onClick={() => run('pdf')} disabled={!!busy} style={ghostBtn}>{busy === 'pdf' ? 'Exporting…' : 'Export PDF'}</button>
     </div>
   );
 }
@@ -196,4 +227,5 @@ const cellSel = { width: '100%', padding: '5px 6px', border: '1px solid #E2E8F0'
 const selStyle = { padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 8, fontSize: 14, minWidth: 200 };
 const inputStyle = { padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 8, fontSize: 14, width: 160 };
 const primaryBtn = { background: NAVY, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, cursor: 'pointer' };
+const ghostBtn = { background: '#fff', color: NAVY, border: '1px solid #E2E8F0', borderRadius: 8, padding: '8px 14px', fontWeight: 600, cursor: 'pointer' };
 const linkBtn = { background: 'none', border: 'none', color: '#B91C1C', cursor: 'pointer', fontWeight: 600 };

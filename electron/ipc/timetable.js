@@ -1,6 +1,12 @@
 // Timetable IPC handlers — bell schedule (periods) + per-class weekly grid.
 // Copyright © 2026 Nickland Sales. All rights reserved.
 //
+const fs = require('fs');
+const path = require('path');
+const { getSetting } = require('../utils/idgen');
+// ExcelJS + electron are required lazily inside the export handlers so this
+// module still loads in the plain-Node test harness (no node_modules).
+//
 // Data model (see migration 22):
 //   timetable_periods  — one school-wide bell schedule (label + start/end,
 //                        display_order, is_break). Break/lunch rows line up
@@ -140,6 +146,128 @@ function registerTimetableHandlers(ipcMain, db) {
   });
 
   ipcMain.handle('timetable:get-teacher', (_e, { staffId }) => getTeacherTimetable(db, staffId));
+
+  ipcMain.handle('timetable:export-class-excel', async (_e, { classId, savePath }) => {
+    try { await exportClassExcel(db, classId, savePath); return { ok: true, path: savePath }; }
+    catch (err) { return { ok: false, error: err?.message || 'Excel export failed' }; }
+  });
+
+  ipcMain.handle('timetable:export-class-pdf', async (_e, { classId, savePath }) => {
+    try { await exportClassPdf(db, classId, savePath); return { ok: true, path: savePath }; }
+    catch (err) { return { ok: false, error: err?.message || 'PDF export failed' }; }
+  });
+}
+
+// A cell's printable text: subject on top, teacher beneath. Break rows span.
+function cellText(cell) {
+  if (!cell) return '';
+  return [cell.subject_name, cell.teacher_name].filter(Boolean).join('\n');
+}
+
+function ensureOutputDir(savePath) {
+  const dir = path.dirname(savePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+async function exportClassExcel(db, classId, savePath) {
+  ensureOutputDir(savePath);
+  const ExcelJS = require('exceljs');
+  const grid = getClassTimetable(db, classId);
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Nickland Edusoft';
+  const ws = wb.addWorksheet('Timetable');
+  const cols = grid.days.length + 1;
+  const schoolName = getSetting(db, 'school_name', 'Nickland Edusoft');
+
+  ws.mergeCells(1, 1, 1, cols);
+  ws.getCell(1, 1).value = schoolName;
+  ws.getCell(1, 1).font = { size: 16, bold: true };
+  ws.getCell(1, 1).alignment = { horizontal: 'center' };
+  ws.mergeCells(2, 1, 2, cols);
+  ws.getCell(2, 1).value = `Class Timetable — ${grid.class?.name || ''}`;
+  ws.getCell(2, 1).font = { bold: true, size: 13 };
+  ws.getCell(2, 1).alignment = { horizontal: 'center' };
+  ws.addRow([]);
+
+  const header = ws.addRow(['Period', ...grid.days.map(d => d.label)]);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.eachCell(c => {
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B3A6B' } };
+    c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  });
+
+  for (const p of grid.periods) {
+    if (p.is_break) {
+      const r = ws.addRow([`${p.label} (${p.start_time}–${p.end_time})`, ...grid.days.map(() => '')]);
+      ws.mergeCells(r.number, 2, r.number, cols);
+      r.getCell(1).value = `${p.label} (${p.start_time}–${p.end_time})`;
+      r.eachCell(c => { c.alignment = { horizontal: 'center', vertical: 'middle' }; c.font = { italic: true, color: { argb: 'FF9A6B00' } }; });
+      continue;
+    }
+    const row = ws.addRow([
+      `${p.label}\n${p.start_time}–${p.end_time}`,
+      ...grid.days.map(d => cellText(grid.entries[`${d.value}:${p.id}`])),
+    ]);
+    row.alignment = { vertical: 'middle', wrapText: true };
+  }
+
+  ws.getColumn(1).width = 16;
+  for (let i = 2; i <= cols; i++) ws.getColumn(i).width = 22;
+  ws.eachRow((row, n) => { if (n >= 4) row.eachCell(c => { c.border = thin(); }); });
+
+  await wb.xlsx.writeFile(savePath);
+}
+
+function thin() {
+  const s = { style: 'thin', color: { argb: 'FFD9DEE8' } };
+  return { top: s, left: s, bottom: s, right: s };
+}
+
+async function exportClassPdf(db, classId, savePath) {
+  ensureOutputDir(savePath);
+  const grid = getClassTimetable(db, classId);
+  const schoolName = getSetting(db, 'school_name', 'Nickland Edusoft');
+  const motto = getSetting(db, 'school_motto', '');
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const head = grid.days.map(d => `<th>${esc(d.label)}</th>`).join('');
+  const rows = grid.periods.map(p => {
+    if (p.is_break) {
+      return `<tr><td class="pd">${esc(p.label)}<div class="t">${esc(p.start_time)}–${esc(p.end_time)}</div></td>
+        <td class="brk" colspan="${grid.days.length}">${esc(p.label)}</td></tr>`;
+    }
+    const cells = grid.days.map(d => {
+      const c = grid.entries[`${d.value}:${p.id}`];
+      return `<td>${c ? `<div class="sub">${esc(c.subject_name || '')}</div><div class="tch">${esc(c.teacher_name || '')}</div>` : ''}</td>`;
+    }).join('');
+    return `<tr><td class="pd">${esc(p.label)}<div class="t">${esc(p.start_time)}–${esc(p.end_time)}</div></td>${cells}</tr>`;
+  }).join('');
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    @page { size: A4 landscape; margin: 12mm; }
+    body { font-family: Arial, sans-serif; color:#111827; }
+    h1 { color:#1B3A6B; text-align:center; margin:0; font-size:22px; }
+    .motto { text-align:center; color:#9A6B00; font-style:italic; margin:2px 0 2px; }
+    h2 { text-align:center; font-size:14px; margin:4px 0 12px; }
+    table { width:100%; border-collapse:collapse; font-size:11px; table-layout:fixed; }
+    th { background:#1B3A6B; color:#fff; padding:8px 4px; border:1px solid #d9dee8; }
+    td { border:1px solid #d9dee8; padding:6px 5px; vertical-align:top; height:42px; }
+    .pd { background:#F8FAFC; font-weight:700; width:110px; }
+    .pd .t { font-weight:400; color:#94A3B8; font-size:10px; }
+    .sub { font-weight:700; } .tch { color:#64748B; font-size:10px; }
+    .brk { text-align:center; color:#9A6B00; font-weight:700; background:#FFFBEB; }
+  </style></head><body>
+    <h1>${esc(schoolName)}</h1>
+    ${motto ? `<div class="motto">${esc(motto)}</div>` : ''}
+    <h2>Class Timetable — ${esc(grid.class?.name || '')}</h2>
+    <table><thead><tr><th>Period</th>${head}</tr></thead><tbody>${rows}</tbody></table>
+  </body></html>`;
+
+  const { BrowserWindow } = require('electron');
+  const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
+  await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  const data = await win.webContents.printToPDF({ pageSize: 'A4', landscape: true, printBackground: true });
+  fs.writeFileSync(savePath, data);
+  win.close();
 }
 
 module.exports = registerTimetableHandlers;

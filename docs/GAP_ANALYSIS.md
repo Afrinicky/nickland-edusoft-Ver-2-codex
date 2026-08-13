@@ -116,7 +116,7 @@ Modules where you **match or beat** the standard: payroll with statutory PAYE/SS
 3. **Unify the client↔cloud contract.** ✅ **Done on this branch (cloud mode).** The mobile app now has two connection modes chosen at *Connect* time: **School Wi-Fi** (LAN/tunnel → the desktop host's `/parent/*` + `/staff` API, full features incl. payments) and **Over the internet** (pick a school → the hosted portal's `/portal/*` API, parent-only read + notices). The API client normalises the cloud `student_snapshot` into the same shapes the parent screens already use, so one build serves both. Staff and payments stay host-only by design (the cloud is a thin read model).
 
 ### P1 — Close the standard-SMS breadth gap
-4. **Timetable module** ✅ **Done on this branch** — desktop authoring (bell schedule + per-class grid), teacher "today / my week" on mobile, the class timetable in the parent view, **and projected into the cloud snapshot so it shows off-LAN** (web portal + mobile cloud mode). Follow-up: a printable/Excel export.
+4. **Timetable module** ✅ **Done on this branch** — desktop authoring (bell schedule + per-class grid) with **Excel + PDF export**, teacher "today / my week" on mobile, the class timetable in the parent view, **and projected into the cloud snapshot so it shows off-LAN** (web portal + mobile cloud mode).
 5. **Two-way messaging** (parent↔school threads, mirrored to SMS/email; the transport layer is already there).
 6. **Homework/assignments** surfaced to parents.
 

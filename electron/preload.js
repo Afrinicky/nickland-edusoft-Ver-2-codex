@@ -191,6 +191,8 @@ const api = {
     saveEntry:         (data)                => ipcRenderer.invoke('timetable:save-entry', data),
     deleteEntry:       (data)                => ipcRenderer.invoke('timetable:delete-entry', data),
     getTeacher:        (staffId)             => ipcRenderer.invoke('timetable:get-teacher', { staffId }),
+    exportClassExcel:  (data)                => ipcRenderer.invoke('timetable:export-class-excel', data),
+    exportClassPdf:    (data)                => ipcRenderer.invoke('timetable:export-class-pdf', data),
   },
 
   // ── Cloud sync (thin-cloud, multi-school portal) ──
