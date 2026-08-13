@@ -85,9 +85,29 @@ Every response is `{ ok: boolean, ... }`. Errors use HTTP status codes
   users/permissions, receipt templates, factory reset) is **desktop-only** and
   intentionally has no mobile endpoints.
 
+## Connection modes (the client speaks two APIs, one build)
+
+The Expo client connects one of two ways, chosen on the **Connect** screen and
+persisted in secure storage (`mode` = `host` | `cloud`):
+
+| Mode | Reaches | Base + routes | Audience | Writes |
+|------|---------|---------------|----------|--------|
+| **host** (School Wi-Fi / tunnel) | the desktop host | `http://<ip>:4747/api/v1` — `/auth/*`, `/parent/*`, staff routes | parents **and** staff | full: attendance, scores, canteen, payments |
+| **cloud** (Over the internet) | the hosted portal | `https://<portal>/api/v1` — `/portal/*` | parents only | read + profile/notices (thin cloud) |
+
+In cloud mode the client picks a school from `GET /portal/schools`, signs in via
+`POST /portal/login` (`{ school_id, identifier, password }`), and reads
+`GET /portal/children|receipts|announcements|me`. The API client
+(`mobile/src/api.js`) **normalises** the cloud `student_snapshot` (which already
+carries fees, canteen, attendance and the academic report) into the same shapes
+the host's `/parent/*` replies use, so the parent screens are identical across
+modes. Staff and payments are intentionally host-only — the cloud is a read
+model, so those controls are hidden when connected over the internet.
+
 ## Building the React Native (Expo) client
-1. **Connect screen:** enter/scan the host URL (shown on the desktop), then
-   `GET /info` to confirm and brand.
+1. **Connect screen:** choose **School Wi-Fi** (enter/scan the host URL, then
+   `GET /info` to confirm and brand) or **Over the internet** (enter the portal
+   URL, then `GET /portal/schools` to pick the school).
 2. **Auth:** parent vs staff login; store the token in secure storage.
 3. **Parent tabs:** Children → per-child fees/canteen/attendance/reports,
    Notifications, Pay (initiates a payment the host records + receipts).
@@ -102,9 +122,11 @@ Every response is `{ ok: boolean, ... }`. Errors use HTTP status codes
 LAN-first today, cloud-ready by design:
 
 1. **Phase 1 (done):** embedded host API + parent identity + role scoping (LAN).
-2. **Phase 2:** off-LAN via a secure tunnel (Cloudflare Tunnel / ngrok) so the
-   same client reaches the host over the internet.
-3. **Phase 3 — hosted portal:** a multi-tenant cloud service
+2. **Phase 2 (done):** off-LAN two ways — a secure tunnel (Cloudflare Tunnel /
+   ngrok) reaches the host with full features, **and** the client's native
+   **cloud mode** reaches the hosted portal directly (parent read model). See
+   "Connection modes" above.
+3. **Phase 3 — hosted portal (in progress):** a multi-tenant cloud service
    (`app.example.com/<school-slug>`), one tenant per school. Each desktop host
    pushes a **scoped, one-way snapshot** (balances, receipts, report cards,
    notices) to its tenant so parents/staff can read when the desktop is offline;

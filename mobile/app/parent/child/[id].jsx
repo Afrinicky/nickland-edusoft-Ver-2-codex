@@ -10,7 +10,8 @@ import { colors } from '../../../src/theme';
 
 export default function ChildDetail() {
   const { id } = useLocalSearchParams();
-  const { token } = useAuth();
+  const { token, mode } = useAuth();
+  const canPay = mode !== 'cloud'; // payments run on the desktop host, not the cloud
   const [data, setData] = useState(null);
   const [report, setReport] = useState(null);
   const [intents, setIntents] = useState([]);
@@ -48,7 +49,7 @@ export default function ChildDetail() {
         <Row left={<Muted>Billed</Muted>} right={<Text>{money(c.fees.billed)}</Text>} />
         <Row left={<Muted>Paid</Muted>} right={<Text style={{ color: colors.success }}>{money(c.fees.paid)}</Text>} />
         <Row left={<Text style={{ fontWeight: '700' }}>Balance</Text>} right={<Text style={{ fontWeight: '800', color: c.fees.balance > 0 ? colors.danger : colors.success }}>{money(c.fees.balance)}</Text>} />
-        <Button title="Make a payment" onPress={() => setPayOpen(true)} />
+        {canPay && <Button title="Make a payment" onPress={() => setPayOpen(true)} />}
         {pendingIntents.length > 0 && (
           <View style={{ marginTop: 10, padding: 10, backgroundColor: '#FFFBEB', borderRadius: 8 }}>
             <Text style={{ color: colors.accent, fontWeight: '700' }}>⏳ {pendingIntents.length} payment(s) awaiting school confirmation</Text>
@@ -101,8 +102,10 @@ export default function ChildDetail() {
         }
       </Card>
 
-      <PayModal open={payOpen} onClose={() => setPayOpen(false)} token={token} childId={id}
-        balance={c.fees.balance} onDone={() => { setPayOpen(false); load(); }} />
+      {canPay && (
+        <PayModal open={payOpen} onClose={() => setPayOpen(false)} token={token} childId={id}
+          balance={c.fees.balance} onDone={() => { setPayOpen(false); load(); }} />
+      )}
     </Screen>
   );
 }

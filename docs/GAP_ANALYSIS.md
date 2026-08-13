@@ -70,7 +70,7 @@ The hosted portal (`cloud/` Node service + `cloud/public/index.html`, and a Pyth
 
 Remaining gaps (not "the data is missing" — it's there):
 
-- **Contract mismatch:** the mobile client calls `/api/v1/parent/*` (served by the desktop host); the cloud exposes `/api/v1/portal/*`. So "the same client reaches the host over the internet" holds via a **tunnel to the desktop**, but the mobile app cannot talk to the **hosted cloud** directly. The two need a unified contract or an adapter.
+- ~~**Contract mismatch**~~ — **closed on this branch.** The mobile app now speaks `/portal/*` in its internet mode and `/parent/*` in its LAN/tunnel mode, from one build (see §5 P0 #3).
 - **Read-model depth:** the snapshot is current-term and summary-level (per-subject totals + grade, average, rank, remarks) — no historical terms and no per-assessment breakdown. Consistent with the "thin cloud" philosophy, but worth noting as a ceiling.
 - **No SaaS control plane:** per-school onboarding and subscription billing aren't built, so this is infrastructure rather than a product yet.
 
@@ -113,7 +113,7 @@ Modules where you **match or beat** the standard: payroll with statutory PAYE/SS
 ### P0 — Make the pillars deliver what they promise
 1. **Turn the teacher app into a working tool.** ✅ **Done on this branch.** Mobile screens + host endpoints now cover **attendance register**, **score entry**, and **canteen collection**, each permission-gated and reusing the desktop's own logic. (Lesson-note submission is the remaining nice-to-have.)
 2. **Put results & attendance in the cloud read-model.** ✅ **Already in the codebase** (commit `f410af3`); this branch adds the end-to-end test that guards the round-trip. The web portal shows a child's results and attendance off-LAN today.
-3. **Unify the client↔cloud contract.** ⏭️ **Still open.** Either have the cloud implement `/api/v1/parent/*`, or add a thin adapter, so the *same* mobile app works over LAN, tunnel, and hosted cloud without a rebuild. This is the next real P0.
+3. **Unify the client↔cloud contract.** ✅ **Done on this branch (cloud mode).** The mobile app now has two connection modes chosen at *Connect* time: **School Wi-Fi** (LAN/tunnel → the desktop host's `/parent/*` + `/staff` API, full features incl. payments) and **Over the internet** (pick a school → the hosted portal's `/portal/*` API, parent-only read + notices). The API client normalises the cloud `student_snapshot` into the same shapes the parent screens already use, so one build serves both. Staff and payments stay host-only by design (the cloud is a thin read model).
 
 ### P1 — Close the standard-SMS breadth gap
 4. **Timetable module** (desktop authoring + "today's periods" on teacher mobile + parent view).
