@@ -255,10 +255,14 @@ function registerFeesHandlers(ipcMain, db) {
   });
 
   ipcMain.handle('fees:debtors-report', (_e, termId) => {
+    // Columns are total_billed / total_paid / generated_at — the previous query
+    // selected total_amount / paid_amount / generated_date, none of which exist,
+    // so the debtors report threw "no such column" every time it was opened.
     return db.prepare(`
       SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names,
-             c.name AS class_name, b.total_amount, b.paid_amount, b.balance,
-             b.generated_date, s.father_contact, s.mother_contact, s.guardian_contact
+             c.name AS class_name,
+             b.total_billed AS total_amount, b.total_paid AS paid_amount, b.balance,
+             b.generated_at AS generated_date, s.father_contact, s.mother_contact, s.guardian_contact
       FROM student_bills b
       JOIN students s ON s.id = b.student_id
       LEFT JOIN class_groups c ON c.id = s.current_class_id

@@ -72,7 +72,14 @@ function setNextRollNumber(db, next) {
 
 function getNextReceiptNumber(db) {
   const current = parseInt(getSetting(db, 'receipt_counter', '1'), 10);
-  db.prepare("UPDATE settings SET value = ? WHERE key = 'receipt_counter'").run(String(current + 1));
+  // Upsert, not a bare UPDATE: a plain UPDATE is a silent no-op when the
+  // receipt_counter row doesn't exist, so the counter never advances and every
+  // receipt reuses number 1 → the second payment hits the UNIQUE constraint on
+  // receipt_number and cannot be recorded.
+  db.prepare(`
+    INSERT INTO settings (key, value, category) VALUES ('receipt_counter', ?, 'system')
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(String(current + 1));
   return current;
 }
 

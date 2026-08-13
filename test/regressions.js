@@ -482,6 +482,38 @@ console.log('\n── Canteen collection ──');
   ck('canteen rejects a non-positive amount', bad.ok === false);
 }
 
+console.log('\n── Fees payment ──');
+{
+  const db = makeDb();
+  // Capture the real IPC handlers so we can invoke the record-payment logic
+  // exactly as the app does, without an Electron runtime.
+  const handlers = {};
+  const ipc = { handle: (name, fn) => { handlers[name] = fn; } };
+  require(path.join(ROOT, 'electron/ipc/fees.js'))(ipc, db);
+  const call = (name, arg) => handlers[name](null, arg);
+
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-04-30',1);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,status) VALUES (1,'A','B','X','Active');");
+  db.exec("INSERT INTO student_bills (id,student_id,term_id,total_billed,total_paid,balance) VALUES (1,1,1,400,0,400);");
+
+  const r1 = call('fees:record-payment', { student_id: 1, student_bill_id: 1, term_id: 1, amount: 150 });
+  ck('fee payment succeeds and returns a receipt number', r1.ok && /^FE\//.test(r1.receipt_number));
+  const bill1 = db.prepare('SELECT total_paid, balance FROM student_bills WHERE id=1').get();
+  ck('fee payment updates the bill (paid + balance)', bill1.total_paid === 150 && bill1.balance === 250);
+  ck('fee payment posts income to the ledger, linked to the payment',
+    db.prepare('SELECT COUNT(*) c FROM income_records WHERE category=\'fees\' AND linked_payment_id=?').get(r1.id).c === 1);
+
+  const r2 = call('fees:record-payment', { student_id: 1, student_bill_id: 1, term_id: 1, amount: 250 });
+  const bill2 = db.prepare('SELECT total_paid, balance FROM student_bills WHERE id=1').get();
+  ck('a second payment clears the balance', bill2.total_paid === 400 && bill2.balance === 0);
+  ck('receipt numbers are unique and increasing', r2.receipt_number !== r1.receipt_number);
+  ck('each payment posts its own ledger row', db.prepare("SELECT COUNT(*) c FROM income_records WHERE category='fees'").get().c === 2);
+
+  const debtors = call('fees:debtors-report', 1);
+  ck('a fully-paid student is not a debtor', Array.isArray(debtors) && debtors.every(d => d.student_id !== 1));
+}
+
 console.log('\n── Scores weighting ──');
 {
   const db = makeDb();
