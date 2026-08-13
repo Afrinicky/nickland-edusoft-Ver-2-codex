@@ -19,8 +19,9 @@ The **desktop (PC host) is genuinely strong** — it already exceeds many commer
 The **two mobile/web pillars are the weak points**, and one of them is weak *against your own description*:
 
 - **The mobile teacher app is read-only.** Teachers can view a dashboard, a student roster, and a debtor list — and nothing else. They cannot take attendance, enter scores, write lesson notes, or message anyone from the phone. Your description says the app is "used by teachers to perform their duties." Today it is used by teachers to *watch*, not to *perform*.
-- **The web/cloud portal is thinner than the docs imply.** Over the internet, parents see fees balances, receipts, and announcements only. Academic **results and attendance are not synced to the cloud**, so the "access their ward's info" promise is only fully met while the phone is on the school LAN.
 - **The mobile app and the cloud portal speak different API contracts** (`/api/v1/parent/*` vs `/api/v1/portal/*`), so the same mobile app cannot currently talk to the hosted cloud — only to the desktop host (directly or via a tunnel).
+
+> **Update (this review branch):** the "results & attendance not in the cloud" gap that appeared in the first draft of this document was already closed in the codebase (commit `f410af3`): the `student_snapshot` read model carries the current-term attendance summary and academic report, and both cloud portal twins render them. This branch adds an end-to-end test that locks that round-trip in. The remaining cloud gap is therefore the **contract mismatch** above, plus read-model *depth* (single current term, summary-level only), not the presence of the data.
 
 Everything else below is the standard-SMS feature comparison.
 
@@ -63,15 +64,15 @@ Over the LAN/tunnel to the host, the parent screens are genuinely useful: per-ch
 
 The limitation is off-LAN reach — see §2.4.
 
-### 2.4 Web student portal (cloud) — **Partial (est. 45%)**
+### 2.4 Web student portal (cloud) — **Good for reads (est. 65%)**
 
-The hosted portal (`cloud/` Node service + `cloud/public/index.html`, and a Python twin in `cloud-python/`) implements parent login and serves **children balances, receipts, announcements, and profile edits**. But the desktop sync outbox only projects two entity types — `student_snapshot` (balances) and `receipt`.
+The hosted portal (`cloud/` Node service + `cloud/public/index.html`, and a Python twin in `cloud-python/`) implements parent login and serves each child's **fees & canteen balances, attendance summary, academic report (results), receipts, announcements, and profile edits**. The `student_snapshot` read model carries all of this (see `CLOUD_SYNC.md`), and both portal twins render attendance + performance cards.
 
-Consequences:
+Remaining gaps (not "the data is missing" — it's there):
 
-- **Results / report cards are not in the cloud read-model.** Parents on the internet cannot see grades when the desktop is offline, even though `CLOUD_SYNC.md` lists "report cards" as a portal feature.
-- **Attendance is not in the cloud read-model** either.
-- **Contract mismatch:** the mobile client calls `/api/v1/parent/*`; the cloud exposes `/api/v1/portal/*`. The "same client reaches the host over the internet" only holds via a **tunnel to the desktop**, not via the hosted cloud. The two need a unified contract or an adapter.
+- **Contract mismatch:** the mobile client calls `/api/v1/parent/*` (served by the desktop host); the cloud exposes `/api/v1/portal/*`. So "the same client reaches the host over the internet" holds via a **tunnel to the desktop**, but the mobile app cannot talk to the **hosted cloud** directly. The two need a unified contract or an adapter.
+- **Read-model depth:** the snapshot is current-term and summary-level (per-subject totals + grade, average, rank, remarks) — no historical terms and no per-assessment breakdown. Consistent with the "thin cloud" philosophy, but worth noting as a ceiling.
+- **No SaaS control plane:** per-school onboarding and subscription billing aren't built, so this is infrastructure rather than a product yet.
 
 ---
 
@@ -100,7 +101,7 @@ Modules where you **match or beat** the standard: payroll with statutory PAYE/SS
 ## 4. Cross-cutting concerns
 
 - **Testing is very thin.** One `test/regressions.js` (guarding the sync-version bug) plus cloud portal/e2e tests. The large desktop IPC surface (40+ handlers, a 1,656-line schema) has no unit/integration coverage — risky for a product schools depend on for money and grades.
-- **Sync robustness is good but narrow.** The outbox (monotonic versions, backoff→park, retention) is well-designed; it just carries too few entity types (§2.4).
+- **Sync robustness is good.** The outbox (monotonic versions, backoff→park, retention) is well-designed and now carries balances, receipts, attendance, results, announcements, and parent auth. Depth (history, per-assessment) is the remaining ceiling, not breadth (§2.4).
 - **Security posture is reasonable** (bearer tokens hashed at rest, per-device revocation, HMAC webhooks, HTTPS-only cloud, rate-limited auth). Worth a formal review of: token/session expiry on the desktop, parent self-registration matching rules (impersonation risk), and RLS enforcement on the Neon tenant tables.
 - **Multi-school / SaaS** is designed (per-tenant `school_id`, API keys) but the hosted product (billing, per-school onboarding, tenant admin) isn't built yet.
 - **Accessibility & localisation** — single language/currency (GHS) assumed; fine for now, a ceiling for expansion.
@@ -110,9 +111,9 @@ Modules where you **match or beat** the standard: payroll with statutory PAYE/SS
 ## 5. Recommendations (prioritised)
 
 ### P0 — Make the pillars deliver what they promise
-1. **Turn the teacher app into a working tool.** Add mobile screens + host endpoints for: **attendance marking** (endpoint already exists — wire a screen), **score/grade entry** (new endpoint), and **lesson-note submission**. This closes the single biggest gap against your own description.
-2. **Put results & attendance in the cloud read-model.** Extend the outbox to project `report_summary` and `attendance_summary` snapshots so the web/mobile parent experience is complete off-LAN.
-3. **Unify the client↔cloud contract.** Either have the cloud implement `/api/v1/parent/*`, or add a thin adapter, so the *same* mobile app works over LAN, tunnel, and hosted cloud without a rebuild.
+1. **Turn the teacher app into a working tool.** ✅ **Done on this branch.** Mobile screens + host endpoints now cover **attendance register**, **score entry**, and **canteen collection**, each permission-gated and reusing the desktop's own logic. (Lesson-note submission is the remaining nice-to-have.)
+2. **Put results & attendance in the cloud read-model.** ✅ **Already in the codebase** (commit `f410af3`); this branch adds the end-to-end test that guards the round-trip. The web portal shows a child's results and attendance off-LAN today.
+3. **Unify the client↔cloud contract.** ⏭️ **Still open.** Either have the cloud implement `/api/v1/parent/*`, or add a thin adapter, so the *same* mobile app works over LAN, tunnel, and hosted cloud without a rebuild. This is the next real P0.
 
 ### P1 — Close the standard-SMS breadth gap
 4. **Timetable module** (desktop authoring + "today's periods" on teacher mobile + parent view).
