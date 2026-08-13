@@ -38,6 +38,7 @@ const registerPaymentsIntentsHandlers = require('./ipc/payments_intents');
 const registerAnnouncementsHandlers = require('./ipc/announcements');
 const registerCloudSyncHandlers = require('./ipc/cloud_sync');
 const registerTimetableHandlers = require('./ipc/timetable');
+const registerMessagingHandlers = require('./ipc/messaging');
 const registerStubHandlers = require('./ipc/_stubs');
 
 const logger = require('./utils/logger');
@@ -263,6 +264,7 @@ app.whenReady().then(async () => {
   mount('cloudSync', () => registerCloudSyncHandlers(ipcMain, db));
   mount('announcements', () => registerAnnouncementsHandlers(ipcMain, db));
   mount('timetable', () => registerTimetableHandlers(ipcMain, db));
+  mount('messaging', () => registerMessagingHandlers(ipcMain, db));
 
   // Stubs LAST — only register channels not already taken
   mount('stubs', () => registerStubHandlers(ipcMain, db));

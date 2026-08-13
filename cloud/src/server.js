@@ -94,6 +94,14 @@ function createServer(store) {
           return json(res, 200, { ok: true, announcements: items });
         }
 
+        if (p === '/api/v1/portal/messages' && req.method === 'GET') {
+          const threads = (await store.listSnapshots(claims.school_id, 'message_thread'))
+            .map(s => s.payload)
+            .filter(t => t && t.parent_id === claims.parent_id)
+            .sort((a, b) => String(b.last_message_at || '').localeCompare(String(a.last_message_at || '')));
+          return json(res, 200, { ok: true, threads });
+        }
+
         if (p === '/api/v1/portal/receipts' && req.method === 'GET') {
           const mine = new Set(authRec.student_keys || []);
           const rcs = (await store.listSnapshots(claims.school_id, 'receipt'))

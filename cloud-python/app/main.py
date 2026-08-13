@@ -121,6 +121,14 @@ def create_app(store=None) -> FastAPI:
         rcs.sort(key=lambda r: str(r.get("date")), reverse=True)
         return {"ok": True, "receipts": rcs}
 
+    @app.get("/api/v1/portal/messages")
+    def messages(authorization: str = Header(None)):
+        claims, rec = require_parent(authorization)
+        threads = [s["payload"] for s in S().list_snapshots(claims["school_id"], "message_thread")
+                   if s["payload"] and s["payload"].get("parent_id") == claims["parent_id"]]
+        threads.sort(key=lambda t: str(t.get("last_message_at") or ""), reverse=True)
+        return {"ok": True, "threads": threads}
+
     @app.post("/api/v1/portal/profile")
     async def profile(request: Request, authorization: str = Header(None)):
         claims, rec = require_parent(authorization)

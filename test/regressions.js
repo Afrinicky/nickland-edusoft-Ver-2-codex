@@ -360,5 +360,35 @@ console.log('\n── Timetable ──');
   ck('one cell holds at most one entry', count === 1);
 }
 
+console.log('\n── Messaging ──');
+{
+  const db = makeDb();
+  const msg = require(path.join(ROOT, 'electron/ipc/messaging.js'));
+  db.exec("INSERT INTO parents (id,full_name,phone) VALUES (1,'Ama','0240000000');");
+
+  // Parent starts a thread → the staff side is flagged unread.
+  const a = msg.postMessage(db, { parentId: 1, subject: 'Fees query', senderType: 'parent', senderName: 'Ama', body: 'Is the term fee GHS 400?' });
+  ck('parent can start a thread', a.ok && a.thread_id);
+  let threads = msg.listThreadsForStaff(db);
+  ck('staff sees the new thread as unread', threads.length === 1 && threads[0].staff_unread === 1);
+
+  // Staff replies → parent side is flagged unread, thread now has two messages.
+  const b = msg.postMessage(db, { threadId: a.thread_id, senderType: 'staff', senderName: 'Bursar', body: 'Yes, GHS 400.', mirror: false });
+  ck('staff can reply on the same thread', b.ok && b.thread_id === a.thread_id);
+  const full = msg.getThread(db, a.thread_id);
+  ck('thread keeps both messages in order', full.messages.length === 2 && full.messages[0].sender_type === 'parent' && full.messages[1].sender_type === 'staff');
+  ck('reply flags the parent unread', full.thread.parent_unread === 1);
+
+  // Marking read clears only that side.
+  msg.markThreadRead(db, a.thread_id, 'staff');
+  ck('marking staff-read clears staff unread only', msg.listThreadsForStaff(db)[0].staff_unread === 0 && msg.getThread(db, a.thread_id).thread.parent_unread === 1);
+
+  // A staff message projects a thread snapshot to the cloud outbox.
+  const snap = db.prepare("SELECT payload_json FROM sync_outbox WHERE entity_type='message_thread' ORDER BY id DESC LIMIT 1").get();
+  ck('staff message projects a message_thread snapshot', !!snap && JSON.parse(snap.payload_json).messages.length === 2);
+
+  ck('parent sees only their own threads', msg.listThreadsForParent(db, 1).length === 1 && msg.listThreadsForParent(db, 999).length === 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

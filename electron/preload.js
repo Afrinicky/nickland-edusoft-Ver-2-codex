@@ -195,6 +195,16 @@ const api = {
     exportClassPdf:    (data)                => ipcRenderer.invoke('timetable:export-class-pdf', data),
   },
 
+  // ── Messaging (parent ↔ school threads) ──
+  messages: {
+    listThreads:       ()                    => ipcRenderer.invoke('messages:list-threads'),
+    getThread:         (threadId)            => ipcRenderer.invoke('messages:get-thread', threadId),
+    reply:             (data)                => ipcRenderer.invoke('messages:reply', data),
+    start:             (data)                => ipcRenderer.invoke('messages:start', data),
+    markRead:          (data)                => ipcRenderer.invoke('messages:mark-read', data),
+    staffUnread:       ()                    => ipcRenderer.invoke('messages:staff-unread'),
+  },
+
   // ── Cloud sync (thin-cloud, multi-school portal) ──
   cloud: {
     status:            ()                    => ipcRenderer.invoke('cloud:status'),

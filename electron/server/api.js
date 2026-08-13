@@ -305,6 +305,42 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, notifications: rows });
   });
 
+  // ── Messaging (parent side) ──
+  add('GET', `${API}/parent/messages`, async (ctx, req, res) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const m = require('../ipc/messaging');
+    return json(res, 200, { ok: true, threads: m.listThreadsForParent(db, ctx.parent.id) });
+  });
+
+  add('GET', `${API}/parent/messages/:id`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const m = require('../ipc/messaging');
+    const tid = parseInt(params.id, 10);
+    const data = m.getThread(db, tid);
+    if (!data || data.thread.parent_id !== ctx.parent.id) return json(res, 403, { ok: false, error: 'Not your thread.' });
+    m.markThreadRead(db, tid, 'parent');
+    return json(res, 200, { ok: true, ...data });
+  });
+
+  add('POST', `${API}/parent/messages`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const m = require('../ipc/messaging');
+    // A parent may only continue their own thread.
+    if (body.threadId) {
+      const existing = m.getThread(db, parseInt(body.threadId, 10));
+      if (!existing || existing.thread.parent_id !== ctx.parent.id) return json(res, 403, { ok: false, error: 'Not your thread.' });
+    }
+    // Scope any student context to one of the parent's own children.
+    const studentId = body.studentId && ctx.student_ids.includes(parseInt(body.studentId, 10)) ? parseInt(body.studentId, 10) : null;
+    const r = m.postMessage(db, {
+      threadId: body.threadId ? parseInt(body.threadId, 10) : null,
+      parentId: ctx.parent.id, studentId, subject: body.subject,
+      senderType: 'parent', senderName: ctx.parent.full_name, body: body.body,
+    });
+    if (!r.ok) return json(res, 400, r);
+    return json(res, 200, r);
+  });
+
   // Staff endpoints (role-scoped)
   add('GET', `${API}/dashboard`, async (ctx, req, res) => {
     if (!can(ctx, 'dashboard', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });

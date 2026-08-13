@@ -114,6 +114,15 @@ function makeDesktopDb() {
   ck('website serves results to the parent', kid.report && kid.report.subjects.length === 1 && Number(kid.report.average) === 85 && kid.report.rank === 2);
   ck('website serves the timetable to the parent', kid.timetable && kid.timetable.entries['1:1'] && kid.timetable.entries['1:1'].teacher_name === 'Ama Mensah');
 
+  // Messaging: a staff message projects a thread snapshot the portal serves.
+  const messaging = require(path.join(ROOT, 'electron/ipc/messaging.js'));
+  const authRec = (await store.listSnapshots(school_id, 'parent_auth')).map(s => s.payload).find(Boolean);
+  messaging.postMessage(db, { parentId: authRec.parent_id, subject: 'Welcome', senderType: 'staff', senderName: 'Head', body: 'Please bring exercise books tomorrow.', mirror: false });
+  await client.push(db);
+  const threads = await httpJson(`${base}/api/v1/portal/messages`, { headers: { Authorization: 'Bearer ' + login.json.token } });
+  ck('website serves message threads to the parent',
+    threads.json.ok && threads.json.threads.length === 1 && threads.json.threads[0].messages[0].body.includes('exercise books'));
+
   // Wrong key is rejected by the cloud.
   setS('school_api_key', 'sk_wrong');
   outbox.postToOutbox(db, { entity_type: 'receipt', entity_key: 'r1', payload: {} });

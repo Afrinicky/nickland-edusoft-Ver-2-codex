@@ -1658,6 +1658,39 @@ function runMigrations(db) {
       CREATE INDEX IF NOT EXISTS idx_tt_entries_teacher ON timetable_entries(teacher_id);
     `);
   });
+
+  // 23. Two-way messaging — parent ↔ school threads. The desktop is the source
+  //     of truth; staff replies mirror out to the parent's SMS/email so parents
+  //     not using the app still get the message. Each thread carries a uuid so
+  //     it can be projected to the portal as a read snapshot.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS message_threads (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid            TEXT UNIQUE,
+        parent_id       INTEGER NOT NULL,
+        student_id      INTEGER,
+        subject         TEXT,
+        created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+        last_message_at TEXT,
+        last_sender     TEXT,               -- 'parent' | 'staff'
+        parent_unread   INTEGER NOT NULL DEFAULT 0,
+        staff_unread    INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS messages (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid         TEXT UNIQUE,
+        thread_id    INTEGER NOT NULL,
+        sender_type  TEXT NOT NULL,          -- 'parent' | 'staff'
+        sender_id    INTEGER,
+        sender_name  TEXT,
+        body         TEXT NOT NULL,
+        created_at   TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_messages_thread  ON messages(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_threads_parent   ON message_threads(parent_id);
+    `);
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {
