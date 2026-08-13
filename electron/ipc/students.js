@@ -1,7 +1,8 @@
 // Students IPC handlers — all student CRUD and bulk operations.
 const fs = require('fs');
 const path = require('path');
-const ExcelJS = require('exceljs');
+// ExcelJS is required lazily inside the two import/export helpers so this module
+// loads in the plain-Node test harness (no node_modules).
 const {
   getAdmissionYear,
   formatIndexNumber,
@@ -261,6 +262,7 @@ async function runInitialImport(db) {
     return { ok: false, error: 'Initial import already completed.' };
   }
 
+  const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(resourcePath);
   const ws = wb.getWorksheet('MERGED  STUDENTS DATA') || wb.worksheets[0];
@@ -425,6 +427,7 @@ function resolveClassId(cMap, classRaw) {
 
 // Read every data row from the sheet into a plain object. Nothing is written.
 async function readStudentSheet(filePath) {
+  const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(filePath);
   const ws = wb.worksheets[0];
@@ -804,6 +807,7 @@ function toIsoDate(v) {
 }
 
 async function bulkDownloadToExcel(db, filters, savePath) {
+  const ExcelJS = require('exceljs');
   let sql = `
     SELECT s.index_number, c.short_code AS class, s.denomination, s.gender,
            s.surname, s.first_name, s.other_names, s.age, s.date_of_birth,

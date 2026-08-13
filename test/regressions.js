@@ -514,6 +514,27 @@ console.log('\n── Fees payment ──');
   ck('a fully-paid student is not a debtor', Array.isArray(debtors) && debtors.every(d => d.student_id !== 1));
 }
 
+console.log('\n── Fees bulk pay ──');
+{
+  const db = makeDb();
+  const handlers = {};
+  require(path.join(ROOT, 'electron/ipc/fees_bulk_pay.js'))({ handle: (n, f) => { handlers[n] = f; } }, db);
+  const call = (name, arg) => handlers[name](null, arg);
+
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-04-30',1);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,status) VALUES (1,'A','B','X1','Active'),(2,'C','D','X2','Active');");
+  db.exec("INSERT INTO student_bills (id,student_id,term_id,total_billed,total_paid,balance) VALUES (1,1,1,400,0,400),(2,2,1,300,0,300);");
+
+  const p1 = call('fees:bulk-pay-record', { student_id: 1, bill_id: 1, term_id: 1, amount: 400 });
+  const p2 = call('fees:bulk-pay-record', { student_id: 2, bill_id: 2, term_id: 1, amount: 300 });
+  ck('bulk pay records both students without receipt-number collision', p1.ok && p2.ok && p1.receipt_number !== p2.receipt_number);
+  ck('bulk pay clears each bill', db.prepare('SELECT balance FROM student_bills WHERE id=1').get().balance === 0
+    && db.prepare('SELECT balance FROM student_bills WHERE id=2').get().balance === 0);
+  ck('bulk pay posts a ledger row per student', db.prepare("SELECT COUNT(*) c FROM income_records WHERE category='fees'").get().c === 2);
+  ck('bulk pay rejects a non-positive amount', call('fees:bulk-pay-record', { student_id: 1, amount: 0 }).ok === false);
+}
+
 console.log('\n── Scores weighting ──');
 {
   const db = makeDb();

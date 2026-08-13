@@ -3,11 +3,13 @@
 // Copyright © 2026 Nickland Sales. All rights reserved.
 const { postIncome } = require('./_ledger');
 const { autoReceiptForPayment, autoDeliverReceipt } = require('./receipts_engine');
+const { getNextReceiptNumber } = require('../utils/idgen');
 
+// Reuse the shared, upsert-backed counter so the receipt number always advances
+// (a bare UPDATE is a silent no-op if the counter row is missing → duplicate
+// receipt numbers → the next payment hits the UNIQUE constraint).
 function nextFeesReceipt(db) {
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'receipt_counter'").get();
-  const n = parseInt(row?.value || '1', 10);
-  db.prepare("UPDATE settings SET value = ? WHERE key = 'receipt_counter'").run(String(n + 1));
+  const n = getNextReceiptNumber(db);
   const year = new Date().getFullYear().toString().slice(-2);
   return `FE/${year}/${String(n).padStart(5, '0')}`;
 }
