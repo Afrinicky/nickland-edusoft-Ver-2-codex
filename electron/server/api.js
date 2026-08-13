@@ -587,6 +587,37 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, ...tt.getClassTimetable(db, stu.current_class_id) });
   });
 
+  // ── Homework: list for a class (staff) ──
+  add('GET', `${API}/homework`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const classId = parseInt(query.classId, 10);
+    if (!classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+    const hw = require('../ipc/homework');
+    return json(res, 200, { ok: true, homework: hw.listForClass(db, classId, { all: query.all === '1' }) });
+  });
+
+  // ── Homework: set for a class (staff) ──
+  add('POST', `${API}/homework`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'edit')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const hw = require('../ipc/homework');
+    const r = hw.saveHomework(db, {
+      classId: parseInt(body.classId, 10), subjectId: body.subjectId || null,
+      teacherId: ctx.user.staff_id || null, title: body.title,
+      description: body.description, dueDate: body.dueDate,
+    });
+    if (!r.ok) return json(res, 400, r);
+    return json(res, 200, r);
+  });
+
+  // ── Homework: a parent's child's class homework ──
+  add('GET', `${API}/parent/children/:id/homework`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const hw = require('../ipc/homework');
+    return json(res, 200, { ok: true, homework: hw.listForStudent(db, sid) });
+  });
+
   function readRaw(req) {
     return new Promise((resolve) => {
       let d = ''; let tooBig = false;

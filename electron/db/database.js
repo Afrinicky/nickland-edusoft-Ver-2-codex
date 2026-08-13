@@ -1691,6 +1691,25 @@ function runMigrations(db) {
       CREATE INDEX IF NOT EXISTS idx_threads_parent   ON message_threads(parent_id);
     `);
   });
+
+  // 24. Homework / assignments — a teacher sets work for a class + subject with
+  //     a due date; parents see their child's class homework (in-app and, via
+  //     the snapshot, on the portal).
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS homework (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        class_group_id INTEGER NOT NULL,
+        subject_id     INTEGER,
+        teacher_id     INTEGER,             -- staff.id
+        title          TEXT NOT NULL,
+        description    TEXT,
+        due_date       TEXT,                -- 'YYYY-MM-DD'
+        created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_homework_class ON homework(class_group_id, due_date);
+    `);
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

@@ -195,6 +195,13 @@ const api = {
     exportClassPdf:    (data)                => ipcRenderer.invoke('timetable:export-class-pdf', data),
   },
 
+  // ── Homework / assignments ──
+  homework: {
+    listClass:         (classId, all)        => ipcRenderer.invoke('homework:list-class', { classId, all: !!all }),
+    save:              (data)                => ipcRenderer.invoke('homework:save', data),
+    delete:            (id)                  => ipcRenderer.invoke('homework:delete', id),
+  },
+
   // ── Messaging (parent ↔ school threads) ──
   messages: {
     listThreads:       ()                    => ipcRenderer.invoke('messages:list-threads'),

@@ -16,19 +16,21 @@ export default function ChildDetail() {
   const [report, setReport] = useState(null);
   const [intents, setIntents] = useState([]);
   const [timetable, setTimetable] = useState(null);
+  const [homework, setHomework] = useState([]);
   const [error, setError] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [d, r, it, tt] = await Promise.all([
+      const [d, r, it, tt, hw] = await Promise.all([
         api.child(token, id),
         api.childReport(token, id).catch(() => null),
         api.childIntents(token, id).catch(() => ({ intents: [] })),
         api.childTimetable(token, id).catch(() => null),
+        api.childHomework(token, id).catch(() => ({ homework: [] })),
       ]);
-      setData(d); setReport(r); setIntents(it.intents || []); setTimetable(tt);
+      setData(d); setReport(r); setIntents(it.intents || []); setTimetable(tt); setHomework(hw.homework || []);
     } catch (e) { setError(e.message); }
   }, [token, id]);
 
@@ -92,6 +94,7 @@ export default function ChildDetail() {
         }
       </Card>
 
+      <HomeworkCard items={homework} />
       <TimetableCard tt={timetable} />
 
       <Card>
@@ -111,6 +114,27 @@ export default function ChildDetail() {
           balance={c.fees.balance} onDone={() => { setPayOpen(false); load(); }} />
       )}
     </Screen>
+  );
+}
+
+// Upcoming homework for the child's class.
+function HomeworkCard({ items }) {
+  if (!items || !items.length) return null;
+  return (
+    <Card>
+      <H2>Homework</H2>
+      {items.map(h => (
+        <View key={h.id} style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={{ fontWeight: '600', flex: 1 }}>{h.title}</Text>
+            {h.due_date ? <Muted>Due {h.due_date}</Muted> : null}
+          </View>
+          {(h.subject_name || h.description) ? (
+            <Muted style={{ marginTop: 2 }}>{[h.subject_name, h.description].filter(Boolean).join(' · ')}</Muted>
+          ) : null}
+        </View>
+      ))}
+    </Card>
   );
 }
 

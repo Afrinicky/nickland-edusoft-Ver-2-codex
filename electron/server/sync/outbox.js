@@ -211,6 +211,13 @@ function enqueueStudentSnapshot(db, studentId) {
       }
     } catch (_) {}
 
+    // Upcoming homework for the child's class.
+    let homework = [];
+    try {
+      const hw = require('../../ipc/homework');
+      homework = hw.listForStudent(db, studentId).slice(0, 10);
+    } catch (_) {}
+
     return postToOutbox(db, {
       entity_type: 'student_snapshot',
       entity_key: `student:${studentId}`,
@@ -225,6 +232,7 @@ function enqueueStudentSnapshot(db, studentId) {
         attendance,
         report,
         timetable,
+        homework,
         updated_at: new Date().toISOString(),
       },
     });

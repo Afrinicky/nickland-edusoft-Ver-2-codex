@@ -54,6 +54,7 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | GET | `/parent/messages` | parent | The parent's message threads with the school. |
 | GET | `/parent/messages/:id` | parent | One thread with its messages (marks it read for the parent). |
 | POST | `/parent/messages` | parent | `{ threadId?, studentId?, subject?, body }` — start or continue a thread. |
+| GET | `/parent/children/:id/homework` | parent | The child's class homework (upcoming + recently due). |
 
 ### Payment gateway (Paystack by default; pluggable per school)
 - Configured in Settings → Online Payments (`payment_gateway`, `paystack_secret_key`, …).
@@ -78,6 +79,8 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | POST | `/canteen/collect` | staff (`canteen.create`) | `{ student_id, amount, payment_method, notes }`. Records the payment, marks covered days paid, posts to Finance, and generates + delivers a receipt. |
 | GET | `/timetable/mine` | staff | The signed-in teacher's own week, grouped by weekday, plus `today`. |
 | GET | `/timetable/class/:id` | staff (`academics`/`students` view) | A class's timetable grid (periods + entries). |
+| GET | `/homework?classId=` | staff (`academics.view`) | Homework for a class (`&all=1` for full history). |
+| POST | `/homework` | staff (`academics.edit`) | `{ classId, subjectId?, title, description?, dueDate? }` — set homework. |
 
 Every response is `{ ok: boolean, ... }`. Errors use HTTP status codes
 (`401` unauthorized, `403` forbidden/out-of-scope, `429` rate-limited).

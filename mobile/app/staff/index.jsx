@@ -39,6 +39,7 @@ export default function Dashboard() {
     { key: 'scores', label: 'Enter Scores', emoji: '✍️', show: allowed(profile, 'academics', 'edit') },
     { key: 'canteen', label: 'Collect Canteen', emoji: '🍽️', show: allowed(profile, 'canteen', 'create') },
     { key: 'timetable', label: 'My Timetable', emoji: '📅', show: true },
+    { key: 'homework', label: 'Set Homework', emoji: '📚', show: allowed(profile, 'academics', 'edit') },
   ].filter(a => a.show);
 
   return (

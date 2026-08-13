@@ -83,7 +83,7 @@ Modules that mature commercial SMS products ship and this platform **does not ye
 | Module | Status | Why it matters (Nursery–JHS context) |
 |---|---|---|
 | **Timetable / scheduling** | ✅ Added (this branch) | School bell schedule + per-class weekly grid; desktop authoring, teacher "today/my week" on mobile, class timetable in the parent view. |
-| **Homework / assignments** | ❌ Absent (only lesson notes) | Parents increasingly expect to see assignments & due dates. |
+| **Homework / assignments** | ✅ Added (this branch) | Teachers set homework per class+subject with a due date (desktop + mobile); parents see it in-app and on the portal (projected to the cloud snapshot). |
 | **Two-way communication / messaging** | ✅ Added (this branch) | Parent↔school threads: desktop Messages page, parent mobile tab, portal read view; staff replies mirror to SMS/email. (Parent-reply over the cloud portal is a noted follow-up; over LAN it's fully two-way.) |
 | **Library circulation** | ❌ Absent | "Books" today is a fees item, not catalog + loans/returns. |
 | **Transport / bus routes** | ❌ Absent | Common add-on; route, stop, and pickup tracking. |
@@ -118,7 +118,7 @@ Modules where you **match or beat** the standard: payroll with statutory PAYE/SS
 ### P1 — Close the standard-SMS breadth gap
 4. **Timetable module** ✅ **Done on this branch** — desktop authoring (bell schedule + per-class grid) with **Excel + PDF export**, teacher "today / my week" on mobile, the class timetable in the parent view, **and projected into the cloud snapshot so it shows off-LAN** (web portal + mobile cloud mode).
 5. **Two-way messaging** ✅ **Done on this branch** — parent↔school threads with a desktop Messages page (staff), a parent mobile tab (compose/reply on LAN, read over the internet), and a portal read view; staff replies mirror to SMS/email. Follow-up: the portal/cloud **write** path so parents can reply over the internet (deferred to avoid cloud-authored snapshot version regressions).
-6. **Homework/assignments** surfaced to parents.
+6. **Homework/assignments** ✅ **Done on this branch** — teachers set homework per class+subject with a due date (desktop Homework page + mobile "Set Homework"); parents see upcoming homework in the mobile app and the portal (projected into the cloud snapshot). This clears the P1 list.
 
 ### P2 — Differentiate & harden
 7. **Library circulation, transport, online admissions, ID-card/certificate generation.**

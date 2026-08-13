@@ -390,5 +390,24 @@ console.log('\n── Messaging ──');
   ck('parent sees only their own threads', msg.listThreadsForParent(db, 1).length === 1 && msg.listThreadsForParent(db, 999).length === 0);
 }
 
+console.log('\n── Homework ──');
+{
+  const db = makeDb();
+  const hw = require(path.join(ROOT, 'electron/ipc/homework.js'));
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'ANSU','MONA','X1',1,'Active');");
+  db.exec("INSERT INTO subjects (id,name,code,is_active) VALUES (1,'Mathematics','MATH',1);");
+
+  const a = hw.saveHomework(db, { classId: 1, subjectId: 1, title: 'Exercise 4', description: 'Q1-10', dueDate: '2999-01-01' });
+  ck('teacher can set homework', a.ok && a.id);
+  const upcoming = hw.listForClass(db, 1);
+  ck('class homework resolves subject name', upcoming.length === 1 && upcoming[0].subject_name === 'Mathematics' && upcoming[0].title === 'Exercise 4');
+
+  hw.saveHomework(db, { classId: 1, title: 'Old work', dueDate: '2000-01-01' });
+  ck('past homework is hidden from the upcoming view', hw.listForClass(db, 1).length === 1);
+  ck('past homework still shows in the full history', hw.listForClass(db, 1, { all: true }).length === 2);
+  ck('student sees their class homework', hw.listForStudent(db, 1).length === 1);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
