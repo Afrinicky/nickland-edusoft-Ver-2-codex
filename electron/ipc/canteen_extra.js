@@ -3,6 +3,34 @@
 const { postIncome } = require('./_ledger');
 const { getNextReceiptNumber } = require('../utils/idgen');
 
+// Resolve the term a canteen collection belongs to.
+//
+// This must be the term of the DAYS BEING PAID FOR, not the day the cash was
+// handed over: parents settle canteen arrears during vacation, when "today"
+// falls outside every term window. Attributing by payment_date made those
+// collections vanish from the canteen module (which filtered by the term's
+// date range) while the ledger still counted them under the current term —
+// the "canteen income does not match canteen payments" audit finding.
+// Both sides now agree because the same term id is written to
+// canteen_payments.term_id AND passed to postIncome.
+function resolveCanteenTerm(db, dates) {
+  const list = (Array.isArray(dates) ? dates : [dates]).filter(Boolean);
+  for (const d of list) {
+    const viaCalendar = db.prepare('SELECT term_id FROM school_calendar WHERE date = ? AND term_id IS NOT NULL').get(d);
+    if (viaCalendar?.term_id) return viaCalendar.term_id;
+  }
+  for (const d of list) {
+    const viaWindow = db.prepare(`
+      SELECT id FROM terms
+      WHERE start_date IS NOT NULL AND end_date IS NOT NULL
+        AND date(start_date) <= date(?) AND date(end_date) >= date(?)
+      ORDER BY date(start_date) DESC LIMIT 1
+    `).get(d, d);
+    if (viaWindow?.id) return viaWindow.id;
+  }
+  return db.prepare('SELECT id FROM terms WHERE is_current = 1').get()?.id || null;
+}
+
 function getDailyRate(db) {
   const r = db.prepare("SELECT value FROM settings WHERE key = 'canteen_daily_rate'").get();
   return parseFloat(r ? r.value : '5.00');
@@ -30,13 +58,19 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
       WHERE term_id = ? AND day_type = 'school_day'
     `).get(term.id).c;
 
-    // Total paid in this term
+    // Total paid in this term.
+    //
+    // Scoped by term_id — the same key the income ledger is attributed by — so
+    // a collection taken outside the term's date window (e.g. arrears settled
+    // during vacation) is still counted here. Rows from older installs whose
+    // term_id was never backfilled fall back to the date window.
     const paidRow = db.prepare(`
       SELECT COALESCE(SUM(amount), 0) AS total,
              COUNT(*) AS payment_count
       FROM canteen_payments
-      WHERE payment_date >= ? AND payment_date <= ?
-    `).get(term.start_date, term.end_date);
+      WHERE term_id = ?
+         OR (term_id IS NULL AND payment_date >= ? AND payment_date <= ?)
+    `).get(term.id, term.start_date, term.end_date);
 
     // Days unpaid (status='unpaid' across all students in this term)
     const unpaidRow = db.prepare(`
@@ -75,10 +109,11 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
       FROM canteen_payments cp
       JOIN students s ON s.id = cp.student_id
       LEFT JOIN class_groups cg ON cg.id = s.current_class_id
-      WHERE cp.payment_date >= ? AND cp.payment_date <= ?
+      WHERE cp.term_id = ?
+         OR (cp.term_id IS NULL AND cp.payment_date >= ? AND cp.payment_date <= ?)
       ORDER BY cp.payment_date DESC, cp.id DESC
       LIMIT 10
-    `).all(term.start_date, term.end_date);
+    `).all(term.id, term.start_date, term.end_date);
 
     // Today's status
     const today = new Date().toISOString().slice(0, 10);
@@ -94,11 +129,14 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
       term: { id: term.id, label: term.label, start_date: term.start_date, end_date: term.end_date },
       daily_rate: dailyRate,
       metrics: {
-        total_collected: Math.round(paidRow.total),
+        // Money is rounded to pesewas, not whole cedis — Math.round() here
+        // silently dropped up to 0.99 per figure and made the audit's
+        // ledger-vs-module comparison disagree by the rounding error alone.
+        total_collected: Math.round((paidRow.total || 0) * 100) / 100,
         payment_count: paidRow.payment_count,
         unpaid_days_total: unpaidRow.days,
         unpaid_students: unpaidRow.students,
-        amount_owed: Math.round((unpaidRow.days || 0) * dailyRate),
+        amount_owed: Math.round((unpaidRow.days || 0) * dailyRate * 100) / 100,
         total_school_days: totalDays,
         active_students: activeStudents,
         attendance_exempt_enabled: isAttendanceExemptEnabled(db),
@@ -214,23 +252,42 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
         'SELECT id, status, payment_id FROM canteen_day_status WHERE student_id = ? AND date = ?'
       ).get(studentId, date);
 
-      // If transitioning AWAY from 'paid', remove the prior payment link
+      // If transitioning AWAY from 'paid', undo the prior payment link.
       if (existing?.payment_id && existing.status === 'paid' && status !== 'paid') {
-        // Don't delete the payment (audit trail) — just unlink and reduce its days
         db.prepare(`
           UPDATE canteen_day_status SET status = ?, payment_id = NULL
           WHERE student_id = ? AND date = ?
         `).run(status, studentId, date);
+
+        // A quick-pay cell entry covers exactly this one day. Un-ticking it is
+        // a correction, so the auto-created payment and its auto-posted income
+        // must go with it — otherwise the school keeps money on the books for a
+        // day the pupil is now shown as owing, and gets charged for it twice.
+        // Multi-day payments are left alone (they cannot be safely split) and
+        // are recorded to the audit log for manual reconciliation instead.
+        const pay = db.prepare('SELECT id, days_covered, amount FROM canteen_payments WHERE id = ?').get(existing.payment_id);
+        if (pay && (pay.days_covered || 0) <= 1) {
+          db.prepare('DELETE FROM income_records WHERE linked_canteen_payment_id = ?').run(pay.id);
+          db.prepare('DELETE FROM canteen_payments WHERE id = ?').run(pay.id);
+        } else if (pay) {
+          try {
+            db.prepare(`
+              INSERT INTO audit_log (entity_type, entity_id, action, justification, severity)
+              VALUES ('canteen_payment', ?, 'day_unmarked_manual_reconcile', ?, 'medium')
+            `).run(pay.id, `Day ${date} un-marked for student ${studentId}, but payment #${pay.id} covers ${pay.days_covered} days (GHS ${pay.amount}). Reconcile manually.`);
+          } catch (_) { /* audit is best-effort */ }
+        }
         return { paymentId: null };
       }
 
       // If transitioning TO 'paid', create a small one-day payment for the cell
       if (status === 'paid' && existing?.status !== 'paid') {
+        const termId = resolveCanteenTerm(db, date);
         const payRes = db.prepare(`
           INSERT INTO canteen_payments
-            (student_id, payment_date, amount, days_covered, start_date, end_date, received_by, notes)
-          VALUES (?, ?, ?, 1, ?, ?, ?, 'Quick-pay cell entry')
-        `).run(studentId, today, dailyRate, date, date, receivedBy || null);
+            (student_id, term_id, payment_date, amount, days_covered, start_date, end_date, received_by, notes)
+          VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'Quick-pay cell entry')
+        `).run(studentId, termId, today, dailyRate, date, date, receivedBy || null);
         const paymentId = payRes.lastInsertRowid;
 
         db.prepare(`
@@ -239,13 +296,15 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
           ON CONFLICT (student_id, date) DO UPDATE SET status = 'paid', payment_id = excluded.payment_id
         `).run(studentId, date, paymentId);
 
-        // Auto-record income via central ledger helper.
+        // Auto-record income via central ledger helper, under the SAME term the
+        // payment row carries so the ledger and the canteen module agree.
         postIncome(db, {
           category: 'canteen',
           amount: dailyRate,
           description: `Canteen — ${date}`,
           payment_method: paymentMethod || 'Cash',
           date: today,
+          term_id: termId,
           source: 'canteen_quick',
           student_id: studentId,
           linked_canteen_payment_id: paymentId,
@@ -280,15 +339,17 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
     const today = new Date().toISOString().slice(0, 10);
     const sortedDates = [...dates].sort();
 
+    const termId = resolveCanteenTerm(db, sortedDates);
+
     const tx = db.transaction(() => {
       // Create payment record
       const payRes = db.prepare(`
         INSERT INTO canteen_payments
-          (student_id, payment_date, amount, days_covered, start_date, end_date,
+          (student_id, term_id, payment_date, amount, days_covered, start_date, end_date,
            received_by, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        studentId, today, amount, dates.length,
+        studentId, termId, today, amount, dates.length,
         sortedDates[0], sortedDates[sortedDates.length - 1],
         receivedBy || null, notes || null
       );
@@ -314,6 +375,7 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
         description: `Canteen payment — ${dates.length} day${dates.length > 1 ? 's' : ''}`,
         payment_method: paymentMethod || 'Cash',
         date: today,
+        term_id: termId,
         source: 'canteen_payment',
         student_id: studentId,
         linked_canteen_payment_id: payRes.lastInsertRowid,
@@ -334,16 +396,18 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
     const dailyRate = getDailyRate(db);
     const today = new Date().toISOString().slice(0, 10);
 
+    const termId = resolveCanteenTerm(db, date);
+
     const tx = db.transaction(() => {
       let totalAmount = 0;
       for (const sid of studentIds) {
         // Create individual payment for each student
         const payRes = db.prepare(`
           INSERT INTO canteen_payments
-            (student_id, payment_date, amount, days_covered, start_date, end_date,
+            (student_id, term_id, payment_date, amount, days_covered, start_date, end_date,
              received_by, notes)
-          VALUES (?, ?, ?, 1, ?, ?, ?, 'Bulk daily collection')
-        `).run(sid, today, dailyRate, date, date, receivedBy || null);
+          VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'Bulk daily collection')
+        `).run(sid, termId, today, dailyRate, date, date, receivedBy || null);
 
         db.prepare(`
           INSERT INTO canteen_day_status (student_id, date, status, payment_id)
@@ -352,9 +416,28 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
             status = 'paid', payment_id = excluded.payment_id
         `).run(sid, date, payRes.lastInsertRowid);
 
+        // Post this collection to the finance ledger. This was missing
+        // entirely: the whole-class daily collection created payment rows and
+        // marked the days paid, but never posted income — so real cash taken
+        // at the gate never appeared in Finance, and the canteen module
+        // reported money the ledger had no record of.
+        postIncome(db, {
+          category: 'canteen',
+          amount: dailyRate,
+          description: `Canteen — ${date} (daily collection)`,
+          payment_method: paymentMethod || 'Cash',
+          date: today,
+          term_id: termId,
+          source: 'canteen_bulk',
+          student_id: sid,
+          linked_canteen_payment_id: payRes.lastInsertRowid,
+          recorded_by: receivedBy || null,
+          is_auto: 1,
+        });
+
         totalAmount += dailyRate;
       }
-      return totalAmount;
+      return Math.round(totalAmount * 100) / 100;
     });
 
     const total = tx();

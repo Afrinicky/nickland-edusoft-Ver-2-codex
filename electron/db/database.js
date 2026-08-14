@@ -1732,6 +1732,66 @@ function runMigrations(db) {
       `);
     }
   });
+
+  // 26. Attribute every canteen payment to a term.
+  //
+  //     Migration 8 only matched payments whose payment_date fell inside a term
+  //     window. Collections taken during vacation (arrears settled after the
+  //     term closed) stayed NULL, and the canteen module — which scoped its
+  //     totals by that same date window — reported GHS 0 while the income
+  //     ledger counted the money under the current term. That is the
+  //     "canteen income does not match canteen payments" audit finding.
+  //
+  //     Attribute by the DAYS the payment covers first (the semantically
+  //     correct term), then the date window, then the current term. Running
+  //     before reconcileLedger() also means any collection that never posted
+  //     income (the whole-class daily collection did not) is back-posted under
+  //     the right term at startup.
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(canteen_payments)").all().map(c => c.name);
+    if (!cols.includes('term_id')) return; // migration 8 adds it; nothing to do yet
+
+    // (a) From the school calendar, via the days this payment marked paid.
+    db.exec(`
+      UPDATE canteen_payments
+         SET term_id = (
+           SELECT sc.term_id FROM canteen_day_status cds
+           JOIN school_calendar sc ON sc.date = cds.date
+           WHERE cds.payment_id = canteen_payments.id AND sc.term_id IS NOT NULL
+           LIMIT 1
+         )
+       WHERE term_id IS NULL
+    `);
+    // (b) From the covered date range against the term windows.
+    db.exec(`
+      UPDATE canteen_payments
+         SET term_id = (
+           SELECT t.id FROM terms t
+           WHERE date(t.start_date) <= date(COALESCE(canteen_payments.start_date, canteen_payments.payment_date))
+             AND date(t.end_date)   >= date(COALESCE(canteen_payments.start_date, canteen_payments.payment_date))
+           ORDER BY date(t.start_date) DESC LIMIT 1
+         )
+       WHERE term_id IS NULL
+    `);
+    // (c) Anything still unattributed goes to the current term.
+    db.exec(`
+      UPDATE canteen_payments
+         SET term_id = (SELECT id FROM terms WHERE is_current = 1)
+       WHERE term_id IS NULL
+    `);
+
+    // Re-point any canteen income already posted so the ledger agrees with the
+    // payment rows it was created from.
+    db.exec(`
+      UPDATE income_records
+         SET term_id = (
+           SELECT cp.term_id FROM canteen_payments cp
+           WHERE cp.id = income_records.linked_canteen_payment_id
+         )
+       WHERE linked_canteen_payment_id IS NOT NULL
+         AND (SELECT cp.term_id FROM canteen_payments cp WHERE cp.id = income_records.linked_canteen_payment_id) IS NOT NULL
+    `);
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {
