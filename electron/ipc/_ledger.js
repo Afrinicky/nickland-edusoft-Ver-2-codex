@@ -317,18 +317,34 @@ function reconcileLedger(db) {
     }
 
     // 5. Paid salaries without a matching expense row.
+    //
+    // A salary flagged paid but carrying no actual amount (the legacy form
+    // stored 0 for a blank field) used to be skipped here, which is precisely
+    // the case that needed repairing: payroll showed the staff member as paid
+    // while the ledger had no expense, and every startup left it that way.
+    // Such a row is settled at the net amount owed, and the salary row is
+    // corrected so payroll and Finance report the same figure from then on.
     const paidSalaries = db.prepare(`
       SELECT ss.*, s.surname, s.first_name FROM staff_salaries ss
       JOIN staff s ON s.id = ss.staff_id
-      WHERE ss.is_paid = 1 AND COALESCE(ss.actual_amount_paid, 0) > 0
+      WHERE ss.is_paid = 1
         AND NOT EXISTS (
           SELECT 1 FROM expense_records er WHERE er.linked_salary_id = ss.id
         )
     `).all();
     for (const ss of paidSalaries) {
+      const recorded = Number(ss.actual_amount_paid) || 0;
+      const owed = (Number(ss.net_salary) || 0) + (Number(ss.arrear_brought_forward) || 0);
+      const amount = recorded > 0 ? recorded : owed;
+      if (!(amount > 0)) continue; // nothing was owed and nothing was paid
+      if (recorded <= 0) {
+        db.prepare('UPDATE staff_salaries SET actual_amount_paid = ?, carry_over_to_next = 0 WHERE id = ?')
+          .run(amount, ss.id);
+        stats.salaries_repaired = (stats.salaries_repaired || 0) + 1;
+      }
       postExpense(db, {
         category: 'salary',
-        amount: ss.actual_amount_paid,
+        amount,
         description: `Salary ${ss.month}/${ss.year}`,
         payee_name: `${ss.surname} ${ss.first_name}`.trim(),
         payment_method: ss.payment_method || 'Bank',

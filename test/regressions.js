@@ -515,6 +515,88 @@ console.log('\n── Payroll: salary → expense ledger ──');
   security.setCurrentUser(null, null); // reset session state for later tests
 }
 
+console.log('\n── Payroll: paid salaries must reach Finance ──');
+{
+  // Symptom: "Expenses show GHS 0.00 for salaries while payroll shows
+  // GHS 1,369.00 paid this month." A salary flagged paid with no amount
+  // recorded (the legacy form sends 0 for a blank field) posted no expense,
+  // and the startup repair skipped it because it required actual > 0.
+  const payroll = require(path.join(ROOT, 'electron/ipc/payroll.js'));
+  const ledger = require(path.join(ROOT, 'electron/ipc/_ledger.js'));
+  const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+  const M = new Date().getMonth() + 1, Y = new Date().getFullYear();
+  const today = new Date().toISOString().slice(0, 10);
+  const dayIn = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+
+  function school() {
+    const db = makeDb();
+    db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('transaction_counter','1','system')").run();
+    db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1)");
+    // Term ended 10 days ago → today is vacation, as in the reported case.
+    db.prepare("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,3,'T3',?,?,1)").run(dayIn(40), dayIn(10));
+    db.exec("INSERT INTO staff (id,surname,first_name,role,status,base_salary,ssnit_enrolled) VALUES (1,'Mensah','Ama','teacher','Active',1500,1)");
+    return db;
+  }
+  const salaryExpense = (db) => db.prepare("SELECT COALESCE(SUM(amount),0) t FROM expense_records WHERE category='salary' AND term_id=1").get().t;
+
+  // 1. An existing database already in the broken state repairs at startup.
+  {
+    const db = school();
+    db.prepare("INSERT INTO staff_salaries (staff_id,month,year,gross_salary,net_salary,arrear_brought_forward,actual_amount_paid,is_paid,payment_date) VALUES (1,?,?,1500,1417.5,0,0,1,?)")
+      .run(M, Y, today);
+    ck('a paid salary with no amount recorded is flagged for the audit',
+      payroll.paidSummaryForTerm(db, 1).unrecorded === 1);
+    ck('it starts with no expense in Finance', salaryExpense(db) === 0);
+    ledger.reconcileLedger(db);
+    ck('startup repair settles it at the net owed', salaryExpense(db) === 1417.5);
+    ck('startup repair corrects the salary row so payroll agrees',
+      db.prepare('SELECT actual_amount_paid FROM staff_salaries').get().actual_amount_paid === 1417.5);
+    ck('payroll and the ledger then reconcile',
+      Math.abs(payroll.paidSummaryForTerm(db, 1).total - salaryExpense(db)) < 0.01);
+  }
+
+  // 2. Saving via the legacy form with a blank amount can no longer hide money.
+  {
+    const db = school();
+    security.setCurrentUser(1, 'Administrator');
+    const hs = {};
+    require(path.join(ROOT, 'electron/ipc/staff.js'))({ handle: (n, f) => { hs[n] = f; } }, db, '/tmp');
+    hs['staff:save-salary'](null, { staff_id: 1, month: M, year: Y, gross_salary: 1500, is_paid: true, actual_amount_paid: 0, payment_date: today });
+    ck('marking paid with a blank amount records the net owed',
+      db.prepare('SELECT actual_amount_paid FROM staff_salaries').get().actual_amount_paid === 1417.5);
+    ck('and the expense reaches Finance immediately', salaryExpense(db) === 1417.5);
+    security.setCurrentUser(null, null);
+  }
+
+  // 3. mark-paid reconciles, and refuses to mark a salary paid for nothing.
+  {
+    const db = school();
+    security.setCurrentUser(1, 'Administrator');
+    const hp = {};
+    payroll({ handle: (n, f) => { hp[n] = f; } }, db);
+    db.prepare("INSERT INTO staff_salaries (id,staff_id,month,year,net_salary,arrear_brought_forward,is_paid) VALUES (1,1,?,?,1278.69,0,0)").run(M, Y);
+    ck('mark-paid posts a matching expense', hp['payroll:mark-paid'](null, { id: 1, actualAmount: 1278.69, paymentDate: today }).ok
+      && Math.abs(salaryExpense(db) - 1278.69) < 0.01);
+    ck('payroll paid-summary matches the ledger',
+      Math.abs(payroll.paidSummaryForTerm(db, 1).total - salaryExpense(db)) < 0.01);
+    db.prepare("INSERT INTO staff_salaries (id,staff_id,month,year,net_salary,arrear_brought_forward,is_paid) VALUES (2,1,?,?,900,0,0)").run(M === 12 ? 1 : M + 1, Y);
+    ck('a salary cannot be marked paid for nothing',
+      hp['payroll:mark-paid'](null, { id: 2, actualAmount: 0 }).ok === false);
+    security.setCurrentUser(null, null);
+  }
+
+  // 4. Salaries paid during vacation still count towards the current term —
+  //    the audit's two sides must use the same attribution rule.
+  {
+    const db = school();
+    db.prepare("INSERT INTO staff_salaries (staff_id,month,year,net_salary,arrear_brought_forward,actual_amount_paid,is_paid,payment_date) VALUES (1,?,?,1000,0,1000,1,?)")
+      .run(M, Y, today); // today is outside every term window
+    ledger.reconcileLedger(db);
+    ck('a salary paid during vacation is attributed to the current term on both sides',
+      salaryExpense(db) === 1000 && payroll.paidSummaryForTerm(db, 1).total === 1000);
+  }
+}
+
 console.log('\n── Finance ledger ──');
 {
   const db = makeDb();

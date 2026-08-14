@@ -133,8 +133,17 @@ function registerStaffHandlers(ipcMain, db, userDataPath) {
     const paye = parseFloat(data.paye_tax) || 0;
     const otherDed = parseFloat(data.other_deductions) || 0;
     const net = grossTotal - ssnitWorker - paye - otherDed;
-    const actualPaid = data.actual_amount_paid !== undefined
+    // Marking a salary "Paid" means the money left the school. The legacy form
+    // sends `parseFloat('') || 0` for a blank amount, which used to store a paid
+    // salary of 0 — the expense was then skipped (`actualPaid > 0`) and the
+    // startup reconcile skipped it too, so payroll reported the staff member as
+    // paid while Finance had no record of the money at all. If the row is
+    // flagged paid without a usable amount, it is paid in full.
+    const requestedPaid = data.actual_amount_paid !== undefined
       ? parseFloat(data.actual_amount_paid) : net;
+    const actualPaid = data.is_paid && !(Number.isFinite(requestedPaid) && requestedPaid > 0)
+      ? net
+      : (Number.isFinite(requestedPaid) ? requestedPaid : 0);
     const carryOver = net - actualPaid;
 
     const existing = db.prepare(`
