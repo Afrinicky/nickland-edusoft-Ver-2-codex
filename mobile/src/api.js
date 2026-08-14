@@ -188,6 +188,13 @@ export const api = {
 
   // Timetable
   myTimetable: (token) => request('/timetable/mine', { token }),   // staff (host)
+  childTransport: (token, id) =>
+    MODE === 'cloud'
+      ? cloudChildren(token).then(cs => {
+          const c = cs.find(x => String(x.id) === String(id));
+          return { ok: true, transport: (c && c.transport) || null };
+        })
+      : request(`/parent/children/${id}/transport`, { token }),
   childTimetable: (token, id) =>
     MODE === 'cloud'
       ? cloudChildren(token).then(cs => {

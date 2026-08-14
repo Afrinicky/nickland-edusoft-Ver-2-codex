@@ -218,6 +218,13 @@ function enqueueStudentSnapshot(db, studentId) {
       homework = hw.listForStudent(db, studentId).slice(0, 10);
     } catch (_) {}
 
+    // Transport: route, stop, pickup time and the term fee balance.
+    let transport = null;
+    try {
+      const tr = require('../../ipc/transport');
+      transport = tr.transportForStudent(db, studentId);
+    } catch (_) {}
+
     return postToOutbox(db, {
       entity_type: 'student_snapshot',
       entity_key: `student:${studentId}`,
@@ -233,6 +240,7 @@ function enqueueStudentSnapshot(db, studentId) {
         report,
         timetable,
         homework,
+        transport,
         updated_at: new Date().toISOString(),
       },
     });

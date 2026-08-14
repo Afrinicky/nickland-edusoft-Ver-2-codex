@@ -204,6 +204,7 @@ async function renderChild(studentId) {
     </div>
     ${attendanceCard(c.attendance)}
     ${reportCard(c.report)}
+    ${transportCard(c.transport)}
     ${homeworkCard(c.homework)}
     ${timetableCard(c.timetable)}
     <div class="card"><h3>Receipts</h3><div id="rcpts"><div class="spin"></div></div></div>
@@ -241,6 +242,17 @@ function attendanceCard(a) {
       <div class="stat"><div class="l">Absent</div><div class="v ${(a.absent||0)>0?'bad':''}">${a.absent||0}</div></div>
     </div>
     <div class="row" style="margin-top:6px"><span>Attendance rate</span><strong>${pct}%</strong></div>
+  </div>`;
+}
+function transportCard(t) {
+  if (!t) return '';
+  const bal = Number(t.balance)||0;
+  return `<div class="card">
+    <h3>Transport</h3>
+    <div class="row"><span>Route</span><strong>${esc(t.route_name||'')}</strong></div>
+    ${t.stop_name ? `<div class="row"><span>Stop</span><span>${esc(t.stop_name)}${t.pickup_time?(' · '+esc(t.pickup_time)):''}</span></div>` : ''}
+    ${t.driver_name ? `<div class="row"><span>Driver</span><span>${esc(t.driver_name)}${t.driver_phone?(' · '+esc(t.driver_phone)):''}</span></div>` : ''}
+    <div class="row"><strong>Transport fee</strong><strong class="${bal>0?'bad':'ok'}">${money(bal)} ${bal>0?'due':'paid'}</strong></div>
   </div>`;
 }
 function homeworkCard(items) {

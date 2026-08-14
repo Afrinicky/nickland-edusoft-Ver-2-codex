@@ -86,7 +86,7 @@ Modules that mature commercial SMS products ship and this platform **does not ye
 | **Homework / assignments** | ✅ Full | Lives in **Academics → Homework**. Assignments carry a term, due date and optional **total marks**; graded homework is backed by an `assessment_columns` row so marks feed the weighted class score, subject total and end-of-term report. Marking sheet tracks submitted/late/not-submitted (not submitted scores 0). Parents see their child's own status + mark in-app and on the portal. |
 | **Two-way communication / messaging** | ✅ Added (this branch) | Parent↔school threads: desktop Messages page, parent mobile tab, portal read view; staff replies mirror to SMS/email. (Parent-reply over the cloud portal is a noted follow-up; over LAN it's fully two-way.) |
 | **Library circulation** | ❌ Absent | "Books" today is a fees item, not catalog + loans/returns. |
-| **Transport / bus routes** | ❌ Absent | Common add-on; route, stop, and pickup tracking. |
+| **Transport / bus routes** | ✅ Full | **Transport** module: routes (driver/vehicle/capacity/fee), stops with pickup times, one-per-pupil assignment with fee override, and **termly fee collection posted to the finance ledger** (category `transport`, term-attributed, reconciled — added to the Finance Audit checks). Parent view + cloud snapshot carry the child's route/stop/balance. |
 | **Online admissions / enquiry intake** | ❌ Absent | A public "apply/enquire" form feeding the admissions pipeline. |
 | **Student ID cards & certificates** | ⚠️ Partial | Report cards print; no ID-card or certificate/testimonial generator. |
 | **Behaviour / discipline log** | ⚠️ Thin | `welfare_records`/`student_events` exist but no dedicated conduct/incident workflow surfaced to parents. |

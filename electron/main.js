@@ -38,6 +38,7 @@ const registerPaymentsIntentsHandlers = require('./ipc/payments_intents');
 const registerAnnouncementsHandlers = require('./ipc/announcements');
 const registerCloudSyncHandlers = require('./ipc/cloud_sync');
 const registerTimetableHandlers = require('./ipc/timetable');
+const registerTransportHandlers = require('./ipc/transport');
 const registerMessagingHandlers = require('./ipc/messaging');
 const registerHomeworkHandlers = require('./ipc/homework');
 const registerStubHandlers = require('./ipc/_stubs');
@@ -265,6 +266,7 @@ app.whenReady().then(async () => {
   mount('cloudSync', () => registerCloudSyncHandlers(ipcMain, db));
   mount('announcements', () => registerAnnouncementsHandlers(ipcMain, db));
   mount('timetable', () => registerTimetableHandlers(ipcMain, db));
+  mount('transport', () => registerTransportHandlers(ipcMain, db));
   mount('messaging', () => registerMessagingHandlers(ipcMain, db));
   mount('homework', () => registerHomeworkHandlers(ipcMain, db));
 

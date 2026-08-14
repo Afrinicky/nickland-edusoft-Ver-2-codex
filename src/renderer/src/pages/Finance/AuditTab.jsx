@@ -12,7 +12,7 @@ export default function AuditTab() {
   async function runAudit() {
     setLoading(true);
 
-    const [income, expense, payments, canteenPayments, salaries] = await Promise.all([
+    const [income, expense, payments, canteenPayments, salaries, transport] = await Promise.all([
       window.api.finance.listIncome({ termId: currentTerm?.id }),
       window.api.finance.listExpense({ termId: currentTerm?.id }),
       window.api.fees.dashboard(currentTerm?.id),
@@ -21,6 +21,7 @@ export default function AuditTab() {
         new Date().getMonth() + 1,
         new Date().getFullYear()
       ),
+      window.api.transport.dashboard(currentTerm?.id).catch(() => ({ metrics: {} })),
     ]);
 
     const findings = [];
@@ -69,6 +70,19 @@ export default function AuditTab() {
         severity: 'medium',
         title: 'Canteen income does not match canteen payments',
         description: `Income ledger shows ${fmtCedi(canteenIncome)} from canteen but the canteen module shows ${fmtCedi(canteenActual)} collected. Difference: ${fmtCedi(canteenDiff)}.`,
+        items: [],
+      });
+    }
+
+    // Check 4b: Transport income vs transport collections
+    const transportIncome = income.filter(r => r.category === 'transport').reduce((s, r) => s + r.amount, 0);
+    const transportActual = transport?.metrics?.total_collected || 0;
+    const transportDiff = Math.abs(transportIncome - transportActual);
+    if (transportDiff > 1) {
+      findings.push({
+        severity: 'medium',
+        title: 'Transport income does not match transport collections',
+        description: `Income ledger shows ${fmtCedi(transportIncome)} from transport but the transport module shows ${fmtCedi(transportActual)} collected. Difference: ${fmtCedi(transportDiff)}.`,
         items: [],
       });
     }

@@ -23,6 +23,7 @@ import ScoresReport from './pages/Scores/Report.jsx';
 import CanteenIndex from './pages/Canteen/Index.jsx';
 import FinanceIndex from './pages/Finance/Index.jsx';
 import InventoryIndex from './pages/Inventory/Index.jsx';
+import TransportIndex from './pages/Transport/Index.jsx';
 import NotificationsIndex from './pages/Notifications/Index.jsx';
 import MessagesIndex from './pages/Messages/Index.jsx';
 import SettingsIndex from './pages/Settings/Index.jsx';
@@ -89,6 +90,7 @@ export default function App() {
           <Route path="canteen" element={<RequirePermission module="canteen"><CanteenIndex /></RequirePermission>} />
           <Route path="finance" element={<RequirePermission module="finance"><FinanceIndex /></RequirePermission>} />
           <Route path="inventory" element={<RequirePermission module="finance"><InventoryIndex /></RequirePermission>} />
+          <Route path="transport" element={<RequirePermission module="finance"><TransportIndex /></RequirePermission>} />
           <Route path="notifications" element={<RequirePermission module="notifications"><NotificationsIndex /></RequirePermission>} />
           <Route path="messages" element={<RequirePermission module="notifications"><MessagesIndex /></RequirePermission>} />
           <Route path="settings/*" element={<RequirePermission module="settings"><SettingsIndex /></RequirePermission>} />

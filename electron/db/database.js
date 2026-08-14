@@ -1841,6 +1841,69 @@ function runMigrations(db) {
       CREATE INDEX IF NOT EXISTS idx_homework_term   ON homework(term_id, class_group_id);
     `);
   });
+
+  // 28. Transport — bus routes, the stops on each route, which route/stop a
+  //     pupil rides, and termly transport-fee collection. Fee collection posts
+  //     to the finance ledger under category 'transport', attributed by term_id
+  //     and idempotent on the receipt number, exactly like fees/canteen — so it
+  //     can never fall out of the term-scoped Finance reports or double-post.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS transport_routes (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        name           TEXT NOT NULL,
+        description    TEXT,
+        vehicle_number TEXT,
+        driver_name    TEXT,
+        driver_phone   TEXT,
+        capacity       INTEGER,
+        fee_per_term   REAL NOT NULL DEFAULT 0,
+        is_active      INTEGER NOT NULL DEFAULT 1,
+        created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS transport_stops (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        route_id      INTEGER NOT NULL,
+        name          TEXT NOT NULL,
+        pickup_time   TEXT,
+        dropoff_time  TEXT,
+        display_order INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (route_id) REFERENCES transport_routes(id) ON DELETE CASCADE
+      );
+      -- One active assignment per pupil. fee_override lets a pupil pay a rate
+      -- other than the route default (siblings, staff children, part-week).
+      CREATE TABLE IF NOT EXISTS student_transport (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id   INTEGER NOT NULL UNIQUE,
+        route_id     INTEGER NOT NULL,
+        stop_id      INTEGER,
+        direction    TEXT NOT NULL DEFAULT 'both',   -- both | morning | afternoon
+        fee_override REAL,
+        start_date   TEXT,
+        is_active    INTEGER NOT NULL DEFAULT 1,
+        created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+        FOREIGN KEY (route_id) REFERENCES transport_routes(id),
+        FOREIGN KEY (stop_id) REFERENCES transport_stops(id)
+      );
+      CREATE TABLE IF NOT EXISTS transport_payments (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id     INTEGER NOT NULL,
+        route_id       INTEGER,
+        term_id        INTEGER,
+        amount         REAL NOT NULL,
+        payment_date   TEXT NOT NULL,
+        payment_method TEXT DEFAULT 'Cash',
+        received_by    INTEGER,
+        notes          TEXT,
+        receipt_number TEXT UNIQUE,
+        created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_transport_stops_route ON transport_stops(route_id);
+      CREATE INDEX IF NOT EXISTS idx_transport_pay_term    ON transport_payments(term_id, student_id);
+    `);
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

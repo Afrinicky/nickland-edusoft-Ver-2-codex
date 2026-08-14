@@ -215,6 +215,22 @@ const api = {
     staffUnread:       ()                    => ipcRenderer.invoke('messages:staff-unread'),
   },
 
+  // ── Transport (bus routes, stops, riders, fee collection) ──
+  transport: {
+    listRoutes:        ()                    => ipcRenderer.invoke('transport:list-routes'),
+    saveRoute:         (data)                => ipcRenderer.invoke('transport:save-route', data),
+    deleteRoute:       (id)                  => ipcRenderer.invoke('transport:delete-route', id),
+    listStops:         (routeId)             => ipcRenderer.invoke('transport:list-stops', routeId),
+    saveStop:          (data)                => ipcRenderer.invoke('transport:save-stop', data),
+    deleteStop:        (id)                  => ipcRenderer.invoke('transport:delete-stop', id),
+    assign:            (data)                => ipcRenderer.invoke('transport:assign', data),
+    unassign:          (studentId)           => ipcRenderer.invoke('transport:unassign', studentId),
+    student:           (studentId, termId)   => ipcRenderer.invoke('transport:student', { studentId, termId }),
+    listRiders:        (args)                => ipcRenderer.invoke('transport:list-riders', args || {}),
+    recordPayment:     (data)                => ipcRenderer.invoke('transport:record-payment', data),
+    dashboard:         (termId)              => ipcRenderer.invoke('transport:dashboard', termId),
+  },
+
   // ── Cloud sync (thin-cloud, multi-school portal) ──
   cloud: {
     status:            ()                    => ipcRenderer.invoke('cloud:status'),
