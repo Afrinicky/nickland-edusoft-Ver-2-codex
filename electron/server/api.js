@@ -636,6 +636,15 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, homework: hw.listForStudent(db, sid) });
   });
 
+  // ── Transport: a parent's child's route, stop, times and fee balance ──
+  add('GET', `${API}/parent/children/:id/transport`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const tr = require('../ipc/transport');
+    return json(res, 200, { ok: true, transport: tr.transportForStudent(db, sid) });
+  });
+
   function readRaw(req) {
     return new Promise((resolve) => {
       let d = ''; let tooBig = false;

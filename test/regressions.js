@@ -669,6 +669,62 @@ console.log('\n── Financial reconciliation: ledger vs modules ──');
   }
 }
 
+console.log('\n── Transport: routes, riders and fee collection ──');
+{
+  const db = makeDb();
+  const t = require(path.join(ROOT, 'electron/ipc/transport.js'));
+  const h = {};
+  t({ handle: (n, f) => { h[n] = f; } }, db);
+  db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('receipt_counter','1','system')").run();
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1)");
+  // Term ended 10 days ago → today is vacation, the case that broke canteen.
+  const ended = new Date(Date.now() - 10 * 864e5).toISOString().slice(0, 10);
+  const past = new Date(Date.now() - 40 * 864e5).toISOString().slice(0, 10);
+  db.prepare("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,3,'T3',?,?,1)").run(past, ended);
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10)");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'A','B','X1',1,'Active'),(2,'C','D','X2',1,'Active')");
+
+  const route = h['transport:save-route'](null, { name: 'Route A', fee_per_term: 150, capacity: 20 });
+  ck('a route can be created', route.ok && route.id);
+  const stop = h['transport:save-stop'](null, { route_id: route.id, name: 'Adenta', pickup_time: '06:40' });
+  ck('a stop can be added to a route', stop.ok);
+
+  h['transport:assign'](null, { student_id: 1, route_id: route.id, stop_id: stop.id });
+  h['transport:assign'](null, { student_id: 2, route_id: route.id, fee_override: 100 });
+  const s1 = h['transport:student'](null, { studentId: 1 });
+  ck('a rider inherits the route fee', s1.fee_per_term === 150 && s1.balance === 150 && s1.route_name === 'Route A');
+  const s2 = h['transport:student'](null, { studentId: 2 });
+  ck('a fee override beats the route fee', s2.fee_per_term === 100);
+
+  // Collect during vacation — the exact scenario that lost canteen money.
+  const pay = h['transport:record-payment'](null, { student_id: 1, amount: 150 });
+  ck('a transport fee can be collected', pay.ok && /^TR\//.test(pay.receipt_number));
+  const ledger = db.prepare("SELECT COALESCE(SUM(amount),0) t FROM income_records WHERE category='transport' AND term_id=1").get().t;
+  const dash = h['transport:dashboard'](null, 1);
+  ck('transport income reaches the ledger under the right term (even in vacation)',
+    ledger === 150 && dash.metrics.total_collected === 150);
+  ck('the dashboard reconciles with the ledger', dash.metrics.total_collected === ledger);
+  ck('outstanding sums the unpaid riders', dash.metrics.outstanding === 100);
+  ck('a paid rider shows a zero balance', h['transport:student'](null, { studentId: 1 }).balance === 0);
+
+  // Assigning is idempotent (one active row per pupil).
+  h['transport:assign'](null, { student_id: 1, route_id: route.id });
+  ck('a pupil has at most one active assignment',
+    db.prepare('SELECT COUNT(*) c FROM student_transport WHERE student_id=1 AND is_active=1').get().c === 1);
+
+  // A route with riders cannot be deleted by accident.
+  ck('a route with riders refuses deletion', h['transport:delete-route'](null, route.id).ok === false);
+
+  // Startup repair: a transport payment with no income gets back-posted.
+  const ledger2 = require(path.join(ROOT, 'electron/ipc/_ledger.js'));
+  db.prepare("INSERT INTO transport_payments (student_id,route_id,term_id,amount,payment_date,receipt_number) VALUES (2,?,1,100,?,'TR/OLD/1')").run(route.id, ended);
+  ledger2.reconcileLedger(db);
+  ck('startup repair back-posts a transport payment that never reached Finance',
+    db.prepare("SELECT COALESCE(SUM(amount),0) t FROM income_records WHERE category='transport'").get().t === 250);
+
+  ck('non-positive transport amounts are rejected', h['transport:record-payment'](null, { student_id: 1, amount: 0 }).ok === false);
+}
+
 console.log('\n── Fees: re-issuing a bill ──');
 {
   const db = makeDb();

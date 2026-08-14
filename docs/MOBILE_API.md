@@ -55,6 +55,7 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | GET | `/parent/messages/:id` | parent | One thread with its messages (marks it read for the parent). |
 | POST | `/parent/messages` | parent | `{ threadId?, studentId?, subject?, body }` — start or continue a thread. |
 | GET | `/parent/children/:id/homework` | parent | The child's class homework (upcoming + recently due). |
+| GET | `/parent/children/:id/transport` | parent | The child's bus route, stop, pickup time and transport-fee balance. |
 
 ### Payment gateway (Paystack by default; pluggable per school)
 - Configured in Settings → Online Payments (`payment_gateway`, `paystack_secret_key`, …).

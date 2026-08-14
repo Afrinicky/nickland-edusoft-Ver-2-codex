@@ -17,20 +17,22 @@ export default function ChildDetail() {
   const [intents, setIntents] = useState([]);
   const [timetable, setTimetable] = useState(null);
   const [homework, setHomework] = useState([]);
+  const [transport, setTransport] = useState(null);
   const [error, setError] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [d, r, it, tt, hw] = await Promise.all([
+      const [d, r, it, tt, hw, tp] = await Promise.all([
         api.child(token, id),
         api.childReport(token, id).catch(() => null),
         api.childIntents(token, id).catch(() => ({ intents: [] })),
         api.childTimetable(token, id).catch(() => null),
         api.childHomework(token, id).catch(() => ({ homework: [] })),
+        api.childTransport(token, id).catch(() => ({ transport: null })),
       ]);
-      setData(d); setReport(r); setIntents(it.intents || []); setTimetable(tt); setHomework(hw.homework || []);
+      setData(d); setReport(r); setIntents(it.intents || []); setTimetable(tt); setHomework(hw.homework || []); setTransport(tp.transport);
     } catch (e) { setError(e.message); }
   }, [token, id]);
 
@@ -94,6 +96,7 @@ export default function ChildDetail() {
         }
       </Card>
 
+      <TransportCard t={transport} />
       <HomeworkCard items={homework} />
       <TimetableCard tt={timetable} />
 
@@ -114,6 +117,21 @@ export default function ChildDetail() {
           balance={c.fees.balance} onDone={() => { setPayOpen(false); load(); }} />
       )}
     </Screen>
+  );
+}
+
+// The child's bus route, stop, pickup time and transport-fee balance.
+function TransportCard({ t }) {
+  if (!t) return null;
+  return (
+    <Card>
+      <H2>Transport</H2>
+      <Row left={<Muted>Route</Muted>} right={<Text style={{ fontWeight: '600' }}>{t.route_name}</Text>} />
+      {t.stop_name ? <Row left={<Muted>Stop</Muted>} right={<Text>{t.stop_name}{t.pickup_time ? ` · ${t.pickup_time}` : ''}</Text>} /> : null}
+      {t.driver_name ? <Row left={<Muted>Driver</Muted>} right={<Text>{t.driver_name}{t.driver_phone ? ` · ${t.driver_phone}` : ''}</Text>} /> : null}
+      <Row left={<Text style={{ fontWeight: '700' }}>Transport fee</Text>}
+        right={<Text style={{ fontWeight: '800', color: t.balance > 0 ? colors.danger : colors.success }}>{money(t.balance)} {t.balance > 0 ? 'due' : 'paid'}</Text>} />
+    </Card>
   );
 }
 

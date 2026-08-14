@@ -288,6 +288,34 @@ function reconcileLedger(db) {
       stats.income_created++;
     }
 
+    // 4b. Transport payments without a matching income row (matched by receipt).
+    let transportPayments = [];
+    try {
+      transportPayments = db.prepare(`
+        SELECT tp.* FROM transport_payments tp
+        WHERE NOT EXISTS (
+          SELECT 1 FROM income_records ir
+          WHERE ir.receipt_number IS NOT NULL AND ir.receipt_number = tp.receipt_number
+        )
+      `).all();
+    } catch (_) { /* table may not exist on very old databases mid-migration */ }
+    for (const tp of transportPayments) {
+      postIncome(db, {
+        receipt_number: tp.receipt_number,
+        category: 'transport',
+        amount: tp.amount,
+        description: `Transport fee — ${tp.receipt_number || ''}`.trim(),
+        payment_method: tp.payment_method || 'Cash',
+        date: tp.payment_date,
+        term_id: tp.term_id || null,
+        source: 'transport_payment',
+        student_id: tp.student_id,
+        recorded_by: tp.received_by || null,
+        is_auto: 1,
+      });
+      stats.income_created++;
+    }
+
     // 5. Paid salaries without a matching expense row.
     const paidSalaries = db.prepare(`
       SELECT ss.*, s.surname, s.first_name FROM staff_salaries ss
