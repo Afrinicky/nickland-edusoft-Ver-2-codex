@@ -1,5 +1,7 @@
 // Scores IPC handlers — score entry, ranking, term summary.
-const ExcelJS = require('exceljs');
+// ExcelJS is required lazily inside the two Excel export/import handlers so this
+// module (and its exported saveExamMark/readWeights helpers) loads in the
+// plain-Node test harness, which has no node_modules.
 const path = require('path');
 const fs = require('fs');
 const { enqueueStudentSnapshot } = require('../server/sync/outbox');
@@ -507,6 +509,7 @@ function registerScoresHandlers(ipcMain, db) {
   // exported sheet mirrors exactly what is shown on screen.
   ipcMain.handle('scores:export-assessment-compilation', async (_e, { savePath, headers, rows, meta }) => {
     try {
+      const ExcelJS = require('exceljs');
       const cols = Array.isArray(headers) ? headers : [];
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet('Assessment Compilation');
@@ -558,6 +561,7 @@ function registerScoresHandlers(ipcMain, db) {
   // until the user saves), so matching is done by the "Index No." column.
   ipcMain.handle('scores:import-assessment-compilation', async (_e, { filePath }) => {
     try {
+      const ExcelJS = require('exceljs');
       const wb = new ExcelJS.Workbook();
       await wb.xlsx.readFile(filePath);
       const ws = wb.worksheets[0];

@@ -547,7 +547,7 @@ function createApiServer(db, opts = {}) {
         amount: body.amount,
         payment_method: body.payment_method || 'Cash',
         notes: body.notes || '',
-        received_by: ctx.user.full_name || ctx.user.username || null,
+        received_by: ctx.user.id || null, // users(id) FK — the staff who collected it
       });
     } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
     if (!result.ok) return json(res, 400, result);

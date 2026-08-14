@@ -1710,6 +1710,28 @@ function runMigrations(db) {
       CREATE INDEX IF NOT EXISTS idx_homework_class ON homework(class_group_id, due_date);
     `);
   });
+
+  // 25. canteen_payments.daily_rate — the canteen record-payment flow has always
+  //     INSERTed a `daily_rate` column (the rate charged at the time of payment),
+  //     but the base schema never created it. On any database built from the
+  //     current schema the INSERT failed with "no column named daily_rate" and
+  //     the whole payment rolled back, so canteen collection was broken on fresh
+  //     installs. Add the column (additive, idempotent) and backfill existing
+  //     rows from the configured rate. Mirrors migration 8 (term_id).
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(canteen_payments)").all().map(c => c.name);
+    if (!cols.includes('daily_rate')) {
+      db.exec("ALTER TABLE canteen_payments ADD COLUMN daily_rate REAL");
+      db.exec(`
+        UPDATE canteen_payments
+           SET daily_rate = COALESCE(
+             (SELECT CAST(value AS REAL) FROM settings WHERE key = 'canteen_daily_rate'),
+             CASE WHEN days_covered > 0 THEN amount / days_covered ELSE 0 END
+           )
+         WHERE daily_rate IS NULL
+      `);
+    }
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

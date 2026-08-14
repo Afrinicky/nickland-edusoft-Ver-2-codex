@@ -312,6 +312,11 @@ console.log('\n── Schema ──');
   ck('sync_outbox has next_attempt_at', cols.includes('next_attempt_at'));
   ck('sync_outbox has dead', cols.includes('dead'));
 
+  // Regression: canteen_payments.daily_rate was written by the record-payment
+  // flow but never created, breaking canteen collection on fresh databases.
+  const canteenCols = db.prepare('PRAGMA table_info(canteen_payments)').all().map(c => c.name);
+  ck('migration adds canteen_payments.daily_rate', canteenCols.includes('daily_rate'));
+
   // Migrations must be idempotent — they run on every launch.
   let threw = false;
   try { runMigrations(db); runMigrations(db); } catch (_) { threw = true; }
@@ -407,6 +412,149 @@ console.log('\n── Homework ──');
   ck('past homework is hidden from the upcoming view', hw.listForClass(db, 1).length === 1);
   ck('past homework still shows in the full history', hw.listForClass(db, 1, { all: true }).length === 2);
   ck('student sees their class homework', hw.listForStudent(db, 1).length === 1);
+}
+
+console.log('\n── Finance ledger ──');
+{
+  const db = makeDb();
+  const ledger = require(path.join(ROOT, 'electron/ipc/_ledger.js'));
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-04-30',1);");
+
+  ck('resolveTermForDate finds the term whose window contains the date', ledger.resolveTermForDate(db, '2026-02-15')?.id === 1);
+
+  const id1 = ledger.postIncome(db, { category: 'fees', amount: 100, date: '2026-02-15', receipt_number: 'R1' });
+  const rec = db.prepare('SELECT * FROM income_records WHERE id=?').get(id1);
+  ck('postIncome always sets transaction_date (the NOT NULL column older code dropped)', rec.transaction_date === '2026-02-15');
+  ck('postIncome resolves term_id + academic_year_id from the date', rec.term_id === 1 && rec.academic_year_id === 1);
+
+  const id2 = ledger.postIncome(db, { category: 'fees', amount: 100, date: '2026-02-15', receipt_number: 'R1' });
+  ck('postIncome is idempotent on receipt_number', id2 === id1 && db.prepare('SELECT COUNT(*) c FROM income_records').get().c === 1);
+
+  const c1 = ledger.postIncome(db, { category: 'canteen', amount: 20, linked_canteen_payment_id: 55 });
+  const c2 = ledger.postIncome(db, { category: 'canteen', amount: 20, linked_canteen_payment_id: 55 });
+  ck('postIncome is idempotent on linked_canteen_payment_id', c1 === c2);
+}
+
+console.log('\n── Finance ledger: reconciliation ──');
+{
+  const db = makeDb();
+  const ledger = require(path.join(ROOT, 'electron/ipc/_ledger.js'));
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-04-30',1);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,status) VALUES (1,'A','B','X','Active');");
+  db.exec("INSERT INTO payments (id,student_id,term_id,amount,payment_date,receipt_number,is_reversed) VALUES (1,1,1,150,'2026-02-10','RC1',0);");
+
+  ck('a fee payment starts with no ledger row', db.prepare('SELECT COUNT(*) c FROM income_records').get().c === 0);
+  ledger.reconcileLedger(db);
+  ck('reconcileLedger back-posts income for an orphan fee payment',
+    db.prepare("SELECT COUNT(*) c FROM income_records WHERE linked_payment_id=1 OR receipt_number='RC1'").get().c === 1);
+  ledger.reconcileLedger(db);
+  ck('reconcileLedger is idempotent (no duplicate on re-run)', db.prepare('SELECT COUNT(*) c FROM income_records').get().c === 1);
+
+  // A reversed payment must not be back-posted.
+  db.exec("INSERT INTO payments (id,student_id,term_id,amount,payment_date,receipt_number,is_reversed) VALUES (2,1,1,200,'2026-02-11','RC2',1);");
+  ledger.reconcileLedger(db);
+  ck('reconcileLedger skips reversed payments', db.prepare("SELECT COUNT(*) c FROM income_records WHERE receipt_number='RC2'").get().c === 0);
+}
+
+console.log('\n── Canteen collection ──');
+{
+  const db = makeDb();
+  const canteen = require(path.join(ROOT, 'electron/ipc/canteen.js'));
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-04-30',1);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,status) VALUES (1,'A','B','X','Active');");
+  for (const d of ['2026-01-05', '2026-01-06', '2026-01-07', '2026-01-08', '2026-01-09']) {
+    db.prepare("INSERT INTO school_calendar (date,day_type,term_id) VALUES (?,'school_day',1)").run(d);
+  }
+
+  // Default daily rate is GHS 5, so GHS 15 covers 3 days.
+  const r = canteen.recordCanteenPayment(db, { student_id: 1, amount: 15, payment_date: '2026-01-05' });
+  ck('canteen payment covers floor(amount / rate) days', r.ok && r.days_covered === 3);
+  ck('canteen marks exactly that many school days paid', db.prepare("SELECT COUNT(*) c FROM canteen_day_status WHERE student_id=1 AND status='paid'").get().c === 3);
+  ck('canteen collection reaches the finance ledger', db.prepare("SELECT COUNT(*) c FROM income_records WHERE category='canteen'").get().c === 1);
+
+  const r2 = canteen.recordCanteenPayment(db, { student_id: 1, amount: 10, payment_date: '2026-01-05' });
+  ck('a later canteen payment continues from the next unpaid day', r2.days_covered === 2 && db.prepare("SELECT COUNT(*) c FROM canteen_day_status WHERE student_id=1 AND status='paid'").get().c === 5);
+
+  const bad = canteen.recordCanteenPayment(db, { student_id: 1, amount: 0 });
+  ck('canteen rejects a non-positive amount', bad.ok === false);
+}
+
+console.log('\n── Fees payment ──');
+{
+  const db = makeDb();
+  // Capture the real IPC handlers so we can invoke the record-payment logic
+  // exactly as the app does, without an Electron runtime.
+  const handlers = {};
+  const ipc = { handle: (name, fn) => { handlers[name] = fn; } };
+  require(path.join(ROOT, 'electron/ipc/fees.js'))(ipc, db);
+  const call = (name, arg) => handlers[name](null, arg);
+
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-04-30',1);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,status) VALUES (1,'A','B','X','Active');");
+  db.exec("INSERT INTO student_bills (id,student_id,term_id,total_billed,total_paid,balance) VALUES (1,1,1,400,0,400);");
+
+  const r1 = call('fees:record-payment', { student_id: 1, student_bill_id: 1, term_id: 1, amount: 150 });
+  ck('fee payment succeeds and returns a receipt number', r1.ok && /^FE\//.test(r1.receipt_number));
+  const bill1 = db.prepare('SELECT total_paid, balance FROM student_bills WHERE id=1').get();
+  ck('fee payment updates the bill (paid + balance)', bill1.total_paid === 150 && bill1.balance === 250);
+  ck('fee payment posts income to the ledger, linked to the payment',
+    db.prepare('SELECT COUNT(*) c FROM income_records WHERE category=\'fees\' AND linked_payment_id=?').get(r1.id).c === 1);
+
+  const r2 = call('fees:record-payment', { student_id: 1, student_bill_id: 1, term_id: 1, amount: 250 });
+  const bill2 = db.prepare('SELECT total_paid, balance FROM student_bills WHERE id=1').get();
+  ck('a second payment clears the balance', bill2.total_paid === 400 && bill2.balance === 0);
+  ck('receipt numbers are unique and increasing', r2.receipt_number !== r1.receipt_number);
+  ck('each payment posts its own ledger row', db.prepare("SELECT COUNT(*) c FROM income_records WHERE category='fees'").get().c === 2);
+
+  const debtors = call('fees:debtors-report', 1);
+  ck('a fully-paid student is not a debtor', Array.isArray(debtors) && debtors.every(d => d.student_id !== 1));
+}
+
+console.log('\n── Fees bulk pay ──');
+{
+  const db = makeDb();
+  const handlers = {};
+  require(path.join(ROOT, 'electron/ipc/fees_bulk_pay.js'))({ handle: (n, f) => { handlers[n] = f; } }, db);
+  const call = (name, arg) => handlers[name](null, arg);
+
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-04-30',1);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,status) VALUES (1,'A','B','X1','Active'),(2,'C','D','X2','Active');");
+  db.exec("INSERT INTO student_bills (id,student_id,term_id,total_billed,total_paid,balance) VALUES (1,1,1,400,0,400),(2,2,1,300,0,300);");
+
+  const p1 = call('fees:bulk-pay-record', { student_id: 1, bill_id: 1, term_id: 1, amount: 400 });
+  const p2 = call('fees:bulk-pay-record', { student_id: 2, bill_id: 2, term_id: 1, amount: 300 });
+  ck('bulk pay records both students without receipt-number collision', p1.ok && p2.ok && p1.receipt_number !== p2.receipt_number);
+  ck('bulk pay clears each bill', db.prepare('SELECT balance FROM student_bills WHERE id=1').get().balance === 0
+    && db.prepare('SELECT balance FROM student_bills WHERE id=2').get().balance === 0);
+  ck('bulk pay posts a ledger row per student', db.prepare("SELECT COUNT(*) c FROM income_records WHERE category='fees'").get().c === 2);
+  ck('bulk pay rejects a non-positive amount', call('fees:bulk-pay-record', { student_id: 1, amount: 0 }).ok === false);
+}
+
+console.log('\n── Scores weighting ──');
+{
+  const db = makeDb();
+  const scores = require(path.join(ROOT, 'electron/ipc/scores.js'));
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1);");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,is_current) VALUES (1,1,1,'T1',1);");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,status) VALUES (1,'A','B','X','Active');");
+  db.exec("INSERT INTO subjects (id,name,code,is_active) VALUES (1,'Maths','M',1);");
+
+  // Default weighting is 40/60, so a raw exam of 50 converts to 50/100*60 = 30
+  // (class score is 0 here → total 30).
+  scores.saveExamMark(db, { studentId: 1, subjectId: 1, termId: 1, examScore: 50 });
+  const row = db.prepare('SELECT exam_score, total_score FROM scores WHERE student_id=1 AND term_id=1 AND subject_id=1').get();
+  ck('saveExamMark stores the raw exam score', row.exam_score === 50);
+  ck('saveExamMark weights the exam into the total (60%)', row.total_score === 30);
+
+  db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('exam_weight_pct','50','academics')").run();
+  scores.saveExamMark(db, { studentId: 1, subjectId: 1, termId: 1, examScore: 50 });
+  ck('saveExamMark honors the configured exam weight (50%)',
+    db.prepare('SELECT total_score FROM scores WHERE student_id=1 AND term_id=1 AND subject_id=1').get().total_score === 25);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

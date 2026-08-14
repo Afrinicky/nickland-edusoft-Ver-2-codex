@@ -1,6 +1,7 @@
 // Nickland Edusoft — Canteen Extra IPC (dashboard, quick-pay, bulk-pay, exemptions)
 // Copyright © 2026 Nickland Sales. All rights reserved.
 const { postIncome } = require('./_ledger');
+const { getNextReceiptNumber } = require('../utils/idgen');
 
 function getDailyRate(db) {
   const r = db.prepare("SELECT value FROM settings WHERE key = 'canteen_daily_rate'").get();
@@ -301,11 +302,10 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
       `);
       for (const d of dates) stmt.run(studentId, d, payRes.lastInsertRowid);
 
-      // Auto-record income via central ledger helper.
-      const receipt = db.prepare("SELECT value FROM settings WHERE key = 'receipt_counter'").get();
-      const n = parseInt(receipt?.value || '1', 10);
+      // Auto-record income via central ledger helper. Use the shared,
+      // upsert-backed counter (a bare UPDATE no-ops if the row is missing).
+      const n = getNextReceiptNumber(db);
       const receiptNo = `CT/${new Date().getFullYear().toString().slice(-2)}/${String(n).padStart(5, '0')}`;
-      db.prepare("UPDATE settings SET value = ? WHERE key = 'receipt_counter'").run(String(n + 1));
 
       postIncome(db, {
         receipt_number: receiptNo,

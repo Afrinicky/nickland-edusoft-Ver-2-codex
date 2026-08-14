@@ -5,10 +5,12 @@
 // Copyright © 2026 Nickland Sales. All rights reserved.
 const { postIncome } = require('./_ledger');
 
+const { getNextReceiptNumber } = require('../utils/idgen');
+
+// Shared upsert-backed counter — a bare UPDATE silently no-ops when the counter
+// row is missing, producing duplicate receipt numbers.
 function nextBooksReceipt(db) {
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'receipt_counter'").get();
-  const n = parseInt(row?.value || '1', 10);
-  db.prepare("UPDATE settings SET value = ? WHERE key = 'receipt_counter'").run(String(n + 1));
+  const n = getNextReceiptNumber(db);
   const year = new Date().getFullYear().toString().slice(-2);
   return `BK/${year}/${String(n).padStart(5, '0')}`;
 }
