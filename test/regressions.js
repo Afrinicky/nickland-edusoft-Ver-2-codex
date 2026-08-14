@@ -395,6 +395,62 @@ console.log('\n── Messaging ──');
   ck('parent sees only their own threads', msg.listThreadsForParent(db, 1).length === 1 && msg.listThreadsForParent(db, 999).length === 0);
 }
 
+console.log('\n── Homework: graded assignments feed the report card ──');
+{
+  const db = makeDb();
+  const hw = require(path.join(ROOT, 'electron/ipc/homework.js'));
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-12-30',1)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10)");
+  db.exec("INSERT INTO subjects (id,name,code,is_active) VALUES (1,'Mathematics','MATH',1)");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'A','B','X1',1,'Active'),(2,'C','D','X2',1,'Active')");
+
+  const a = hw.saveHomework(db, { classId: 1, subjectId: 1, title: 'Exercise 4', maxMarks: 20, dueDate: '2026-03-01' });
+  ck('graded homework creates a backing assessment column', a.ok
+    && db.prepare("SELECT COUNT(*) c FROM assessment_columns WHERE assessment_type LIKE 'Homework:%'").get().c === 1);
+
+  const r = hw.saveMarks(db, { homeworkId: a.id, entries: [
+    { student_id: 1, marks: 16, status: 'submitted' },
+    { student_id: 2, status: 'missing' },
+  ] });
+  ck('homework marks save and link to the assessment pipeline', r.ok && r.linked_to_assessment);
+  ck('a mark reaches assessment_scores', db.prepare('SELECT marks FROM assessment_scores WHERE student_id=1').get().marks === 16);
+  ck('work not turned in scores zero', db.prepare('SELECT marks FROM assessment_scores WHERE student_id=2').get().marks === 0);
+  // 16/20 = 80% of the 40% class weight = 32.
+  ck('homework marks recompute the weighted class score',
+    db.prepare('SELECT class_score FROM scores WHERE student_id=1 AND subject_id=1 AND term_id=1').get().class_score === 32);
+  ck('homework marks flow into the subject total (report card)',
+    db.prepare('SELECT total_score FROM scores WHERE student_id=1 AND subject_id=1 AND term_id=1').get().total_score === 32);
+
+  const sheet = hw.getSheet(db, a.id);
+  ck('marking sheet lists the whole class with statuses',
+    sheet.students.length === 2 && sheet.homework.submitted_count === 1 && sheet.homework.missing_count === 1);
+  ck('homework summary reports the average mark', sheet.homework.average_mark === 16);
+
+  const rep = hw.studentReport(db, 1, 1);
+  ck('student homework report totals marks and percentage',
+    rep.summary.graded === 1 && rep.summary.total_marks === 16 && rep.summary.percentage === 80);
+
+  ck('graded homework requires a subject',
+    hw.saveHomework(db, { classId: 1, title: 'X', maxMarks: 5 }).ok === false);
+  ck('marks above the total are rejected',
+    hw.saveMarks(db, { homeworkId: a.id, entries: [{ student_id: 1, marks: 99 }] }).ok === false);
+  ck('ungraded homework is still allowed', hw.saveHomework(db, { classId: 1, title: 'Bring a ruler' }).ok === true);
+
+  // A parent sees their own child's status + mark on upcoming work.
+  const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+  const b = hw.saveHomework(db, { classId: 1, subjectId: 1, title: 'Read ch.3', maxMarks: 10, dueDate: soon });
+  hw.saveMarks(db, { homeworkId: b.id, entries: [{ student_id: 1, marks: 9, status: 'submitted' }] });
+  const mine = hw.listForStudent(db, 1).find(h => h.title === 'Read ch.3');
+  ck('a parent sees their child\'s own homework mark', mine && mine.my_marks === 9 && mine.my_status === 'submitted');
+
+  // Deleting the homework must not leave phantom marks in the class score.
+  hw.deleteHomework(db, a.id);
+  ck('deleting homework removes its assessment column and marks',
+    db.prepare("SELECT COUNT(*) c FROM assessment_columns WHERE assessment_type='Homework: Exercise 4'").get().c === 0
+    && db.prepare('SELECT COUNT(*) c FROM homework_submissions WHERE homework_id=?').get(a.id).c === 0);
+}
+
 console.log('\n── Homework ──');
 {
   const db = makeDb();

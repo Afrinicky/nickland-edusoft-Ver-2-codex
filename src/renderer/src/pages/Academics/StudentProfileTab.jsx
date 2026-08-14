@@ -6,6 +6,7 @@ import { fullName, initials } from '../../lib/format.js';
 
 export default function StudentProfileTab() {
   const classes = useStore(s => s.classes);
+  const currentTerm = useStore(s => s.currentTerm);
   const [classId, setClassId] = useState('');
   const [studentId, setStudentId] = useState('');
   const [students, setStudents] = useState([]);
@@ -23,19 +24,23 @@ export default function StudentProfileTab() {
   }, [classId]);
 
   // Load profile when student chosen
+  const [homework, setHomework] = useState(null);
+
   useEffect(() => {
-    if (!studentId) { setProfile(null); setEvents([]); return; }
+    if (!studentId) { setProfile(null); setEvents([]); setHomework(null); return; }
     (async () => {
       setLoading(true);
-      const [p, e] = await Promise.all([
+      const [p, e, hw] = await Promise.all([
         window.api.scores.getStudentCumulative(parseInt(studentId)),
         window.api.students.listEvents(parseInt(studentId)),
+        window.api.homework.studentReport(parseInt(studentId), currentTerm?.id).catch(() => null),
       ]);
       setProfile(p);
       setEvents(e);
+      setHomework(hw);
       setLoading(false);
     })();
-  }, [studentId]);
+  }, [studentId, currentTerm?.id]);
 
   return (
     <div className="student-profile-tab">
@@ -78,7 +83,7 @@ export default function StudentProfileTab() {
       )}
 
       {studentId && !loading && profile && (
-        <ProfileView profile={profile} events={events} onAddEvent={(e) => {
+        <ProfileView profile={profile} events={events} homework={homework} onAddEvent={(e) => {
           setEvents([e, ...events]);
         }} />
       )}
@@ -87,7 +92,7 @@ export default function StudentProfileTab() {
 }
 
 // ── Profile View ────────────────────────────────────────
-function ProfileView({ profile, events, onAddEvent }) {
+function ProfileView({ profile, events, homework, onAddEvent }) {
   const { student, overall, terms } = profile;
   const [eventModal, setEventModal] = useState(false);
   const showToast = useStore(s => s.showToast);
@@ -198,6 +203,40 @@ function ProfileView({ profile, events, onAddEvent }) {
               <div className="empty-state">No remarks recorded</div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Homework record — the marks here also feed the class score */}
+      {homework && homework.items && homework.items.length > 0 && (
+        <div className="card" style={{ marginTop: 18 }}>
+          <div className="section-header">
+            <div className="section-title">Homework</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+              {homework.summary.submitted}/{homework.summary.assigned} submitted
+              {homework.summary.missing > 0 && ` · ${homework.summary.missing} not submitted`}
+              {homework.summary.percentage != null && ` · ${homework.summary.percentage}% of marks`}
+            </div>
+          </div>
+          <table className="table" style={{ width: '100%' }}>
+            <thead>
+              <tr><th>Title</th><th>Subject</th><th>Due</th><th>Status</th><th className="text-center">Mark</th></tr>
+            </thead>
+            <tbody>
+              {homework.items.map(h => (
+                <tr key={h.id}>
+                  <td>{h.title}</td>
+                  <td>{h.subject_name || '—'}</td>
+                  <td>{h.due_date || '—'}</td>
+                  <td style={{ color: h.status === 'missing' ? 'var(--danger)' : undefined }}>
+                    {h.status || 'pending'}
+                  </td>
+                  <td className="text-center">
+                    {h.max_marks == null ? '—' : (h.marks == null ? 'not marked' : `${h.marks}/${h.max_marks}`)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

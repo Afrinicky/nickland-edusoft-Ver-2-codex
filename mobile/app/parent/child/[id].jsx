@@ -132,6 +132,22 @@ function HomeworkCard({ items }) {
           {(h.subject_name || h.description) ? (
             <Muted style={{ marginTop: 2 }}>{[h.subject_name, h.description].filter(Boolean).join(' · ')}</Muted>
           ) : null}
+          {/* The child's own submission status and mark, when the school has marked it. */}
+          {(h.my_status || h.my_marks != null) && (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, alignItems: 'center' }}>
+              {h.my_status && h.my_status !== 'pending' && (
+                <Text style={{ fontSize: 12, fontWeight: '700',
+                  color: h.my_status === 'missing' ? colors.danger : colors.success }}>
+                  {h.my_status === 'missing' ? 'Not submitted' : h.my_status === 'late' ? 'Submitted late' : 'Submitted'}
+                </Text>
+              )}
+              {h.my_marks != null && h.max_marks != null && (
+                <Text style={{ fontSize: 12, fontWeight: '700', color: colors.primary }}>
+                  {h.my_marks}/{h.max_marks}
+                </Text>
+              )}
+            </View>
+          )}
         </View>
       ))}
     </Card>

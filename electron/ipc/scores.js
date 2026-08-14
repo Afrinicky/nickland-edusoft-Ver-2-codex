@@ -942,3 +942,7 @@ function recomputeTotal(db, studentId, subjectId, termId, weights) {
 module.exports = registerScoresHandlers;
 module.exports.saveExamMark = saveExamMark;
 module.exports.readWeights = readWeights;
+// Exported so graded homework can push its marks through the same
+// continuous-assessment pipeline the Class Scores sheet uses: assessment_scores
+// → weighted class_score → subject total → report card.
+module.exports.recomputeClassScore = recomputeClassScore;

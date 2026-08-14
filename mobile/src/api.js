@@ -173,8 +173,11 @@ export const api = {
 
   // Homework / assignments
   classHomework: (token, classId, all) => request(`/homework?classId=${classId}${all ? '&all=1' : ''}`, { token }), // staff
-  saveHomework: (token, { classId, subjectId, title, description, dueDate }) =>
-    request('/homework', { method: 'POST', token, body: { classId, subjectId, title, description, dueDate } }),     // staff
+  saveHomework: (token, { classId, subjectId, title, description, dueDate, maxMarks }) =>
+    request('/homework', { method: 'POST', token, body: { classId, subjectId, title, description, dueDate, maxMarks } }), // staff
+  homeworkSheet: (token, homeworkId) => request(`/homework/${homeworkId}/sheet`, { token }),                        // staff
+  saveHomeworkMarks: (token, homeworkId, entries) =>
+    request(`/homework/${homeworkId}/marks`, { method: 'POST', token, body: { entries } }),                         // staff
   childHomework: (token, id) =>
     MODE === 'cloud'
       ? cloudChildren(token).then(cs => {

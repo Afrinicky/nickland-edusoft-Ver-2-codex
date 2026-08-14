@@ -197,9 +197,12 @@ const api = {
 
   // ── Homework / assignments ──
   homework: {
-    listClass:         (classId, all)        => ipcRenderer.invoke('homework:list-class', { classId, all: !!all }),
+    listClass:         (classId, all, termId) => ipcRenderer.invoke('homework:list-class', { classId, all: !!all, termId }),
     save:              (data)                => ipcRenderer.invoke('homework:save', data),
     delete:            (id)                  => ipcRenderer.invoke('homework:delete', id),
+    sheet:             (homeworkId)          => ipcRenderer.invoke('homework:sheet', homeworkId),
+    saveMarks:         (data)                => ipcRenderer.invoke('homework:save-marks', data),
+    studentReport:     (studentId, termId)   => ipcRenderer.invoke('homework:student-report', { studentId, termId }),
   },
 
   // ── Messaging (parent ↔ school threads) ──

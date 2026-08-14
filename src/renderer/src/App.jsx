@@ -18,8 +18,6 @@ import StaffDetail from './pages/Staff/Detail.jsx';
 import Payroll from './pages/Staff/Payroll.jsx';
 import FeesIndex from './pages/Fees/Index.jsx';
 import AcademicsIndex from './pages/Academics/Index.jsx';
-import TimetableIndex from './pages/Timetable/Index.jsx';
-import HomeworkIndex from './pages/Homework/Index.jsx';
 import ScoresEntry from './pages/Scores/Entry.jsx';
 import ScoresReport from './pages/Scores/Report.jsx';
 import CanteenIndex from './pages/Canteen/Index.jsx';
@@ -81,8 +79,9 @@ export default function App() {
           <Route path="students/:id/print" element={<RequirePermission module="students"><PrintableProfile /></RequirePermission>} />
           <Route path="academics" element={<RequirePermission module="academics"><AcademicsIndex /></RequirePermission>} />
           <Route path="academics/report/:studentId" element={<RequirePermission module="academics"><ScoresReport /></RequirePermission>} />
-          <Route path="timetable" element={<RequirePermission module="academics"><TimetableIndex /></RequirePermission>} />
-          <Route path="homework" element={<RequirePermission module="academics"><HomeworkIndex /></RequirePermission>} />
+          {/* Timetable and Homework now live inside Academics; keep the old paths working. */}
+          <Route path="timetable" element={<Navigate to="/academics?tab=timetable" replace />} />
+          <Route path="homework" element={<Navigate to="/academics?tab=homework" replace />} />
           <Route path="staff" element={<RequirePermission module="staff"><StaffIndex /></RequirePermission>} />
           <Route path="staff/:id" element={<RequirePermission module="staff"><StaffDetail /></RequirePermission>} />
           <Route path="payroll" element={<RequirePermission module="payroll"><Payroll /></RequirePermission>} />
