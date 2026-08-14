@@ -7,8 +7,10 @@ import { useStore } from '../../store/index.js';
 const NAVY = '#1B3A6B';
 const GOLD = '#C9961A';
 
-export default function TimetableIndex() {
-  const { classes, subjects, toast, can } = useStore();
+// `embedded` renders without the standalone page heading, for use as a tab
+// inside Academics (its natural home) while the component stays reusable.
+export default function TimetableIndex({ embedded = false }) {
+  const { classes, subjects, showToast, can } = useStore();
   const canEdit = can('academics', 'edit');
 
   const [periods, setPeriods] = useState([]);
@@ -48,13 +50,13 @@ export default function TimetableIndex() {
   if (loading) return <div style={{ padding: 24 }}>Loading timetable…</div>;
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200 }}>
-      <h1 style={{ color: NAVY, margin: '0 0 4px' }}>Timetable</h1>
+    <div style={embedded ? {} : { padding: 24, maxWidth: 1200 }}>
+      {!embedded && <h1 style={{ color: NAVY, margin: '0 0 4px' }}>Timetable</h1>}
       <p style={{ color: '#64748B', marginTop: 0 }}>
         Set the school's daily periods once, then fill each class's weekly grid.
       </p>
 
-      <BellSchedule periods={periods} canEdit={canEdit} onChange={loadPeriods} toast={toast} />
+      <BellSchedule periods={periods} canEdit={canEdit} onChange={loadPeriods} showToast={showToast} />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '24px 0 12px', flexWrap: 'wrap' }}>
         <h2 style={{ color: NAVY, margin: 0 }}>Class timetable</h2>
@@ -62,18 +64,18 @@ export default function TimetableIndex() {
           style={selStyle}>
           {(classes || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <ExportButtons classId={classId} className={(classes || []).find(c => c.id === classId)?.name} toast={toast} />
+        <ExportButtons classId={classId} className={(classes || []).find(c => c.id === classId)?.name} showToast={showToast} />
       </div>
 
       {grid
         ? <ClassGrid grid={grid} subjects={subjects || []} teachers={teachers}
-            classId={classId} canEdit={canEdit} onSaved={() => window.api.timetable.getClass(classId).then(setGrid)} toast={toast} />
+            classId={classId} canEdit={canEdit} onSaved={() => window.api.timetable.getClass(classId).then(setGrid)} showToast={showToast} />
         : <div>Select a class.</div>}
     </div>
   );
 }
 
-function ExportButtons({ classId, className, toast }) {
+function ExportButtons({ classId, className, showToast }) {
   const [busy, setBusy] = useState(null);
   async function run(format) {
     if (!classId) return;
@@ -90,9 +92,9 @@ function ExportButtons({ classId, className, toast }) {
       const out = format === 'excel'
         ? await window.api.timetable.exportClassExcel({ classId, savePath: res.filePath })
         : await window.api.timetable.exportClassPdf({ classId, savePath: res.filePath });
-      if (out.ok) toast(`Timetable exported to ${ext.toUpperCase()}.`, 'success');
-      else toast(out.error || 'Export failed.', 'error');
-    } catch (e) { toast(e?.message || 'Export failed.', 'error'); }
+      if (out.ok) showToast(`Timetable exported to ${ext.toUpperCase()}.`, 'success');
+      else showToast(out.error || 'Export failed.', 'error');
+    } catch (e) { showToast(e?.message || 'Export failed.', 'error'); }
     finally { setBusy(null); }
   }
   return (
@@ -103,19 +105,19 @@ function ExportButtons({ classId, className, toast }) {
   );
 }
 
-function BellSchedule({ periods, canEdit, onChange, toast }) {
+function BellSchedule({ periods, canEdit, onChange, showToast }) {
   const [form, setForm] = useState({ label: '', start_time: '', end_time: '', is_break: false });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   async function add() {
-    if (!form.label || !form.start_time || !form.end_time) { toast('Label, start and end time are required.', 'error'); return; }
+    if (!form.label || !form.start_time || !form.end_time) { showToast('Label, start and end time are required.', 'error'); return; }
     const r = await window.api.timetable.savePeriod({ ...form, display_order: periods.length });
-    if (r.ok) { setForm({ label: '', start_time: '', end_time: '', is_break: false }); onChange(); toast('Period added.', 'success'); }
-    else toast(r.error || 'Could not save.', 'error');
+    if (r.ok) { setForm({ label: '', start_time: '', end_time: '', is_break: false }); onChange(); showToast('Period added.', 'success'); }
+    else showToast(r.error || 'Could not save.', 'error');
   }
   async function remove(id) {
     await window.api.timetable.deletePeriod(id);
-    onChange(); toast('Period removed.', 'success');
+    onChange(); showToast('Period removed.', 'success');
   }
 
   return (
@@ -156,7 +158,7 @@ function BellSchedule({ periods, canEdit, onChange, toast }) {
   );
 }
 
-function ClassGrid({ grid, subjects, teachers, classId, canEdit, onSaved, toast }) {
+function ClassGrid({ grid, subjects, teachers, classId, canEdit, onSaved, showToast }) {
   const days = grid.days || [];
   const periods = grid.periods || [];
   const [saving, setSaving] = useState(null);
@@ -167,7 +169,7 @@ function ClassGrid({ grid, subjects, teachers, classId, canEdit, onSaved, toast 
     const teacherId = 'teacher_id' in patch ? patch.teacher_id : (current?.teacher_id || null);
     const r = await window.api.timetable.saveEntry({ classId, dayOfWeek: dayValue, periodId, subjectId: subjectId || null, teacherId: teacherId || null });
     setSaving(null);
-    if (r.ok) onSaved(); else toast(r.error || 'Could not save.', 'error');
+    if (r.ok) onSaved(); else showToast(r.error || 'Could not save.', 'error');
   }
 
   return (

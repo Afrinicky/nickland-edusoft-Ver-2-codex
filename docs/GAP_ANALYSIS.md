@@ -82,8 +82,8 @@ Modules that mature commercial SMS products ship and this platform **does not ye
 
 | Module | Status | Why it matters (Nursery–JHS context) |
 |---|---|---|
-| **Timetable / scheduling** | ✅ Added (this branch) | School bell schedule + per-class weekly grid; desktop authoring, teacher "today/my week" on mobile, class timetable in the parent view. |
-| **Homework / assignments** | ✅ Added (this branch) | Teachers set homework per class+subject with a due date (desktop + mobile); parents see it in-app and on the portal (projected to the cloud snapshot). |
+| **Timetable / scheduling** | ✅ Full | Lives in **Academics → Timetable**. Bell schedule + per-class weekly grid with Excel/PDF export; teacher "today/my week" on mobile; class timetable in the parent view and the cloud snapshot. |
+| **Homework / assignments** | ✅ Full | Lives in **Academics → Homework**. Assignments carry a term, due date and optional **total marks**; graded homework is backed by an `assessment_columns` row so marks feed the weighted class score, subject total and end-of-term report. Marking sheet tracks submitted/late/not-submitted (not submitted scores 0). Parents see their child's own status + mark in-app and on the portal. |
 | **Two-way communication / messaging** | ✅ Added (this branch) | Parent↔school threads: desktop Messages page, parent mobile tab, portal read view; staff replies mirror to SMS/email. (Parent-reply over the cloud portal is a noted follow-up; over LAN it's fully two-way.) |
 | **Library circulation** | ❌ Absent | "Books" today is a fees item, not catalog + loans/returns. |
 | **Transport / bus routes** | ❌ Absent | Common add-on; route, stop, and pickup tracking. |

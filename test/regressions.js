@@ -395,6 +395,62 @@ console.log('\n── Messaging ──');
   ck('parent sees only their own threads', msg.listThreadsForParent(db, 1).length === 1 && msg.listThreadsForParent(db, 999).length === 0);
 }
 
+console.log('\n── Homework: graded assignments feed the report card ──');
+{
+  const db = makeDb();
+  const hw = require(path.join(ROOT, 'electron/ipc/homework.js'));
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-12-30',1)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10)");
+  db.exec("INSERT INTO subjects (id,name,code,is_active) VALUES (1,'Mathematics','MATH',1)");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'A','B','X1',1,'Active'),(2,'C','D','X2',1,'Active')");
+
+  const a = hw.saveHomework(db, { classId: 1, subjectId: 1, title: 'Exercise 4', maxMarks: 20, dueDate: '2026-03-01' });
+  ck('graded homework creates a backing assessment column', a.ok
+    && db.prepare("SELECT COUNT(*) c FROM assessment_columns WHERE assessment_type LIKE 'Homework:%'").get().c === 1);
+
+  const r = hw.saveMarks(db, { homeworkId: a.id, entries: [
+    { student_id: 1, marks: 16, status: 'submitted' },
+    { student_id: 2, status: 'missing' },
+  ] });
+  ck('homework marks save and link to the assessment pipeline', r.ok && r.linked_to_assessment);
+  ck('a mark reaches assessment_scores', db.prepare('SELECT marks FROM assessment_scores WHERE student_id=1').get().marks === 16);
+  ck('work not turned in scores zero', db.prepare('SELECT marks FROM assessment_scores WHERE student_id=2').get().marks === 0);
+  // 16/20 = 80% of the 40% class weight = 32.
+  ck('homework marks recompute the weighted class score',
+    db.prepare('SELECT class_score FROM scores WHERE student_id=1 AND subject_id=1 AND term_id=1').get().class_score === 32);
+  ck('homework marks flow into the subject total (report card)',
+    db.prepare('SELECT total_score FROM scores WHERE student_id=1 AND subject_id=1 AND term_id=1').get().total_score === 32);
+
+  const sheet = hw.getSheet(db, a.id);
+  ck('marking sheet lists the whole class with statuses',
+    sheet.students.length === 2 && sheet.homework.submitted_count === 1 && sheet.homework.missing_count === 1);
+  ck('homework summary reports the average mark', sheet.homework.average_mark === 16);
+
+  const rep = hw.studentReport(db, 1, 1);
+  ck('student homework report totals marks and percentage',
+    rep.summary.graded === 1 && rep.summary.total_marks === 16 && rep.summary.percentage === 80);
+
+  ck('graded homework requires a subject',
+    hw.saveHomework(db, { classId: 1, title: 'X', maxMarks: 5 }).ok === false);
+  ck('marks above the total are rejected',
+    hw.saveMarks(db, { homeworkId: a.id, entries: [{ student_id: 1, marks: 99 }] }).ok === false);
+  ck('ungraded homework is still allowed', hw.saveHomework(db, { classId: 1, title: 'Bring a ruler' }).ok === true);
+
+  // A parent sees their own child's status + mark on upcoming work.
+  const soon = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+  const b = hw.saveHomework(db, { classId: 1, subjectId: 1, title: 'Read ch.3', maxMarks: 10, dueDate: soon });
+  hw.saveMarks(db, { homeworkId: b.id, entries: [{ student_id: 1, marks: 9, status: 'submitted' }] });
+  const mine = hw.listForStudent(db, 1).find(h => h.title === 'Read ch.3');
+  ck('a parent sees their child\'s own homework mark', mine && mine.my_marks === 9 && mine.my_status === 'submitted');
+
+  // Deleting the homework must not leave phantom marks in the class score.
+  hw.deleteHomework(db, a.id);
+  ck('deleting homework removes its assessment column and marks',
+    db.prepare("SELECT COUNT(*) c FROM assessment_columns WHERE assessment_type='Homework: Exercise 4'").get().c === 0
+    && db.prepare('SELECT COUNT(*) c FROM homework_submissions WHERE homework_id=?').get(a.id).c === 0);
+}
+
 console.log('\n── Homework ──');
 {
   const db = makeDb();
@@ -501,6 +557,151 @@ console.log('\n── Finance ledger: reconciliation ──');
   db.exec("INSERT INTO payments (id,student_id,term_id,amount,payment_date,receipt_number,is_reversed) VALUES (2,1,1,200,'2026-02-11','RC2',1);");
   ledger.reconcileLedger(db);
   ck('reconcileLedger skips reversed payments', db.prepare("SELECT COUNT(*) c FROM income_records WHERE receipt_number='RC2'").get().c === 0);
+}
+
+console.log('\n── Financial reconciliation: ledger vs modules ──');
+{
+  // Every one of these reproduces a mismatch that was live: money a module
+  // reported but the finance ledger never saw, or vice-versa. The school-facing
+  // symptom was the audit finding "Canteen income does not match canteen
+  // payments".
+  //
+  // The scenario is deliberately set DURING VACATION — today falls outside the
+  // current term's window, which is when the bug bit.
+  const today = new Date().toISOString().slice(0, 10);
+  const dayIn = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+
+  function school() {
+    const db = makeDb();
+    db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('canteen_daily_rate','5','canteen')").run();
+    db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('receipt_counter','1','system')").run();
+    db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1)");
+    db.prepare("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,3,'Third Term',?,?,1)")
+      .run(dayIn(40), dayIn(10)); // term ENDED 10 days ago → today is vacation
+    db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10)");
+    db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'ANSU','MONA','X1',1,'Active')");
+    const ins = db.prepare("INSERT INTO school_calendar (date,day_type,term_id) VALUES (?,'school_day',1)");
+    for (let i = 0; i < 5; i++) ins.run(dayIn(35 - i));
+    return db;
+  }
+  const reg = (db, mod) => { const h = {}; require(path.join(ROOT, 'electron/ipc/', mod))({ handle: (n, f) => { h[n] = f; } }, db); return h; };
+  const canteenIncome = (db) => db.prepare("SELECT COALESCE(SUM(amount),0) t FROM income_records WHERE category='canteen'").get().t;
+
+  // 1. Quick-pay a single day.
+  {
+    const db = school();
+    const h = reg(db, 'canteen_extra.js');
+    h['canteen:set-day-status'](null, { studentId: 1, date: dayIn(35), status: 'paid' });
+    const dash = h['canteen:dashboard'](null, 1);
+    ck('quick-pay: canteen dashboard total matches the income ledger',
+      Math.abs((dash.metrics.total_collected || 0) - canteenIncome(db)) < 0.01 && canteenIncome(db) === 5);
+    ck('quick-pay: the payment is attributed to a term', db.prepare('SELECT term_id FROM canteen_payments').get().term_id === 1);
+  }
+
+  // 2. Multi-day collection for one student.
+  {
+    const db = school();
+    const h = reg(db, 'canteen_extra.js');
+    h['canteen:mark-days-paid'](null, { studentId: 1, dates: [dayIn(35), dayIn(34), dayIn(33)] });
+    const dash = h['canteen:dashboard'](null, 1);
+    ck('multi-day collection: dashboard matches the ledger',
+      Math.abs((dash.metrics.total_collected || 0) - canteenIncome(db)) < 0.01 && canteenIncome(db) === 15);
+  }
+
+  // 3. Whole-class daily collection — this posted NO income at all.
+  {
+    const db = school();
+    const h = reg(db, 'canteen_extra.js');
+    db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (2,'B','C','X2',1,'Active')");
+    h['canteen:mark-bulk-paid'](null, { studentIds: [1, 2], date: dayIn(35) });
+    ck('class daily collection reaches the finance ledger (was posting nothing)', canteenIncome(db) === 10);
+    const dash = h['canteen:dashboard'](null, 1);
+    ck('class daily collection: dashboard matches the ledger',
+      Math.abs((dash.metrics.total_collected || 0) - canteenIncome(db)) < 0.01);
+  }
+
+  // 4. Collection taken during vacation (payment_date outside the term window).
+  {
+    const db = school();
+    const canteen = require(path.join(ROOT, 'electron/ipc/canteen.js'));
+    const h = reg(db, 'canteen_extra.js');
+    canteen.recordCanteenPayment(db, { student_id: 1, amount: 15 }); // defaults to today = vacation
+    const dash = h['canteen:dashboard'](null, 1);
+    ck('arrears settled during vacation still count in the canteen module',
+      (dash.metrics.total_collected || 0) === 15 && canteenIncome(db) === 15);
+  }
+
+  // 5. Un-ticking a quick-paid day must not leave the money on the books.
+  {
+    const db = school();
+    const h = reg(db, 'canteen_extra.js');
+    h['canteen:set-day-status'](null, { studentId: 1, date: dayIn(35), status: 'paid' });
+    h['canteen:set-day-status'](null, { studentId: 1, date: dayIn(35), status: 'unpaid' });
+    ck('un-ticking a quick-paid day reverses its income', canteenIncome(db) === 0);
+    ck('un-ticking a quick-paid day removes the payment row',
+      db.prepare('SELECT COUNT(*) c FROM canteen_payments').get().c === 0);
+  }
+
+  // 6. Repair path for databases that already lost this money: the startup
+  //    reconcile must back-post the missing income under the right term.
+  {
+    const db = school();
+    const ledger = require(path.join(ROOT, 'electron/ipc/_ledger.js'));
+    db.prepare(`INSERT INTO canteen_payments (student_id, term_id, payment_date, amount, days_covered, start_date, end_date)
+                VALUES (1, NULL, ?, 25, 5, ?, ?)`).run(today, dayIn(35), dayIn(31));
+    ck('a legacy collection starts with no ledger entry', canteenIncome(db) === 0);
+    runMigrations(db);            // migration 26 attributes it to a term
+    ledger.reconcileLedger(db);   // startup repair back-posts the income
+    ck('startup repair recovers canteen money that never reached Finance', canteenIncome(db) === 25);
+    const dash = reg(db, 'canteen_extra.js')['canteen:dashboard'](null, 1);
+    ck('recovered money reconciles against the canteen module',
+      Math.abs((dash.metrics.total_collected || 0) - canteenIncome(db)) < 0.01);
+  }
+
+  // 7. Money must be kept to the pesewa, not rounded to whole cedis.
+  {
+    const db = school();
+    db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('canteen_daily_rate','2.50','canteen')").run();
+    const h = reg(db, 'canteen_extra.js');
+    h['canteen:set-day-status'](null, { studentId: 1, date: dayIn(35), status: 'paid' });
+    ck('canteen totals keep pesewas (were rounded to whole cedis)',
+      h['canteen:dashboard'](null, 1).metrics.total_collected === 2.5);
+  }
+}
+
+console.log('\n── Fees: re-issuing a bill ──');
+{
+  const db = makeDb();
+  db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('receipt_counter','1','system')").run();
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-01-01','2026-04-30',1)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order) VALUES (1,'BS5','BS5','basic',10)");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'ANSU','MONA','X1',1,'Active')");
+  db.exec("INSERT INTO fee_templates (id,name,class_group_id,term_id,is_active) VALUES (1,'BS5 T1',1,1,1)");
+  db.exec("INSERT INTO fee_line_items (fee_template_id,item_number,description,amount) VALUES (1,1,'Tuition',400)");
+  const h = {};
+  require(path.join(ROOT, 'electron/ipc/fees.js'))({ handle: (n, f) => { h[n] = f; } }, db);
+
+  h['fees:generate-bill'](null, { studentId: 1, termId: 1 });
+  const bill = db.prepare('SELECT id FROM student_bills WHERE student_id=1').get();
+  h['fees:record-payment'](null, { student_id: 1, student_bill_id: bill.id, term_id: 1, amount: 400 });
+
+  // Re-issuing used to DELETE the bill (foreign-key failure with payments on
+  // it) and re-bill the parent for money already received.
+  let threw = false;
+  try { h['fees:generate-bill'](null, { studentId: 1, termId: 1 }); } catch (_) { threw = true; }
+  ck('re-issuing a bill for a pupil who has paid does not fail', !threw);
+  const after = db.prepare('SELECT total_billed, total_paid, balance FROM student_bills WHERE student_id=1').get();
+  ck('re-issuing keeps the money already paid', after.total_paid === 400 && after.balance === 0);
+  ck('re-issuing keeps the payment history intact',
+    db.prepare('SELECT COUNT(*) c FROM payments WHERE student_id=1').get().c === 1);
+
+  // A genuinely larger bill re-bills only the difference.
+  db.exec("INSERT INTO fee_line_items (fee_template_id,item_number,description,amount) VALUES (1,2,'Lab',100)");
+  h['fees:generate-bill'](null, { studentId: 1, termId: 1 });
+  const grown = db.prepare('SELECT total_billed, total_paid, balance FROM student_bills WHERE student_id=1').get();
+  ck('adding a fee item re-bills only the outstanding difference',
+    grown.total_billed === 500 && grown.total_paid === 400 && grown.balance === 100);
 }
 
 console.log('\n── Canteen collection ──');

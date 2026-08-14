@@ -7,7 +7,7 @@ const NAVY = '#1B3A6B';
 const GOLD = '#C9961A';
 
 export default function MessagesIndex() {
-  const { currentUser, toast, can } = useStore();
+  const { currentUser, showToast, can } = useStore();
   const canReply = can('notifications', 'edit') || can('notifications', 'create');
   const [threads, setThreads] = useState([]);
   const [selId, setSelId] = useState(null);
@@ -35,7 +35,7 @@ export default function MessagesIndex() {
     try {
       const r = await window.api.messages.reply({ threadId: selId, body: reply, senderId: currentUser?.id, senderName: currentUser?.fullName });
       if (r.ok) { setReply(''); await open(selId); await loadThreads(); }
-      else toast(r.error || 'Could not send.', 'error');
+      else showToast(r.error || 'Could not send.', 'error');
     } finally { setBusy(false); }
   }
 
@@ -95,13 +95,13 @@ export default function MessagesIndex() {
         </div>
       </div>
 
-      {newOpen && <NewMessage onClose={() => setNewOpen(false)} currentUser={currentUser} toast={toast}
+      {newOpen && <NewMessage onClose={() => setNewOpen(false)} currentUser={currentUser} showToast={showToast}
         onSent={async () => { setNewOpen(false); await loadThreads(); }} />}
     </div>
   );
 }
 
-function NewMessage({ onClose, currentUser, toast, onSent }) {
+function NewMessage({ onClose, currentUser, showToast, onSent }) {
   const [parents, setParents] = useState([]);
   const [parentId, setParentId] = useState('');
   const [subject, setSubject] = useState('');
@@ -111,12 +111,12 @@ function NewMessage({ onClose, currentUser, toast, onSent }) {
   useEffect(() => { window.api.mobile.listParents().then(r => setParents(r.parents || [])).catch(() => setParents([])); }, []);
 
   async function send() {
-    if (!parentId || !body.trim()) { toast('Choose a parent and type a message.', 'error'); return; }
+    if (!parentId || !body.trim()) { showToast('Choose a parent and type a message.', 'error'); return; }
     setBusy(true);
     try {
       const r = await window.api.messages.start({ parentId: Number(parentId), subject, body, senderId: currentUser?.id, senderName: currentUser?.fullName });
-      if (r.ok) { toast('Message sent.', 'success'); onSent(); }
-      else toast(r.error || 'Could not send.', 'error');
+      if (r.ok) { showToast('Message sent.', 'success'); onSent(); }
+      else showToast(r.error || 'Could not send.', 'error');
     } finally { setBusy(false); }
   }
 

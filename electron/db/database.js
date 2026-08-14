@@ -1732,6 +1732,115 @@ function runMigrations(db) {
       `);
     }
   });
+
+  // 26. Attribute every canteen payment to a term.
+  //
+  //     Migration 8 only matched payments whose payment_date fell inside a term
+  //     window. Collections taken during vacation (arrears settled after the
+  //     term closed) stayed NULL, and the canteen module — which scoped its
+  //     totals by that same date window — reported GHS 0 while the income
+  //     ledger counted the money under the current term. That is the
+  //     "canteen income does not match canteen payments" audit finding.
+  //
+  //     Attribute by the DAYS the payment covers first (the semantically
+  //     correct term), then the date window, then the current term. Running
+  //     before reconcileLedger() also means any collection that never posted
+  //     income (the whole-class daily collection did not) is back-posted under
+  //     the right term at startup.
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(canteen_payments)").all().map(c => c.name);
+    if (!cols.includes('term_id')) return; // migration 8 adds it; nothing to do yet
+
+    // (a) From the school calendar, via the days this payment marked paid.
+    db.exec(`
+      UPDATE canteen_payments
+         SET term_id = (
+           SELECT sc.term_id FROM canteen_day_status cds
+           JOIN school_calendar sc ON sc.date = cds.date
+           WHERE cds.payment_id = canteen_payments.id AND sc.term_id IS NOT NULL
+           LIMIT 1
+         )
+       WHERE term_id IS NULL
+    `);
+    // (b) From the covered date range against the term windows.
+    db.exec(`
+      UPDATE canteen_payments
+         SET term_id = (
+           SELECT t.id FROM terms t
+           WHERE date(t.start_date) <= date(COALESCE(canteen_payments.start_date, canteen_payments.payment_date))
+             AND date(t.end_date)   >= date(COALESCE(canteen_payments.start_date, canteen_payments.payment_date))
+           ORDER BY date(t.start_date) DESC LIMIT 1
+         )
+       WHERE term_id IS NULL
+    `);
+    // (c) Anything still unattributed goes to the current term.
+    db.exec(`
+      UPDATE canteen_payments
+         SET term_id = (SELECT id FROM terms WHERE is_current = 1)
+       WHERE term_id IS NULL
+    `);
+
+    // Re-point any canteen income already posted so the ledger agrees with the
+    // payment rows it was created from.
+    db.exec(`
+      UPDATE income_records
+         SET term_id = (
+           SELECT cp.term_id FROM canteen_payments cp
+           WHERE cp.id = income_records.linked_canteen_payment_id
+         )
+       WHERE linked_canteen_payment_id IS NOT NULL
+         AND (SELECT cp.term_id FROM canteen_payments cp WHERE cp.id = income_records.linked_canteen_payment_id) IS NOT NULL
+    `);
+  });
+
+  // 27. Homework becomes a real assignment record: scoped to a term, optionally
+  //     graded out of `max_marks`, and — when graded — wired to an
+  //     `assessment_columns` row so the marks a teacher enters flow into the
+  //     continuous-assessment class score, the end-of-term total and the report
+  //     card, instead of sitting in an island table.
+  //     `homework_submissions` tracks each pupil's status and mark.
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(homework)").all().map(c => c.name);
+    const add = (name, type) => { if (!cols.includes(name)) db.exec(`ALTER TABLE homework ADD COLUMN ${name} ${type}`); };
+    add('term_id', 'INTEGER');
+    add('max_marks', 'REAL');                       // NULL → not graded
+    add('assessment_column_id', 'INTEGER');         // set once marks are recorded
+    add('assigned_date', 'TEXT');
+    add('status', "TEXT DEFAULT 'published'");      // draft | published
+
+    // Existing rows predate terms — attribute them to the term whose window
+    // contains the due date, else the current term.
+    db.exec(`
+      UPDATE homework SET term_id = COALESCE(
+        (SELECT t.id FROM terms t
+          WHERE date(t.start_date) <= date(COALESCE(homework.due_date, homework.created_at))
+            AND date(t.end_date)   >= date(COALESCE(homework.due_date, homework.created_at))
+          ORDER BY date(t.start_date) DESC LIMIT 1),
+        (SELECT id FROM terms WHERE is_current = 1)
+      ) WHERE term_id IS NULL
+    `);
+    db.exec("UPDATE homework SET assigned_date = date(created_at) WHERE assigned_date IS NULL");
+    db.exec("UPDATE homework SET status = 'published' WHERE status IS NULL");
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS homework_submissions (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        homework_id  INTEGER NOT NULL,
+        student_id   INTEGER NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'pending',  -- pending|submitted|late|missing|exempt
+        marks        REAL,
+        remarks      TEXT,
+        submitted_at TEXT,
+        marked_at    TEXT,
+        UNIQUE (homework_id, student_id),
+        FOREIGN KEY (homework_id) REFERENCES homework(id) ON DELETE CASCADE,
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_hw_sub_homework ON homework_submissions(homework_id);
+      CREATE INDEX IF NOT EXISTS idx_hw_sub_student  ON homework_submissions(student_id);
+      CREATE INDEX IF NOT EXISTS idx_homework_term   ON homework(term_id, class_group_id);
+    `);
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

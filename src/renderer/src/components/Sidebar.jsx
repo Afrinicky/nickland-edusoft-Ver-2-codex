@@ -8,8 +8,6 @@ const NAV_ITEMS = [
   { to: '/dashboard',     icon: 'dashboard', label: 'Dashboard',             module: 'dashboard'  },
   { to: '/students',      icon: 'students',  label: 'Students',              module: 'students'   },
   { to: '/academics',     icon: 'academics', label: 'Academics',             module: 'academics'  },
-  { to: '/timetable',     icon: 'timetable', label: 'Timetable',             module: 'academics'  },
-  { to: '/homework',      icon: 'homework',  label: 'Homework',              module: 'academics'  },
   { to: '/fees',          icon: 'fees',      label: 'Fees Management',       module: 'fees'       },
   { to: '/canteen',       icon: 'canteen',   label: 'Canteen',               module: 'canteen'    },
   { to: '/staff',         icon: 'staff',     label: 'Staff Management',      module: 'staff'      },

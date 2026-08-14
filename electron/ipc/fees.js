@@ -335,11 +335,24 @@ function generateBillForStudent(db, studentId, termId) {
   }
 
   const tx = db.transaction(() => {
-    // Remove any prior bill for this student+term
+    // Re-generating a bill must NEVER discard money already received.
+    //
+    // This used to DELETE the old bill and INSERT a fresh one with
+    // total_paid = 0. Any payment row still referenced the old bill, so with
+    // foreign keys enforced the delete failed outright ("FOREIGN KEY constraint
+    // failed") and a school simply could not re-issue a bill for a pupil who
+    // had paid anything; without enforcement it would have silently wiped the
+    // payment off the bill and re-billed the parent for money they had already
+    // handed over. The bill row is now updated in place and total_paid is
+    // recomputed from the payments table, which is the source of truth.
     const existing = db.prepare(
       'SELECT id FROM student_bills WHERE student_id = ? AND term_id = ?'
     ).get(studentId, termId);
-    if (existing) db.prepare('DELETE FROM student_bills WHERE id = ?').run(existing.id);
+
+    const alreadyPaid = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS t FROM payments
+      WHERE student_id = ? AND term_id = ? AND COALESCE(is_reversed, 0) = 0
+    `).get(studentId, termId).t || 0;
 
     // Compute totals BEFORE insert
     let feeSubtotal = items.reduce((s, it) => s + (it.amount || 0), 0);
@@ -361,18 +374,38 @@ function generateBillForStudent(db, studentId, termId) {
     const feesNet = Math.max(0, feeSubtotalWithArrears - discountAmount);
     const totalBilled = feesNet + booksArrearsForThisTerm;
 
-    const result = db.prepare(`
-      INSERT INTO student_bills
-        (student_id, term_id, template_id, total_billed, total_paid, balance,
-         arrears_from_prev, books_arrears, discount_amount, discount_reason)
-      VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-    `).run(
-      studentId, termId, template.id,
-      totalBilled, totalBilled,
-      arrearsSubtotal, booksArrearsForThisTerm,
-      discountAmount, discountReason
-    );
-    const billId = result.lastInsertRowid;
+    const balance = Math.round((totalBilled - alreadyPaid) * 100) / 100;
+
+    let billId;
+    if (existing) {
+      db.prepare(`
+        UPDATE student_bills
+           SET template_id = ?, total_billed = ?, total_paid = ?, balance = ?,
+               arrears_from_prev = ?, books_arrears = ?,
+               discount_amount = ?, discount_reason = ?
+         WHERE id = ?
+      `).run(
+        template.id, totalBilled, alreadyPaid, balance,
+        arrearsSubtotal, booksArrearsForThisTerm,
+        discountAmount, discountReason, existing.id
+      );
+      billId = existing.id;
+      // Line items are rebuilt from the template below.
+      db.prepare('DELETE FROM bill_line_items WHERE student_bill_id = ?').run(billId);
+    } else {
+      const result = db.prepare(`
+        INSERT INTO student_bills
+          (student_id, term_id, template_id, total_billed, total_paid, balance,
+           arrears_from_prev, books_arrears, discount_amount, discount_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        studentId, termId, template.id,
+        totalBilled, alreadyPaid, balance,
+        arrearsSubtotal, booksArrearsForThisTerm,
+        discountAmount, discountReason
+      );
+      billId = result.lastInsertRowid;
+    }
 
     // Insert line items
     const ins = db.prepare(`

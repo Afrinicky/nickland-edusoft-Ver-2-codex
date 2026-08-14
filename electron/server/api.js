@@ -604,7 +604,25 @@ function createApiServer(db, opts = {}) {
       classId: parseInt(body.classId, 10), subjectId: body.subjectId || null,
       teacherId: ctx.user.staff_id || null, title: body.title,
       description: body.description, dueDate: body.dueDate,
+      maxMarks: body.maxMarks,
     });
+    if (!r.ok) return json(res, 400, r);
+    return json(res, 200, r);
+  });
+
+  // ── Homework: marking sheet + saving marks (staff) ──
+  add('GET', `${API}/homework/:id/sheet`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const hw = require('../ipc/homework');
+    const sheet = hw.getSheet(db, parseInt(params.id, 10));
+    if (!sheet) return json(res, 404, { ok: false, error: 'Homework not found.' });
+    return json(res, 200, { ok: true, ...sheet });
+  });
+
+  add('POST', `${API}/homework/:id/marks`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'edit')) return json(res, 403, { ok: false, error: 'Access denied.' });
+    const hw = require('../ipc/homework');
+    const r = hw.saveMarks(db, { homeworkId: parseInt(params.id, 10), entries: body.entries });
     if (!r.ok) return json(res, 400, r);
     return json(res, 200, r);
   });
