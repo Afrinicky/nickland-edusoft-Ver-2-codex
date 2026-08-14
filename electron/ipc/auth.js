@@ -2,7 +2,11 @@
 // Copyright © 2026 Nickland Sales. All rights reserved.
 // Handles: bootstrap, login, logout, user management, permissions
 
-const bcrypt = require('bcryptjs');
+// bcryptjs is loaded lazily (and memoised) so modules that require auth.js only
+// for its non-hashing exports — e.g. _security → resolveEffectivePermissions —
+// load in the plain-Node test harness, which has no node_modules.
+let _bcrypt = null;
+function bcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
 const security = require('./_security');
 const { setSetting } = require('../utils/idgen');
 
@@ -69,7 +73,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existing) return { ok: false, error: 'Username already exists.' };
 
-    const hash = bcrypt.hashSync(password, 10);
+    const hash = bcrypt().hashSync(password, 10);
     const adminDesig = db.prepare("SELECT id FROM designations WHERE name = 'Administrator'").get();
     db.prepare(`
       INSERT INTO users (username, password_hash, full_name, designation_id, is_active, must_change_password)
@@ -101,7 +105,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     if (!user) { recordLoginFailure(db, uname, 'unknown_user'); return { ok: false, error: 'Invalid username or password.' }; }
     if (!user.password_hash) return { ok: false, error: 'Account not set up. Contact administrator.' };
 
-    const match = bcrypt.compareSync(String(password || ''), user.password_hash);
+    const match = bcrypt().compareSync(String(password || ''), user.password_hash);
     if (!match) { recordLoginFailure(db, uname, 'bad_password'); return { ok: false, error: 'Invalid username or password.' }; }
     clearLoginFailures(uname);
 
@@ -181,7 +185,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     }
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existing) return { ok: false, error: 'Username already taken.' };
-    const hash = bcrypt.hashSync(password, 10);
+    const hash = bcrypt().hashSync(password, 10);
     db.prepare(`
       INSERT INTO users (username, password_hash, full_name, designation_id, staff_id, is_active, must_change_password)
       VALUES (?, ?, ?, ?, ?, 1, 1)
@@ -199,7 +203,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       if (String(newPassword).length < 6) {
         return { ok: false, error: 'Password must be at least 6 characters.' };
       }
-      const hash = bcrypt.hashSync(newPassword, 10);
+      const hash = bcrypt().hashSync(newPassword, 10);
       db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, id);
     }
     db.prepare('UPDATE users SET full_name = ?, designation_id = ?, is_active = ? WHERE id = ?')
@@ -232,7 +236,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     const target = db.prepare('SELECT id, username FROM users WHERE id = ?').get(targetUserId);
     if (!target) return { ok: false, error: 'User not found.' };
 
-    const hash = bcrypt.hashSync(newPassword, 10);
+    const hash = bcrypt().hashSync(newPassword, 10);
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?')
       .run(hash, targetUserId);
 
@@ -304,10 +308,10 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     if (!user.password_hash) {
       return { ok: false, error: 'This account has no password set. Ask an Administrator to reset it.' };
     }
-    if (!bcrypt.compareSync(String(oldPassword || ''), user.password_hash)) {
+    if (!bcrypt().compareSync(String(oldPassword || ''), user.password_hash)) {
       return { ok: false, error: 'Current password is incorrect.' };
     }
-    const hash = bcrypt.hashSync(newPassword, 10);
+    const hash = bcrypt().hashSync(newPassword, 10);
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, userId);
     return { ok: true };
   });
