@@ -124,6 +124,7 @@ const api = {
     ssnitSchedule:     (month, year)         => ipcRenderer.invoke('payroll:ssnit-schedule', { month, year }),
     payeSchedule:      (month, year)         => ipcRenderer.invoke('payroll:paye-schedule', { month, year }),
     payslipData:       (salaryId)            => ipcRenderer.invoke('payroll:payslip-data', salaryId),
+    paidSummary:       (termId)              => ipcRenderer.invoke('payroll:paid-summary', { termId }),
   },
 
   // ── Mobile Sync (scaffold — companion app not yet released) ──

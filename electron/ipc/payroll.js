@@ -86,6 +86,18 @@ module.exports = function registerPayrollHandlers(ipcMain, db) {
     };
   });
 
+  // ── What payroll actually paid out in a term ──────────
+  //
+  // The Finance audit needs a like-for-like counterpart to the salary expenses
+  // in the ledger. Comparing against bulk-preview was wrong twice over: it
+  // recomputes each net from the staff member's CURRENT base salary rather than
+  // reading what was actually paid, and it covers a calendar MONTH while the
+  // expense side is scoped to a TERM. Both differences show up as a permanent
+  // "salary expenses may not match payroll" finding on a perfectly healthy
+  // school. This sums the real amounts paid, attributing each salary to a term
+  // exactly the way the ledger does.
+  ipcMain.handle('payroll:paid-summary', (_e, { termId } = {}) => paidSummaryForTerm(db, termId));
+
   // ── Bulk preview (calculate all active staff for a month) ──
   ipcMain.handle('payroll:bulk-preview', (_e, { month, year }) => {
     const payeOn = isPAYEEnabled(db);
@@ -231,6 +243,12 @@ module.exports = function registerPayrollHandlers(ipcMain, db) {
 
     const expected = salary.net_salary + (salary.arrear_brought_forward || 0);
     const actual = parseFloat(actualAmount) || 0;
+    // A salary cannot be "paid" for nothing: that state reports the staff member
+    // as settled while the ledger records no money leaving the school, which is
+    // exactly the mismatch the Finance audit flags.
+    if (!(actual > 0)) {
+      return { ok: false, error: 'Enter the amount actually paid. To record an unpaid salary, leave it pending.' };
+    }
     const carryOver = expected - actual;
 
     db.prepare(`
@@ -394,3 +412,32 @@ module.exports = function registerPayrollHandlers(ipcMain, db) {
     };
   });
 };
+
+// Sum what payroll actually paid out, attributed to a term the same way the
+// finance ledger attributes the matching salary expense (the term whose window
+// contains the payment date, else the current term). Exported so the audit and
+// any report compare the same money on both sides.
+function paidSummaryForTerm(db, termId) {
+  const { resolveTermForDate } = require('./_ledger');
+  let target = termId;
+  if (!target) target = db.prepare('SELECT id FROM terms WHERE is_current = 1').get()?.id || null;
+  const rows = db.prepare(`
+    SELECT id, actual_amount_paid, net_salary, arrear_brought_forward, payment_date
+    FROM staff_salaries WHERE is_paid = 1
+  `).all();
+  let total = 0, count = 0, unrecorded = 0;
+  for (const r of rows) {
+    const term = resolveTermForDate(db, r.payment_date || null);
+    if (!term || term.id !== target) continue;
+    const amount = Number(r.actual_amount_paid) || 0;
+    // A salary flagged paid with no amount recorded is the state that hides
+    // money from Finance; report it so the audit can surface it even if the
+    // startup repair has not run yet.
+    if (amount <= 0) { unrecorded++; continue; }
+    total += amount;
+    count++;
+  }
+  return { term_id: target, total: Math.round(total * 100) / 100, count, unrecorded };
+}
+
+module.exports.paidSummaryForTerm = paidSummaryForTerm;

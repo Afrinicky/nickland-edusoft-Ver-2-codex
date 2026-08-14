@@ -12,16 +12,13 @@ export default function AuditTab() {
   async function runAudit() {
     setLoading(true);
 
-    const [income, expense, payments, canteenPayments, salaries, transport] = await Promise.all([
+    const [income, expense, payments, canteenPayments, transport, payrollPaid] = await Promise.all([
       window.api.finance.listIncome({ termId: currentTerm?.id }),
       window.api.finance.listExpense({ termId: currentTerm?.id }),
       window.api.fees.dashboard(currentTerm?.id),
       window.api.canteen.dashboard(currentTerm?.id),
-      window.api.payroll.bulkPreview(
-        new Date().getMonth() + 1,
-        new Date().getFullYear()
-      ),
       window.api.transport.dashboard(currentTerm?.id).catch(() => ({ metrics: {} })),
+      window.api.payroll.paidSummary(currentTerm?.id).catch(() => ({ total: 0 })),
     ]);
 
     const findings = [];
@@ -87,14 +84,32 @@ export default function AuditTab() {
       });
     }
 
-    // Check 5: Salary expenses vs payroll
+    // Check 5: Salary expenses vs what payroll actually paid.
+    // Both sides are the SAME money over the SAME term: the ledger's salary
+    // expenses, and the sum of actual_amount_paid attributed to this term the
+    // way the ledger attributes it. (This used to compare a theoretical net
+    // recomputed from current base salaries, over a calendar month, against
+    // term-scoped expenses — which disagreed on a perfectly healthy school.)
     const salaryExp = expense.filter(r => r.category === 'salary').reduce((s, r) => s + r.amount, 0);
-    const salaryPaid = salaries?.previews?.filter(p => p.is_paid).reduce((s, p) => s + (p.net_salary + (p.arrear_brought_forward || 0)), 0) || 0;
-    if (Math.abs(salaryExp - salaryPaid) > 1 && salaryPaid > 0) {
+    const salaryPaid = payrollPaid?.total || 0;
+    if (Math.abs(salaryExp - salaryPaid) > 1) {
       findings.push({
-        severity: 'low',
-        title: 'Salary expenses may not match payroll',
-        description: `Expenses show ${fmtCedi(salaryExp)} for salaries while payroll shows ${fmtCedi(salaryPaid)} paid this month. This may be expected if payments span months; otherwise reconcile.`,
+        severity: 'high',
+        title: 'Salary expenses do not match payroll',
+        description: `Expenses show ${fmtCedi(salaryExp)} for salaries this term while payroll records ${fmtCedi(salaryPaid)} actually paid. Every paid salary should have a matching expense — restart the app to let the ledger repair run, then reconcile any remainder.`,
+        items: [],
+      });
+    }
+
+    // Check 5b: Salaries flagged paid with no amount recorded. This is the
+    // state that hides money from Finance — payroll reports the staff member as
+    // settled while no expense exists. The startup ledger repair settles these
+    // at the net owed, so seeing this means the repair has not run yet.
+    if ((payrollPaid?.unrecorded || 0) > 0) {
+      findings.push({
+        severity: 'high',
+        title: `${payrollPaid.unrecorded} salary record(s) marked paid with no amount recorded`,
+        description: 'These salaries show as paid but no amount was entered, so no expense reached Finance. Restart the app — the ledger repair settles them at the net amount owed — then confirm the figures in Payroll.',
         items: [],
       });
     }
