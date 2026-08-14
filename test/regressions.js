@@ -414,6 +414,51 @@ console.log('\n── Homework ──');
   ck('student sees their class homework', hw.listForStudent(db, 1).length === 1);
 }
 
+console.log('\n── Payroll: PAYE / SSNIT ──');
+{
+  const db = makeDb();
+  const h = {};
+  require(path.join(ROOT, 'electron/ipc/payroll.js'))({ handle: (n, f) => { h[n] = f; } }, db);
+  const calc = (arg) => h['payroll:calculate'](null, arg);
+
+  // GHS 2000 gross, SSNIT-enrolled. Hand-computed against the GRA bands:
+  //   SSNIT worker 5.5% = 110; taxable = 1890;
+  //   PAYE = 110·0.05 + 130·0.10 + 1160·0.175 = 5.5 + 13 + 203 = 221.5.
+  const r = calc({ gross_salary: 2000, ssnit_enrolled: true });
+  ck('SSNIT worker is 5.5% of gross', r.ssnit_worker === 110);
+  ck('SSNIT employer is 13% of gross', r.ssnit_employer === 260);
+  ck('PAYE is computed on gross minus SSNIT worker (1890 → 221.5)', r.paye_tax === 221.5);
+  ck('net = gross - SSNIT worker - PAYE', r.net_salary === 1668.5);
+
+  const low = calc({ gross_salary: 400, ssnit_enrolled: true });
+  ck('income under the tax-free band pays no PAYE', low.paye_tax === 0 && low.net_salary === 378);
+
+  const noSsnit = calc({ gross_salary: 400, ssnit_enrolled: false });
+  ck('non-enrolled staff have no SSNIT deduction', noSsnit.ssnit_worker === 0);
+}
+
+console.log('\n── Payroll: salary → expense ledger ──');
+{
+  const db = makeDb();
+  const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+  security.setCurrentUser(1, 'Administrator'); // mark-paid is permission-gated
+  const h = {};
+  require(path.join(ROOT, 'electron/ipc/payroll.js'))({ handle: (n, f) => { h[n] = f; } }, db);
+
+  db.exec("INSERT INTO staff (id,surname,first_name,role,status) VALUES (1,'Mensah','Ama','teacher','Active');");
+  db.exec("INSERT INTO staff_salaries (id,staff_id,month,year,net_salary,arrear_brought_forward,is_paid) VALUES (1,1,1,2026,1668.5,0,0);");
+  db.exec("INSERT INTO staff_salaries (id,staff_id,month,year,net_salary,arrear_brought_forward,is_paid) VALUES (2,1,2,2026,1668.5,0,0);");
+
+  const p1 = h['payroll:mark-paid'](null, { id: 1, actualAmount: 1668.5, paymentDate: '2026-01-31' });
+  const p2 = h['payroll:mark-paid'](null, { id: 2, actualAmount: 1668.5, paymentDate: '2026-02-28' });
+  ck('mark-paid succeeds for an admin', p1.ok && p2.ok);
+  ck('each paid salary posts its own expense (no transaction-number collision)',
+    db.prepare("SELECT COUNT(*) c FROM expense_records WHERE category='salary'").get().c === 2);
+  ck('expense is linked to the salary and idempotent',
+    db.prepare('SELECT COUNT(*) c FROM expense_records WHERE linked_salary_id=1').get().c === 1);
+  security.setCurrentUser(null, null); // reset session state for later tests
+}
+
 console.log('\n── Finance ledger ──');
 {
   const db = makeDb();

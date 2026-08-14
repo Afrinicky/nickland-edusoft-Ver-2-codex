@@ -159,10 +159,17 @@ function postExpense(db, rec) {
 }
 
 // Next sequential number for a receipt/transaction using a settings counter.
+// Upsert, not a bare UPDATE: a plain UPDATE silently no-ops when the counter
+// row is missing, so the number never advances. For transaction numbers that
+// matters doubly — postExpense de-dupes on transaction_number, so a stuck
+// counter would collapse every salary expense into the first one.
 function nextCounter(db, key, prefix) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   const n = parseInt(row ? row.value : '1', 10);
-  db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(String(n + 1), key);
+  db.prepare(`
+    INSERT INTO settings (key, value, category) VALUES (?, ?, 'system')
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, String(n + 1));
   const yy = new Date().getFullYear().toString().slice(-2);
   return `${prefix}/${yy}/${String(n).padStart(5, '0')}`;
 }
