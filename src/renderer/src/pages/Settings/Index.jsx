@@ -17,6 +17,7 @@ import ReceiptTemplates from './ReceiptTemplates.jsx';
 import Payments from './Payments.jsx';
 import Cloud from './Cloud.jsx';
 import Users from './Users.jsx';
+import AccessControl from './AccessControl.jsx';
 import Backup from './Backup.jsx';
 
 // Settings grouped into logical sections
@@ -57,6 +58,7 @@ const SECTIONS = [
     title: 'Users & Access',
     items: [
       { to: 'users',      label: 'Users & Logins',    icon: '👥' },
+      { to: 'access',     label: 'Roles & Access',    icon: '🔐' },
       { to: 'features',   label: 'Advanced Features', icon: '⚙️' },
     ],
   },
@@ -113,6 +115,7 @@ export default function SettingsIndex() {
             <Route path="notifications" element={<NotificationsConfig />} />
             <Route path="payroll" element={<Payroll />} />
             <Route path="users" element={<Users />} />
+            <Route path="access" element={<AccessControl />} />
             <Route path="backup" element={<Backup />} />
           </Routes>
         </div>
