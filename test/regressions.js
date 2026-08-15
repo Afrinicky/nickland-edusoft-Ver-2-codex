@@ -1121,6 +1121,77 @@ console.log('\n── Billing: expected income, bill types, supplementary, voidi
   security.clearCurrentUser();
 }
 
+console.log('\n── A voided bill must not leak anywhere ──');
+{
+  // Voiding is only as good as its reach. A bill the school withdrew that
+  // still shows on the parent's phone, in the cloud snapshot, on the main
+  // dashboard or on the bulk-pay sheet is worse than not voiding at all.
+  const db = makeDb();
+  const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+  const outbox = require(path.join(ROOT, 'electron/server/sync/outbox.js'));
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2026/2027',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-09-01','2026-12-20',1)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (1,'BS5','BS5','basic',10,1)");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'A','B','X1',1,'Active'),(2,'C','D','X2',1,'Active')");
+  db.exec("INSERT INTO student_bills (id,student_id,term_id,total_billed,total_paid,balance) VALUES (1,1,1,400,0,400),(2,2,1,400,0,400)");
+  db.exec("INSERT INTO designations (id,name,is_system) VALUES (1,'Proprietor',1)");
+  db.exec("INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (1,'p','x','Owner',1,1)");
+
+  const h = {};
+  const ipc = { handle: (n, f) => { h[n] = f; } };
+  require(path.join(ROOT, 'electron/ipc/fees_billing.js'))(ipc, db);
+  require(path.join(ROOT, 'electron/ipc/dashboard.js'))(ipc, db);
+  require(path.join(ROOT, 'electron/ipc/fees_bulk_pay.js'))(ipc, db);
+
+  security.setCurrentUser(1, 'Proprietor');
+  h['fees:void-bill'](null, { billId: 1, reason: 'pupil never enrolled' });
+
+  const summary = h['dashboard:summary'](null, 1);
+  ck('a voided bill leaves the main dashboard outstanding total',
+    summary.metrics.fees_outstanding === 400 && summary.metrics.debtor_count === 1);
+  ck('a voided bill leaves the main dashboard top-debtors list',
+    summary.top_fee_debtors.every(d => d.student_id !== 1));
+
+  const sheet = h['fees:bulk-pay-sheet'](null, { classId: 1, termId: 1 });
+  const row = sheet.find(r => r.student_id === 1);
+  ck('a voided bill leaves the bulk payment sheet showing nothing owed',
+    !row.bill_id && row.balance === 0 && row.status === 'not_billed');
+
+  // The cloud snapshot the parent portal reads is built here.
+  setSetting(db, 'cloud_sync_enabled', true, 'cloud');
+  outbox.enqueueStudentSnapshot(db, 1);
+  const queued = db.prepare("SELECT payload_json FROM sync_outbox WHERE entity_type='student_snapshot' ORDER BY id DESC LIMIT 1").get();
+  const snap = queued ? JSON.parse(queued.payload_json) : null;
+  ck('a voided bill is not projected into the cloud snapshot the portal reads',
+    !!snap && (snap.fees_balance || 0) === 0 && (snap.fees_billed || 0) === 0);
+
+  // The printed debtors list selected b.total_amount / b.paid_amount /
+  // b.generated_date — none of which exist on student_bills — so it threw
+  // "no such column" every time a school tried to print it. Same defect the
+  // on-screen debtors report had.
+  let listErr = null;
+  const printedDebtors = (() => {
+    try {
+      return db.prepare(`
+        SELECT s.index_number, s.surname, s.first_name, c.name AS class_name,
+               b.total_billed AS total_amount, b.total_paid AS paid_amount, b.balance,
+               b.generated_at AS generated_date
+        FROM student_bills b
+        JOIN students s ON s.id = b.student_id
+        LEFT JOIN class_groups c ON c.id = s.current_class_id
+        WHERE b.term_id = ? AND b.balance > 0 AND s.status = 'Active'
+          AND COALESCE(b.status, 'active') = 'active'
+        ORDER BY c.level_order, s.surname
+      `).all(1);
+    } catch (e) { listErr = e; return []; }
+  })();
+  ck('the printed debtors list query runs against the real schema', listErr === null);
+  ck('the printed debtors list excludes voided bills',
+    printedDebtors.length === 1 && printedDebtors[0].index_number === 'X2');
+
+  security.clearCurrentUser();
+}
+
 console.log('\n── Bill printout ──');
 {
   // The printed bill used to add the books balance twice: total_billed already

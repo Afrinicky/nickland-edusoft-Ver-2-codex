@@ -59,6 +59,7 @@ module.exports = function registerFeesBulkPayHandlers(ipcMain, db) {
       FROM students s
       LEFT JOIN class_groups c ON c.id = s.current_class_id
       LEFT JOIN student_bills sb ON sb.student_id = s.id AND sb.term_id = ?
+                                AND COALESCE(sb.status, 'active') = 'active'
       WHERE s.current_class_id = ? AND s.status = 'Active'
       ORDER BY s.surname, s.first_name
     `).all(term.id, classId);

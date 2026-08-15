@@ -159,7 +159,9 @@ function enqueueStudentSnapshot(db, studentId) {
     `).get(studentId);
     if (!s) return null;
     const term = db.prepare('SELECT id, label FROM terms WHERE is_current = 1').get();
-    const bill = term ? db.prepare('SELECT total_billed, total_paid, balance FROM student_bills WHERE student_id = ? AND term_id = ?').get(studentId, term.id) : null;
+    // A voided bill is not money owed, so it must not be projected into the
+    // cloud snapshot the parent portal reads.
+    const bill = term ? db.prepare("SELECT total_billed, total_paid, balance FROM student_bills WHERE student_id = ? AND term_id = ? AND COALESCE(status, 'active') = 'active'").get(studentId, term.id) : null;
     const rate = parseFloat(getSetting(db, 'canteen_daily_rate', '5'));
     const canteenUnpaid = term ? db.prepare(`
       SELECT COUNT(*) c FROM school_calendar sc

@@ -30,7 +30,8 @@ function recordFeePayment(db, data) {
     : db.prepare('SELECT * FROM terms WHERE is_current = 1').get();
   const termId = term ? term.id : null;
   const bill = termId
-    ? db.prepare('SELECT id FROM student_bills WHERE student_id = ? AND term_id = ?').get(data.student_id, termId)
+    // Never attach a payment to a bill the school has withdrawn.
+    ? db.prepare("SELECT id FROM student_bills WHERE student_id = ? AND term_id = ? AND COALESCE(status, 'active') = 'active'").get(data.student_id, termId)
     : null;
   const billId = data.bill_id || (bill ? bill.id : null);
 

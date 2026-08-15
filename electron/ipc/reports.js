@@ -1203,11 +1203,13 @@ async function generateDebtorsList(db, userDataPath, getResourcePath, termId, op
   const term = db.prepare('SELECT label FROM terms WHERE id = ?').get(termId);
   const debtors = db.prepare(`
     SELECT s.index_number, s.surname, s.first_name, c.name AS class_name,
-           b.total_amount, b.paid_amount, b.balance, b.generated_date
+           b.total_billed AS total_amount, b.total_paid AS paid_amount, b.balance,
+           b.generated_at AS generated_date
     FROM student_bills b
     JOIN students s ON s.id = b.student_id
     LEFT JOIN class_groups c ON c.id = s.current_class_id
     WHERE b.term_id = ? AND b.balance > 0 AND s.status = 'Active'
+      AND COALESCE(b.status, 'active') = 'active'
     ORDER BY c.level_order, s.surname
   `).all(termId);
   const total = debtors.reduce((s, d) => s + d.balance, 0);
