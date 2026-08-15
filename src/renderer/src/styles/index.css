@@ -2490,6 +2490,13 @@ tr:hover td { background: var(--surface-2); }
   border-left-color: #C9961A;
 }
 .bill-section-books .bill-section-header h3 { color: #C9961A; }
+/* Charges raised part-way through the term, kept visually distinct from the
+   termly fee schedule so a parent can tell the two apart at a glance. */
+.bill-section-extras .bill-section-header {
+  background: #f4f0fd;
+  border-left-color: #6d28d9;
+}
+.bill-section-extras .bill-section-header h3 { color: #6d28d9; }
 
 .bill-items-table {
   width: 100%;

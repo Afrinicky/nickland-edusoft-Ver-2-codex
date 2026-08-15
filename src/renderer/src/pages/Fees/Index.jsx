@@ -1,23 +1,24 @@
-// Nickland Edusoft — Fees Management Module (tabbed)
+// Nickland Edusoft — Fees Management Module.
+//
+// Five tabs, in the order the work happens: see where the term stands, decide
+// what pupils owe, take the money, apply concessions, chase what is left.
+// Templates, extra charges, books and withdrawn bills all live under Bills,
+// because they are all part of deciding what a parent owes — as separate
+// top-level tabs they gave no hint that a template is the thing a bill is made
+// from, and schools were generating bills before writing a schedule.
 import React, { useEffect, useState } from 'react';
 import FeesDashboard from './Dashboard.jsx';
-import BillsTab from './BillsTab.jsx';
-import TemplatesTab from './TemplatesTab.jsx';
+import BillsHub from './BillsHub.jsx';
+import PaymentsHub from './PaymentsHub.jsx';
 import DebtorsTab from './DebtorsTab.jsx';
-import BulkPaySheet from './BulkPaySheet.jsx';
 import DiscountsTab from './DiscountsTab.jsx';
-import BooksTab from './BooksTab.jsx';
-import MobilePaymentsTab from './MobilePaymentsTab.jsx';
 
 const TABS = [
-  { id: 'dashboard',  label: 'Dashboard' },
-  { id: 'bulkpay',    label: 'Bulk Payment Sheet' },
-  { id: 'mobilepay',  label: 'Mobile Payments' },
-  { id: 'bills',      label: 'Bills' },
-  { id: 'templates',  label: 'Fees Template' },
-  { id: 'discounts',  label: 'Discounts' },
-  { id: 'books',      label: 'Books' },
-  { id: 'debtors',    label: 'Debtors' },
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'bills',     label: 'Bills' },
+  { id: 'payments',  label: 'Payments' },
+  { id: 'discounts', label: 'Discounts' },
+  { id: 'debtors',   label: 'Debtors' },
 ];
 
 export default function FeesIndex() {
@@ -34,12 +35,19 @@ export default function FeesIndex() {
     return () => { live = false; clearInterval(id); };
   }, [tab]);
 
+  // The dashboard's cards deep-link into the sub-tabs, so a name it hands back
+  // is mapped to the tab that now contains it.
+  function switchTab(id) {
+    const moved = { templates: 'bills', books: 'bills', bulkpay: 'payments', mobilepay: 'payments' };
+    setTab(moved[id] || id);
+  }
+
   return (
     <div className="fees-module">
       <div className="page-header">
         <div>
           <div className="page-title">Fees Management</div>
-          <div className="page-subtitle">Bills, payments, templates, discounts, books, debtors</div>
+          <div className="page-subtitle">Bills and templates, payments, discounts, debtors</div>
         </div>
       </div>
 
@@ -51,7 +59,7 @@ export default function FeesIndex() {
             onClick={() => setTab(t.id)}
           >
             {t.label}
-            {t.id === 'mobilepay' && pending > 0 && (
+            {t.id === 'payments' && pending > 0 && (
               <span className="topbar-badge" style={{ marginLeft: 6 }}>{pending}</span>
             )}
           </button>
@@ -59,14 +67,11 @@ export default function FeesIndex() {
       </div>
 
       <div className="tab-content">
-        {tab === 'dashboard'  && <FeesDashboard onSwitchTab={setTab} />}
-        {tab === 'bulkpay'    && <BulkPaySheet />}
-        {tab === 'mobilepay'  && <MobilePaymentsTab />}
-        {tab === 'bills'      && <BillsTab />}
-        {tab === 'templates'  && <TemplatesTab />}
-        {tab === 'discounts'  && <DiscountsTab />}
-        {tab === 'books'      && <BooksTab />}
-        {tab === 'debtors'    && <DebtorsTab />}
+        {tab === 'dashboard' && <FeesDashboard onSwitchTab={switchTab} />}
+        {tab === 'bills'     && <BillsHub />}
+        {tab === 'payments'  && <PaymentsHub pending={pending} />}
+        {tab === 'discounts' && <DiscountsTab />}
+        {tab === 'debtors'   && <DebtorsTab />}
       </div>
     </div>
   );
