@@ -1957,6 +1957,34 @@ function runMigrations(db) {
     `);
     db.exec('CREATE INDEX IF NOT EXISTS idx_bill_items_type ON bill_line_items(student_bill_id, charge_type)');
   });
+
+  // 30. Offline finance workbook — the import log.
+  //
+  //     The workbook is the school's fallback when the computer is down: they
+  //     keep collecting on paper/Excel, then import it back. The one thing that
+  //     must never happen is a double-post — importing the same workbook twice
+  //     (or importing a file that overlaps a previous one) charging the school
+  //     twice. Every row that comes in from a workbook carries a stable
+  //     entry_key derived from its content, and that key is recorded here with
+  //     a UNIQUE constraint. The importer checks this table first, so a repeat
+  //     import is a no-op rather than a duplicate payment.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS workbook_import_log (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_key    TEXT NOT NULL UNIQUE,
+        sheet        TEXT NOT NULL,
+        target_table TEXT,
+        target_id    INTEGER,
+        amount       REAL,
+        summary      TEXT,
+        source_file  TEXT,
+        imported_by  INTEGER,
+        imported_at  TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_wb_import_sheet ON workbook_import_log(sheet, imported_at);
+    `);
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

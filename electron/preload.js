@@ -423,6 +423,21 @@ const api = {
   },
 
   // ── Finance ───────────────────────────────────────────
+  // ── Offline finance workbook (export / import) ───────
+  // The school's continuity plan: one Excel file holding fees, canteen, books,
+  // transport, other income, expenses and payroll, worked on while the system
+  // is down and imported back when it returns.
+  workbook: {
+    status:        ()          => ipcRenderer.invoke('workbook:status'),
+    exportBook:    (options)   => ipcRenderer.invoke('workbook:export', options || {}),
+    openFolder:    ()          => ipcRenderer.invoke('workbook:open-folder'),
+    reveal:        ()          => ipcRenderer.invoke('workbook:reveal'),
+    pickFile:      ()          => ipcRenderer.invoke('workbook:pick-file'),
+    previewImport: (data)      => ipcRenderer.invoke('workbook:preview-import', data),
+    runImport:     (data)      => ipcRenderer.invoke('workbook:import', data),
+    history:       (limit)     => ipcRenderer.invoke('workbook:import-history', limit || 200),
+  },
+
   finance: {
     dashboard:         (termId)              => ipcRenderer.invoke('finance:dashboard', termId),
     listIncome:        (filters)             => ipcRenderer.invoke('finance:list-income', filters),

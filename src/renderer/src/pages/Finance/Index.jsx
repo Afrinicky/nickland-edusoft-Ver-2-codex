@@ -7,6 +7,7 @@ import BalancingTab from './BalancingTab.jsx';
 import FinancialStatementTab from './FinancialStatementTab.jsx';
 import AuditTab from './AuditTab.jsx';
 import BudgetsTab from './BudgetsTab.jsx';
+import WorkbookTab from './WorkbookTab.jsx';
 
 const TABS = [
   { id: 'dashboard',  label: 'Dashboard' },
@@ -16,6 +17,7 @@ const TABS = [
   { id: 'statement',  label: 'Financial Statement' },
   { id: 'audit',      label: 'Audit & Tracker' },
   { id: 'budgets',    label: 'Budgets' },
+  { id: 'workbook',   label: 'Workbook' },
 ];
 
 export default function FinanceIndex() {
@@ -26,7 +28,7 @@ export default function FinanceIndex() {
       <div className="page-header">
         <div>
           <div className="page-title">Finance</div>
-          <div className="page-subtitle">Income, expenses, cashbook, financial statements, audit, budgets</div>
+          <div className="page-subtitle">Income, expenses, cashbook, financial statements, audit, budgets, offline workbook</div>
         </div>
       </div>
 
@@ -50,6 +52,7 @@ export default function FinanceIndex() {
         {tab === 'statement' && <FinancialStatementTab />}
         {tab === 'audit'     && <AuditTab />}
         {tab === 'budgets'   && <BudgetsTab />}
+        {tab === 'workbook'  && <WorkbookTab />}
       </div>
     </div>
   );
