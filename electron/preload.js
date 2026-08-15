@@ -26,6 +26,20 @@ const api = {
     changePassword:            (data)  => ipcRenderer.invoke('auth:change-password', data),
   },
 
+  // ── Access control (roles + per-person overrides, level-based) ────────
+  access: {
+    catalogue:      ()      => ipcRenderer.invoke('access:catalogue'),
+    roleMatrix:     ()      => ipcRenderer.invoke('access:role-matrix'),
+    setRoleLevel:   (data)  => ipcRenderer.invoke('access:set-role-level', data),
+    setRoleAll:     (data)  => ipcRenderer.invoke('access:set-role-all', data),
+    createRole:     (data)  => ipcRenderer.invoke('access:create-role', data),
+    updateRole:     (data)  => ipcRenderer.invoke('access:update-role', data),
+    deleteRole:     (data)  => ipcRenderer.invoke('access:delete-role', data),
+    userAccess:     (userId) => ipcRenderer.invoke('access:user-access', userId),
+    setUserLevel:   (data)  => ipcRenderer.invoke('access:set-user-level', data),
+    resetUser:      (data)  => ipcRenderer.invoke('access:reset-user', data),
+  },
+
   // ── Dashboard ─────────────────────────────────────────
   dashboard: {
     summary:           (termId)              => ipcRenderer.invoke('dashboard:summary', termId),

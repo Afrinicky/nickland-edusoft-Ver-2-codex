@@ -1231,5 +1231,132 @@ console.log('\n── Bill printout ──');
 }
 
 
+console.log('\n── Access control: level ladder, roles, individual overrides ──');
+{
+  const _access = require(path.join(ROOT, 'electron/ipc/_access.js'));
+
+  // The ladder maps cleanly onto the four booleans, and back.
+  ck('No access → all flags off',
+    JSON.stringify(_access.levelToPerms('no')) === JSON.stringify({ can_view: 0, can_create: 0, can_edit: 0, can_delete: 0 }));
+  ck('View grants only read',
+    _access.levelToPerms('view').can_view === 1 && _access.levelToPerms('view').can_create === 0);
+  ck('Contribute grants view + create, not edit',
+    _access.levelToPerms('contribute').can_create === 1 && _access.levelToPerms('contribute').can_edit === 0);
+  ck('Manage grants up to edit, not delete',
+    _access.levelToPerms('manage').can_edit === 1 && _access.levelToPerms('manage').can_delete === 0);
+  ck('Full grants everything', _access.levelToPerms('full').can_delete === 1);
+  ck('perms round-trip through a level', _access.permsToLevel(_access.levelToPerms('manage')) === 'manage');
+  ck('a non-ladder combo reduces to the highest contiguous level, never over-reporting',
+    _access.permsToLevel({ can_view: 1, can_create: 0, can_edit: 0, can_delete: 1 }) === 'view');
+
+  const db = makeDb();
+  const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+  const h = {};
+  const ipc = { handle: (n, f) => { h[n] = f; } };
+  require(path.join(ROOT, 'electron/ipc/access.js'))(ipc, db);
+  const call = (n, a) => h[n](null, a);
+
+  // makeDb() applies the schema + migrations but not seedDefaults, so stand up
+  // the standard designations the way production seeds them: money → Accountant,
+  // academics/canteen → Class Teacher, and the two always-full system roles.
+  const mkRole = (name, sys, levels) => {
+    const id = db.prepare('INSERT INTO designations (name, is_system) VALUES (?, ?)').run(name, sys ? 1 : 0).lastInsertRowid;
+    for (const m of _access.MODULE_KEYS) {
+      const p = _access.levelToPerms(levels[m] || 'no');
+      db.prepare('INSERT INTO designation_permissions (designation_id,module,can_view,can_create,can_edit,can_delete) VALUES (?,?,?,?,?,?)')
+        .run(id, m, p.can_view, p.can_create, p.can_edit, p.can_delete);
+    }
+    return id;
+  };
+  const proprietor = mkRole('Proprietor', 1, {});   // always-full by name; rows ignored
+  mkRole('Administrator', 1, {});
+  const accountant = mkRole('Accountant', 1, {
+    dashboard: 'view', students: 'view', fees: 'full', canteen: 'view',
+    payroll: 'full', finance: 'full', staff: 'view',
+  });
+  const classTeacher = mkRole('Class Teacher', 1, {
+    dashboard: 'view', students: 'view', academics: 'full', canteen: 'full', notifications: 'view',
+  });
+  db.exec("INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (1,'own','x','Owner',?,1)".replace('?', proprietor));
+  db.exec(`INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (2,'tr','x','A Teacher',${classTeacher},1)`);
+
+  // Not signed in → cannot change access.
+  security.clearCurrentUser();
+  ck('an unauthenticated caller cannot change a role',
+    call('access:set-role-level', { designationId: accountant, module: 'finance', level: 'full' }).ok === false);
+
+  // A Class Teacher (not elevated, no settings-edit) cannot change access.
+  security.setCurrentUser(2, 'Class Teacher');
+  ck('a class teacher cannot change access control',
+    call('access:set-role-level', { designationId: accountant, module: 'finance', level: 'view' }).ok === false);
+
+  security.setCurrentUser(1, 'Proprietor');
+
+  // Seeded expectations from the domain: Accountant runs the money, teacher runs
+  // academics + canteen.
+  const matrix = call('access:role-matrix');
+  const acc = matrix.find(r => r.id === accountant);
+  const tea = matrix.find(r => r.id === classTeacher);
+  ck('the Accountant role owns finance, fees and payroll out of the box',
+    acc.levels.finance === 'full' && acc.levels.fees === 'full' && acc.levels.payroll === 'full');
+  ck('the Class Teacher role owns academics and canteen, not finance',
+    tea.levels.academics === 'full' && tea.levels.canteen === 'full' && tea.levels.finance === 'no');
+  ck('Proprietor is reported as always-full and locked',
+    matrix.find(r => r.id === proprietor).always_full === true);
+  ck('the role card reports how many areas are granted',
+    acc.module_count === _access.MODULE_KEYS.length && acc.granted_count > 0);
+
+  // Proprietor/Administrator cannot be reduced.
+  ck('the Proprietor role cannot be down-levelled',
+    call('access:set-role-level', { designationId: proprietor, module: 'finance', level: 'no' }).ok === false);
+
+  // Editing a role — on a scratch role, so the Class Teacher the individual
+  // scenario below depends on is left untouched.
+  const scratch = mkRole('Games Master', 0, { academics: 'full' });
+  call('access:set-role-level', { designationId: scratch, module: 'students', level: 'contribute' });
+  ck('a role level can be changed and persists',
+    call('access:role-matrix').find(r => r.id === scratch).levels.students === 'contribute');
+  call('access:set-role-all', { designationId: scratch, module: undefined, level: 'view' });
+  ck('"set all" puts every module on one level',
+    _access.MODULE_KEYS.every(m => call('access:role-matrix').find(r => r.id === scratch).levels[m] === 'view'));
+
+  // Custom role, copied from another.
+  const created = call('access:create-role', { name: 'Bursar', description: 'Handles fees at the front desk', copyFromId: accountant });
+  ck('a custom role can be created as a copy of another',
+    created.ok && call('access:role-matrix').find(r => r.id === created.id).levels.fees === 'full');
+  ck('a duplicate role name is refused',
+    call('access:create-role', { name: 'bursar' }).ok === false);
+  ck('a built-in role cannot be deleted',
+    call('access:delete-role', { designationId: accountant }).ok === false);
+
+  // ── The headline scenario: no accountant, so a teacher is given limited
+  //    finance access as an individual — without becoming an accountant. ──
+  let ua = call('access:user-access', 2);
+  ck('by default the teacher inherits the role: no finance access',
+    ua.rows.find(r => r.module === 'finance').effective_level === 'no' &&
+    ua.rows.find(r => r.module === 'finance').override_level === null);
+
+  call('access:set-user-level', { userId: 2, module: 'finance', level: 'contribute' });
+  ua = call('access:user-access', 2);
+  const finRow = ua.rows.find(r => r.module === 'finance');
+  ck('an individual can be granted finance access above their role',
+    finRow.override_level === 'contribute' && finRow.effective_level === 'contribute' && finRow.role_level === 'no');
+  ck('the individual override reaches the real permission resolver',
+    require(path.join(ROOT, 'electron/ipc/auth.js')).resolveEffectivePermissions(db, 2).finance.canCreate === true);
+  ck('the teacher is still a Class Teacher, not an Accountant',
+    db.prepare('SELECT d.name n FROM users u JOIN designations d ON d.id=u.designation_id WHERE u.id=2').get().n === 'Class Teacher');
+
+  // Clearing the override falls back to the role.
+  call('access:set-user-level', { userId: 2, module: 'finance', level: 'inherit' });
+  ck('clearing an override falls back to the role default',
+    call('access:user-access', 2).rows.find(r => r.module === 'finance').override_level === null);
+
+  // Proprietor overrides are meaningless (always full) and refused.
+  ck('an override on a Proprietor account is refused',
+    call('access:set-user-level', { userId: 1, module: 'finance', level: 'no' }).ok === false);
+
+  security.clearCurrentUser();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -14,6 +14,7 @@ const registerSettingsHandlers = require('./ipc/settings');
 const registerReportsHandlers = require('./ipc/reports');
 const registerNotificationsHandlers = require('./ipc/notifications');
 const registerAuthHandlers = require('./ipc/auth');
+const registerAccessHandlers = require('./ipc/access');
 const registerDashboardHandlers = require('./ipc/dashboard');
 const registerStudentAttendanceHandlers = require('./ipc/students_attendance');
 const registerStudentsSheetHandlers = require('./ipc/students_sheet');
@@ -229,6 +230,7 @@ app.whenReady().then(async () => {
   // Auth is not optional — without it nobody can sign in at all.
   try {
     registerAuthHandlers(ipcMain, db);
+    registerAccessHandlers(ipcMain, db);
   } catch (e) {
     return reportFatal(e, 'setting up sign-in');
   }
