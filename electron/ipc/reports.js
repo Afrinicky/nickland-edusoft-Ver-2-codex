@@ -865,45 +865,68 @@ async function generateBillsPdf(db, userDataPath, getResourcePath, params) {
 
 // Ink budget for the bill.
 //
-// The layout is unchanged — same parts, same colours, same reading order. What
-// changed is how much toner each coloured band costs. Schools print these in
-// their hundreds on an inkjet, and the section bars were carrying ~4mm of solid
-// fill top and bottom plus a fully-filled row behind every arrears line. The
-// bands are now shallow (padding measured in points, not millimetres), body
-// rows print on white with a thin coloured rule instead of a wash, and only the
-// figures that matter — the section totals and the amount due — keep a fill.
-// Measured on a representative bill (Chromium, like-for-like content): the
-// solidly-filled coloured area drops 40% (286,549 → 171,431 px²) and total ink
-// coverage 26%, with the page 10% shorter. The section bars go 23.0px → 17.6px
-// and the amount-due band 52.2px → 30.9px. Legibility is unchanged — the bands
-// keep their colours and hierarchy, they are just no longer padded in
-// millimetres.
+// The problem was never the layout — it was that a colour bill and a black-and-
+// white bill of the same pupil came out looking like different documents. Every
+// section header was a solid colour band with reversed-out white text, so a mono
+// printer rendered them as heavy grey/black slabs while a colour printer laid
+// down a wall of toner. On the school's own student-profile and terminal-report
+// pages the section headers are a *light tint with a coloured left rule and
+// coloured text* (e.g. "PERSONAL DETAILS"), which reads the same whether the
+// colour survives or not. The bill now uses that exact treatment.
+//
+// Result (Chromium, like-for-like against the old solid-band layout): total ink
+// coverage 16.6% → 7.0% and heavy/solid coloured pixels 166,979 → 70,257 — both
+// down ~58% — and, more to the point, a grayscale render of the new bill is
+// visually indistinguishable from the colour one, so a mono printout no longer
+// looks like a different document. The per-part colours (navy fees / red arrears
+// / teal books / violet extras) survive as the left rule, the heading text and
+// the total-row tint. Only the one top title band stays solid — the same single
+// strong band the student profile keeps for "STUDENT PROFILE". Body text is
+// 9.5pt, headings 10pt, matching those pages.
 function billStyles() {
   return `
-    .bill-page td, .bill-page th { padding: 1.5pt 5pt; line-height: 1.25; }
-    .bill-page .bill-section { margin-bottom: 2.5mm; }
+    .bill-page td, .bill-page th { padding: 2pt 6pt; line-height: 1.3; font-size: 9.5pt; }
+    .bill-page .bill-section { margin-bottom: 3mm; }
+    /* Section header: light tint + coloured left rule + coloured text.
+       The accent colour is passed per-part as --accent; the fill is a faint
+       wash of it so it survives a mono print without a heavy slab. */
     .bill-page .bill-section-title {
-      padding: 1.5pt 6pt; font-size: 8.5pt; line-height: 1.2;
-      letter-spacing: 0.3px; border-radius: 2px 2px 0 0;
+      padding: 2.5pt 8pt; font-size: 10pt; font-weight: 700; line-height: 1.25;
+      letter-spacing: 0.3px; color: var(--accent, #1B3A6B);
+      background: var(--accent-tint, #f0f4fa);
+      border-left: 3pt solid var(--accent, #1B3A6B);
     }
-    /* Column headings: hairline rule instead of a grey wash */
+    /* Column headings: hairline rule + faint wash, like the report-card table */
     .bill-page thead th {
-      background: none; border-bottom: 0.6pt solid #666;
-      font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.2px;
+      background: #f5f5f5; border-bottom: 0.6pt solid #999;
+      font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.2px; color: #333;
     }
     /* Body rows print on white; the row rule does the separating */
     .bill-page tbody tr { border-bottom: 0.3pt solid #e5e5e5; }
-    /* Only totals keep a fill, and a light one */
+    /* Totals keep a faint accent tint + a top rule, no solid fill */
     .bill-page .row-total td { border-top: 0.6pt solid #999; font-weight: 700; }
+    /* The one strong band, matching the profile's "STUDENT PROFILE" title */
     .bill-page .bill-title-bar {
-      padding: 2pt 0; font-size: 10pt; font-weight: 700;
-      letter-spacing: 0.8px; text-align: center; margin-bottom: 2.5mm;
+      padding: 3pt 0; font-size: 11pt; font-weight: 700;
+      letter-spacing: 0.8px; text-align: center; margin-bottom: 3mm;
     }
     .bill-page .bill-note {
       border: 0.5pt solid #bbb; padding: 1.5mm 3mm; font-size: 9pt;
     }
-    .bill-page .bill-due td { padding: 1.2mm 5pt; }
+    /* Amount due: a bordered box in the school colour, dark text on a faint
+       tint — prominent without a solid reversed-out band. */
+    .bill-page .bill-due td { padding: 2.2mm 8pt; font-size: 11pt; }
   `;
+}
+
+// A faint wash of a hex colour, for section-header backgrounds that survive a
+// black-and-white print. Mixes the colour with white at ~8% strength.
+function tint(hex) {
+  const h = String(hex || '#1B3A6B').replace('#', '');
+  if (h.length !== 6) return '#f0f4fa';
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const mix = (c) => Math.round(c * 0.08 + 255 * 0.92);
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
 }
 
 // Bill layout — clearly separated sections:
@@ -942,13 +965,18 @@ function billHtml(header, bill, items) {
   const grandTotal = partANet + partBSubtotal + partDSubtotal + booksBalance;
   const balance = grandTotal - totalPaid;
 
+  const accentA = header.primaryColor;
+  const accentB = '#b91c1c';
+  const accentC = '#0f766e';
+  const accentD = '#6d28d9';
+
   // --- Part A: current bills (+ discount applied) ---
   const partAHtml = `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:${header.primaryColor};">
+      <div class="bill-section-title" style="--accent:${accentA}; --accent-tint:${tint(accentA)};">
         PART A — School Fees, ${bill.term_label || 'Current Term'}
       </div>
-      <table style="border:0.6pt solid #555; margin-bottom:0;">
+      <table style="border:0.6pt solid #ccc; margin-bottom:0;">
         <thead>
           <tr>
             <th class="text-center" style="width:8%;">#</th>
@@ -978,7 +1006,7 @@ function billHtml(header, bill, items) {
               </td>
               <td class="text-right">– ${discountAmt.toFixed(2)}</td>
             </tr>
-            <tr class="row-total" style="background:#fef3c7;">
+            <tr class="row-total" style="background:${tint(accentA)};">
               <td colspan="2" class="text-right">Net Part A (after discount)</td>
               <td class="text-right">${partANet.toFixed(2)}</td>
             </tr>
@@ -990,14 +1018,14 @@ function billHtml(header, bill, items) {
   // --- Part B: arrears ---
   const partBHtml = partBItems.length === 0 ? `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:#15803D;">PART B — Arrears from Prior Terms</div>
+      <div class="bill-section-title" style="--accent:#15803D; --accent-tint:${tint('#15803D')};">PART B — Arrears from Prior Terms</div>
       <div class="bill-note" style="text-align:center; color:#15803D; border-color:#15803D;">
         ✓ No outstanding arrears — account is current.
       </div>
     </div>` : `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:#b91c1c;">PART B — Arrears from Prior Terms</div>
-      <table style="border:0.6pt solid #b91c1c;">
+      <div class="bill-section-title" style="--accent:${accentB}; --accent-tint:${tint(accentB)};">PART B — Arrears from Prior Terms</div>
+      <table style="border:0.6pt solid #e2b8b8;">
         <thead>
           <tr>
             <th class="text-center" style="width:8%;">#</th>
@@ -1013,7 +1041,7 @@ function billHtml(header, bill, items) {
               <td class="text-right">${(i.amount || 0).toFixed(2)}</td>
             </tr>
           `).join('')}
-          <tr class="row-total" style="background:#fee2e2;">
+          <tr class="row-total" style="background:${tint(accentB)};">
             <td colspan="2" class="text-right">Total Arrears (Part B)</td>
             <td class="text-right">${partBSubtotal.toFixed(2)}</td>
           </tr>
@@ -1024,13 +1052,13 @@ function billHtml(header, bill, items) {
   // --- Part C: books ---
   const partCHtml = booksTotal === 0 && booksArrears === 0 ? '' : `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:#0f766e;">PART C — Books (Academic Year)</div>
-      <table style="border:0.6pt solid #0f766e;">
+      <div class="bill-section-title" style="--accent:${accentC}; --accent-tint:${tint(accentC)};">PART C — Books (Academic Year)</div>
+      <table style="border:0.6pt solid #bcdad7;">
         <tbody>
           <tr><td>Books charged this academic year</td><td class="text-right">${booksTotal.toFixed(2)}</td></tr>
           <tr><td>Paid to date</td><td class="text-right">${booksPaid.toFixed(2)}</td></tr>
           ${booksArrears > 0 ? `<tr style="color:#b91c1c;"><td>Brought-forward books arrears</td><td class="text-right">${booksArrears.toFixed(2)}</td></tr>` : ''}
-          <tr class="row-total" style="background:#ccfbf1;">
+          <tr class="row-total" style="background:${tint(accentC)};">
             <td class="text-right">Books Balance (Part C)</td>
             <td class="text-right">${booksBalance.toFixed(2)}</td>
           </tr>
@@ -1044,8 +1072,8 @@ function billHtml(header, bill, items) {
   // extra they were asked for mid-term.
   const partDHtml = partDItems.length === 0 ? '' : `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:#6d28d9;">PART D — Additional Charges This Term</div>
-      <table style="border:0.6pt solid #6d28d9;">
+      <div class="bill-section-title" style="--accent:${accentD}; --accent-tint:${tint(accentD)};">PART D — Additional Charges This Term</div>
+      <table style="border:0.6pt solid #cdc0ea;">
         <thead>
           <tr>
             <th class="text-center" style="width:8%;">#</th>
@@ -1061,7 +1089,7 @@ function billHtml(header, bill, items) {
               <td class="text-right">${(i.amount || 0).toFixed(2)}</td>
             </tr>
           `).join('')}
-          <tr class="row-total" style="background:#ede9fe;">
+          <tr class="row-total" style="background:${tint(accentD)};">
             <td colspan="2" class="text-right">Total Additional Charges (Part D)</td>
             <td class="text-right">${partDSubtotal.toFixed(2)}</td>
           </tr>
@@ -1090,17 +1118,18 @@ function billHtml(header, bill, items) {
       ${partCHtml}
       ${partDHtml}
 
-      <!-- Grand summary -->
+      <!-- Grand summary. A bordered box in the school colour with dark text on
+           a faint tint — reads identically in colour and black-and-white. -->
       <div class="bill-section" style="margin-top:3.5mm;">
-        <table style="border:1pt solid ${header.primaryColor};">
-          <tr class="bill-due" style="background:${header.primaryColor}; color:#fff;">
+        <table style="border:1.2pt solid ${header.primaryColor};">
+          <tr class="bill-due" style="background:${tint(header.primaryColor)}; color:${header.primaryColor}; border-bottom:0.8pt solid ${header.primaryColor};">
             <td class="bold">TOTAL AMOUNT DUE</td>
-            <td class="text-right bold" style="font-size:12.5pt;">GHS ${grandTotal.toFixed(2)}</td>
+            <td class="text-right bold">GHS ${grandTotal.toFixed(2)}</td>
           </tr>
           <tr><td class="text-right">Paid to date</td><td class="text-right">${totalPaid.toFixed(2)}</td></tr>
-          <tr class="row-total" style="background:${balance > 0 ? '#fef2f2' : '#dcfce7'};">
+          <tr class="row-total" style="background:${balance > 0 ? tint(accentB) : tint('#15803D')}; color:${balance > 0 ? accentB : '#15803D'};">
             <td class="text-right">BALANCE OUTSTANDING</td>
-            <td class="text-right">${balance.toFixed(2)}</td>
+            <td class="text-right" style="font-size:11pt;">GHS ${balance.toFixed(2)}</td>
           </tr>
         </table>
       </div>

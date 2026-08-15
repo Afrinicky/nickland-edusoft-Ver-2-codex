@@ -1208,13 +1208,26 @@ console.log('\n── Bill printout ──');
   );
   // Fees 300 + extras 50 + books 200 = 550 due, less 100 paid = 450.
   ck('the printed bill does not double-count the books balance',
-    html.includes('GHS 550.00') && html.includes('>450.00<'));
+    html.includes('GHS 550.00') && html.includes('GHS 450.00'));
   ck('supplementary charges get their own part on the printed bill',
     html.includes('PART D'));
   ck('the printed bill no longer fills every arrears row with colour',
     !html.includes('background:#fef2f2;"') || !html.includes('#fecaca'));
   ck('section bars are measured in points, not millimetres of solid fill',
     !/bill-section-title[^>]*padding:\s*4px/.test(html));
+
+  // The whole point of the redesign: a colour bill and a mono bill must look
+  // the same. That only holds if section headers are NOT solid colour bands
+  // with reversed-out white text (which a mono printer renders as heavy slabs).
+  const styles = reports.__billStylesForTest();
+  ck('section headers are a light tint with a coloured left rule, not a solid fill',
+    /border-left:\s*3pt solid var\(--accent/.test(styles) &&
+    /background:\s*var\(--accent-tint/.test(styles));
+  ck('no bill section header paints white reversed-out text on a solid fill',
+    !/bill-section-title[^"]*color:\s*#fff/.test(html) &&
+    !/class="bill-section-title"[^>]*background:#[0-9a-fA-F]{6}/.test(html));
+  ck('the amount-due block is no longer a solid reversed-out band',
+    !/bill-due[^>]*color:#fff/.test(html));
 }
 
 

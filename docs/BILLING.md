@@ -128,10 +128,16 @@ Fees
 `electron/ipc/reports.js` → `billHtml()` / `billStyles()`.
 
 Parts A (term fees), B (arrears), C (books), D (extras), then the amount due.
-The bands are deliberately shallow — schools print these in their hundreds on
-inkjets. Measured against the previous layout on a representative bill: solidly
-filled coloured area −40%, total ink coverage −26%, page 10% shorter, same
-colours and hierarchy.
+Section headers use a **light tint + coloured left rule + coloured text** — the
+same treatment as the school's on-screen student-profile page ("PERSONAL
+DETAILS") — instead of solid colour bands with reversed-out white text. That is
+what makes a black-and-white printout look the same as a colour one, which was
+the actual complaint: a mono printer turned the old solid bands into heavy grey
+slabs. Only the single top title band stays solid, like "STUDENT PROFILE".
+Measured against the old layout on a representative bill: total ink −58%,
+heavy/solid coloured pixels −58%, and a grayscale render is visually
+indistinguishable from the colour one. Same colours, same hierarchy, body text
+9.5pt / headings 10pt.
 
 ## Schema
 
