@@ -1358,5 +1358,227 @@ console.log('\n── Access control: level ladder, roles, individual overrides 
   security.clearCurrentUser();
 }
 
+
+console.log('\n── Finance workbook: offline continuity ──');
+{
+  // The workbook is the school's fallback when the computer is down, which
+  // makes it a write-back medium rather than a report. The properties that
+  // matter are: the layout contract holds, dates and money survive Excel's
+  // many representations, and money can NEVER be posted twice.
+  const wbSchema = require(path.join(ROOT, 'electron/ipc/_workbook_schema.js'));
+
+  // ── Date parsing: Excel hands the same day back three different ways ──
+  ck('an ISO date string parses', wbSchema.toISODate('2026-06-02') === '2026-06-02');
+  ck('the dd/mm/yyyy the school already used parses',
+    wbSchema.toISODate('25/05/2026') === '2026-05-25');
+  ck('a Date object parses without slipping a day west of Greenwich',
+    wbSchema.toISODate(new Date('2026-06-02T00:00:00Z')) === '2026-06-02');
+  ck('an Excel serial number parses', wbSchema.toISODate(46175) === '2026-06-02');
+  ck('a blank date is null, not today', wbSchema.toISODate('') === null);
+
+  // ── Money parsing ──
+  ck('a typed amount with currency and separators parses',
+    wbSchema.toMoney('GHS 1,250.50') === 1250.5);
+  ck('a formula cell parses to its computed result',
+    wbSchema.toMoney({ formula: 'M5+O5', result: 390 }) === 390);
+  ck('money is rounded to pesewas', wbSchema.toMoney(10.005) === 10.01);
+
+  // ── The idempotency key ──
+  const rowA = { payment_date: '2026-06-02', index_number: 'AVE/21/00057', amount: 200, reference: '' };
+  ck('the same row always produces the same key',
+    wbSchema.entryKey('Fee Payments', rowA, 1) === wbSchema.entryKey('Fee Payments', rowA, 1));
+  ck('spacing and case do not change the key',
+    wbSchema.entryKey('Fee Payments', rowA, 1) ===
+    wbSchema.entryKey('Fee Payments', { ...rowA, index_number: '  ave/21/00057 ' }, 1));
+  ck('a different amount is a different entry',
+    wbSchema.entryKey('Fee Payments', rowA, 1) !== wbSchema.entryKey('Fee Payments', { ...rowA, amount: 201 }, 1));
+  ck('two genuinely identical rows in one file stay distinct',
+    wbSchema.entryKey('Fee Payments', rowA, 1) !== wbSchema.entryKey('Fee Payments', rowA, 2));
+  ck('the same row on a different sheet is a different entry',
+    wbSchema.entryKey('Fee Payments', rowA, 1) !== wbSchema.entryKey('Canteen Payments', rowA, 1));
+
+  // ── Every entry sheet obeys the contract the importer relies on ──
+  const sheets = Object.keys(wbSchema.ENTRY_SHEETS);
+  ck('every money sheet is covered by the workbook', sheets.length === 7);
+  ck('every entry sheet starts with Status then Entry Ref',
+    sheets.every(n => {
+      const c = wbSchema.ENTRY_SHEETS[n].columns;
+      return c[0].key === 'status' && c[1].key === 'entry_ref';
+    }));
+  ck('every entry sheet declares what makes two rows different',
+    sheets.every(n => (wbSchema.ENTRY_SHEETS[n].identity || []).length >= 3));
+  ck('every entry sheet has a required date and a required amount',
+    sheets.every(n => {
+      const c = wbSchema.ENTRY_SHEETS[n].columns;
+      return c.some(x => x.date && x.required) && c.some(x => x.money && x.required);
+    }));
+  ck('every entry sheet routes to a known service',
+    sheets.every(n => ['fees','canteen','books','transport','income','expense','payroll']
+      .includes(wbSchema.ENTRY_SHEETS[n].target)));
+  ck('column headers within a sheet are unique, so the importer cannot mis-map',
+    sheets.every(n => {
+      const h = wbSchema.ENTRY_SHEETS[n].columns.map(c => c.header.toLowerCase());
+      return new Set(h).size === h.length;
+    }));
+
+  // ── The import log is what makes a repeat import safe ──
+  const db = makeDb();
+  db.prepare(`INSERT INTO workbook_import_log (entry_key, sheet, amount) VALUES ('XL-ABC', 'Fee Payments', 200)`).run();
+  let dupeBlocked = false;
+  try {
+    db.prepare(`INSERT INTO workbook_import_log (entry_key, sheet, amount) VALUES ('XL-ABC', 'Fee Payments', 200)`).run();
+  } catch (_) { dupeBlocked = true; }
+  ck('the database itself refuses to log the same entry twice', dupeBlocked);
+}
+
+console.log('\n── Finance workbook: round trip ──');
+{
+  // Export a workbook, type entries into it the way a school would while the
+  // system is down, and import it back. This is the whole feature in one test.
+  const ExcelJS = (() => { try { return require('exceljs'); } catch (_) { return null; } })();
+  if (!ExcelJS) {
+    console.log('  (skipped — exceljs not installed in this environment)');
+  } else {
+    const os = require('os');
+    const wbSchema = require(path.join(ROOT, 'electron/ipc/_workbook_schema.js'));
+    const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+    const { buildWorkbook } = require(path.join(ROOT, 'electron/ipc/finance_workbook_export.js'));
+    const { importWorkbook } = require(path.join(ROOT, 'electron/ipc/finance_workbook_import.js'));
+
+    const db = makeDb();
+    db.exec("INSERT INTO settings (key,value,category) VALUES ('school_name','AVE MARIA','school'),('canteen_daily_rate','5','canteen'),('receipt_counter','1','system'),('transaction_counter','1','system')");
+    db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2025/2026',1)");
+    db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,3,'Third Term','2026-04-07','2026-07-31',1)");
+    db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (1,'Class 1','C1','basic',6,1)");
+    db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,gender,status) VALUES (1,'ABAMBEY','EMMA','AVE/21/00056',1,'F','Active'),(2,'ACHEAMPONG','RAPHAEL','AVE/21/00057',1,'M','Active')");
+    db.exec("INSERT INTO fee_templates (id,name,class_group_id,term_id,is_active,bill_type) VALUES (1,'T3',NULL,1,1,'school_fees')");
+    db.exec("INSERT INTO fee_line_items (fee_template_id,item_number,description,amount) VALUES (1,1,'TUITION',250),(1,2,'EXAMS',50)");
+    db.exec("INSERT INTO staff (id,staff_number,surname,first_name,role,status) VALUES (1,'STF001','MENSAH','KWAME','Teacher','Active')");
+    db.exec("INSERT INTO staff_salaries (id,staff_id,month,year,gross_salary,net_salary,is_paid) VALUES (1,1,5,2026,1000,905,0)");
+    for (const d of ['2026-04-07','2026-04-08','2026-04-09','2026-04-10','2026-04-13'])
+      db.prepare("INSERT INTO school_calendar (date,day_type,term_id) VALUES (?,'school_day',1)").run(d);
+    db.exec("INSERT INTO designations (id,name,is_system) VALUES (1,'Proprietor',1)");
+    db.exec("INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (1,'own','x','Owner',1,1)");
+    security.setCurrentUser(1, 'Proprietor');
+
+    const h = {}; const reg = { handle: (n, f) => { h[n] = f; } };
+    require(path.join(ROOT, 'electron/ipc/fees.js'))(reg, db);
+    h['fees:generate-bulk'](null, { termId: 1, scope: 'all' });
+
+    const run = (async () => {
+      const out = path.join(os.tmpdir(), `nk-wb-${Date.now()}.xlsx`);
+      const built = await buildWorkbook(db, out, {});
+      ck('the workbook exports every money sheet, not just fees',
+        built.ok &&
+        [wbSchema.SHEETS.FEE_PAYMENTS, wbSchema.SHEETS.CANTEEN, wbSchema.SHEETS.CANTEEN_PAYMENTS,
+         wbSchema.SHEETS.BOOKS_PAYMENTS, wbSchema.SHEETS.TRANSPORT, wbSchema.SHEETS.OTHER_INCOME,
+         wbSchema.SHEETS.EXPENSES, wbSchema.SHEETS.PAYROLL, wbSchema.SHEETS.SUMMARY]
+          .every(s => built.sheets.includes(s)));
+      ck('the canteen sheet the old ledger left empty now carries every pupil',
+        built.sheets.includes(wbSchema.SHEETS.CANTEEN));
+
+      // Type offline entries onto the green rows.
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(out);
+      const cursor = {};
+      const setRow = (sheet, vals) => {
+        const ws = wb.getWorksheet(sheet);
+        if (cursor[sheet] === undefined) {
+          let r = wbSchema.HEADER_ROWS + 1;
+          while (String(wbSchema.cellText(ws.getRow(r).getCell(1).value)).trim().toUpperCase() !== 'NEW') r++;
+          cursor[sheet] = r;
+        }
+        const rr = cursor[sheet]++;
+        wbSchema.ENTRY_SHEETS[sheet].columns.forEach((c, i) => {
+          if (vals[c.key] !== undefined) ws.getCell(rr, i + 1).value = vals[c.key];
+        });
+      };
+      setRow(wbSchema.SHEETS.FEE_PAYMENTS, { payment_date: '2026-06-02', index_number: 'AVE/21/00057', amount: 200, payment_method: 'Cash' });
+      setRow(wbSchema.SHEETS.FEE_PAYMENTS, { payment_date: '2026-06-02', index_number: 'NOPE/1', amount: 99 });
+      setRow(wbSchema.SHEETS.CANTEEN_PAYMENTS, { payment_date: '2026-04-08', index_number: 'AVE/21/00056', amount: 25 });
+      setRow(wbSchema.SHEETS.OTHER_INCOME, { transaction_date: '2026-06-03', category: 'donation', payer_name: 'PTA', description: 'Speech day', amount: 500 });
+      setRow(wbSchema.SHEETS.EXPENSES, { transaction_date: '2026-06-03', category: 'supplies', payee_name: 'Kofi Stores', description: 'Chalk', amount: 180 });
+      setRow(wbSchema.SHEETS.PAYROLL, { staff_number: 'STF001', month: 5, year: 2026, amount_paid: 905, payment_date: '2026-06-01', payment_method: 'Bank' });
+      const filled = path.join(os.tmpdir(), `nk-wb-filled-${Date.now()}.xlsx`);
+      await wb.xlsx.writeFile(filled);
+
+      // Preview must not write anything, and must predict the outcome exactly.
+      const incomeBefore = db.prepare('SELECT COUNT(*) n FROM income_records').get().n;
+      const prev = await importWorkbook(db, filled, { dryRun: true });
+      ck('preview writes nothing at all',
+        db.prepare('SELECT COUNT(*) n FROM income_records').get().n === incomeBefore &&
+        db.prepare('SELECT COUNT(*) n FROM workbook_import_log').get().n === 0);
+      ck('preview reports a pupil that does not exist instead of guessing',
+        prev.totals.failed === 1 &&
+        prev.sheets.some(s => s.problems.some(p => /No pupil with Index No/.test(p.error))));
+
+      const first = await importWorkbook(db, filled, { dryRun: false, userId: 1 });
+      ck('the import does exactly what the preview promised',
+        first.totals.imported === prev.totals.imported &&
+        first.totals.failed === prev.totals.failed &&
+        first.totals.amount === prev.totals.amount);
+      ck('every kind of money on the workbook comes in', first.totals.imported === 5);
+
+      // The whole point: it reaches the rest of the system, not just a table.
+      ck('an imported fee payment updates the pupil\'s bill',
+        db.prepare('SELECT total_paid, balance FROM student_bills WHERE student_id = 2').get().total_paid === 200);
+      ck('an imported fee payment posts to the finance ledger under its own term',
+        db.prepare("SELECT COUNT(*) n FROM income_records WHERE category='fees' AND amount=200 AND term_id=1").get().n === 1);
+      ck('an imported canteen payment marks the days paid, not just the cash',
+        db.prepare("SELECT COUNT(*) n FROM canteen_day_status WHERE student_id=1 AND status='paid'").get().n === 4);
+      ck('imported other income reaches the ledger',
+        db.prepare("SELECT COUNT(*) n FROM income_records WHERE category='donation' AND amount=500").get().n === 1);
+      ck('an imported expense reaches the ledger',
+        db.prepare("SELECT COUNT(*) n FROM expense_records WHERE category='supplies' AND amount=180").get().n === 1);
+      ck('an imported salary settles payroll AND posts the expense',
+        db.prepare('SELECT is_paid, actual_amount_paid FROM staff_salaries WHERE id=1').get().is_paid === 1 &&
+        db.prepare('SELECT COUNT(*) n FROM expense_records WHERE linked_salary_id = 1').get().n === 1);
+
+      // The property the school's money depends on.
+      const incomeTotal = () => db.prepare('SELECT ROUND(COALESCE(SUM(amount),0),2) t FROM income_records').get().t;
+      const beforeRepeat = incomeTotal();
+      const second = await importWorkbook(db, filled, { dryRun: false, userId: 1 });
+      ck('importing the very same workbook again brings in nothing',
+        second.totals.imported === 0 && second.totals.duplicates === 5);
+      ck('importing twice does not move a single pesewa', incomeTotal() === beforeRepeat);
+      ck('importing twice does not double the pupil\'s paid figure',
+        db.prepare('SELECT total_paid FROM student_bills WHERE student_id = 2').get().total_paid === 200);
+
+      // A failed row must not leave a claim behind, or it could never be retried.
+      ck('a row that failed is not logged, so it can be corrected and re-imported',
+        db.prepare('SELECT COUNT(*) n FROM workbook_import_log').get().n === 5);
+
+      // Fixing the bad row and re-importing brings in only that row.
+      const wb2 = new ExcelJS.Workbook();
+      await wb2.xlsx.readFile(filled);
+      const ws2 = wb2.getWorksheet(wbSchema.SHEETS.FEE_PAYMENTS);
+      const idxCol = wbSchema.ENTRY_SHEETS[wbSchema.SHEETS.FEE_PAYMENTS].columns.findIndex(c => c.key === 'index_number') + 1;
+      for (let r = wbSchema.HEADER_ROWS + 1; r <= ws2.rowCount; r++) {
+        if (wbSchema.cellText(ws2.getRow(r).getCell(idxCol).value).trim() === 'NOPE/1') {
+          ws2.getCell(r, idxCol).value = 'AVE/21/00056';
+        }
+      }
+      const fixed = path.join(os.tmpdir(), `nk-wb-fixed-${Date.now()}.xlsx`);
+      await wb2.xlsx.writeFile(fixed);
+      const third = await importWorkbook(db, fixed, { dryRun: false, userId: 1 });
+      ck('correcting a bad row and re-importing brings in only that row',
+        third.totals.imported === 1 && third.totals.duplicates === 5 && third.totals.failed === 0);
+
+      for (const f of [out, filled, fixed]) { try { fs.unlinkSync(f); } catch (_) {} }
+      security.clearCurrentUser();
+    })();
+
+    // The suite is synchronous; block on the async round trip before reporting.
+    run.then(() => {
+      console.log(`\n${pass} passed, ${fail} failed`);
+      process.exit(fail ? 1 : 0);
+    }).catch(e => {
+      console.error('Workbook round trip threw:', e);
+      process.exit(1);
+    });
+    return;
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

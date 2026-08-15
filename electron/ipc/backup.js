@@ -101,14 +101,37 @@ async function createBackup(db, userDataPath, { label } = {}) {
   try {
     await snapshotDatabase(db, userDataPath, snapPath);
 
-    // 2. Build the ZIP: database + uploaded files + manifest.
+    // 2. Refresh the offline finance workbook so the copy in this backup is
+    //    current. The whole point of the workbook is continuity: a backup that
+    //    carried a stale one would hand the school a picture of the term as it
+    //    stood weeks ago, exactly when they can least afford it.
+    let workbookRel = null;
+    try {
+      const wbMod = require('./finance_workbook');
+      await wbMod.refreshWorkbook(db, userDataPath);
+      const wbPath = wbMod.latestPath(userDataPath);
+      if (fs.existsSync(wbPath)) workbookRel = `${wbMod.WORKBOOK_DIR}/${wbMod.LATEST_NAME}`;
+    } catch (e) {
+      // A workbook that cannot be built must never cost the school its backup.
+      try {
+        db.prepare("INSERT INTO system_log (level, source, message, detail) VALUES ('warn', 'backup', ?, ?)")
+          .run('Finance workbook could not be refreshed for this backup', String((e && e.message) || e).slice(0, 500));
+      } catch (_) {}
+    }
+
+    // 3. Build the ZIP: database + uploaded files + finance workbook + manifest.
     const zip = new PizZip();
     zip.file(DB_FILE, fs.readFileSync(snapPath));
     addFolderToZip(zip, path.join(userDataPath, UPLOADS_DIR_NAME), UPLOADS_DIR_NAME);
+    if (workbookRel) {
+      const wbMod = require('./finance_workbook');
+      zip.file(workbookRel, fs.readFileSync(wbMod.latestPath(userDataPath)));
+    }
     zip.file('manifest.json', JSON.stringify({
       app: 'Nickland Edusoft',
       kind: label || 'manual',
       db_file: DB_FILE,
+      finance_workbook: workbookRel,
       created_at: new Date().toISOString(),
     }, null, 2));
 
@@ -293,19 +316,25 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
         return { ok: false, error: `This backup cannot be restored — ${check.error}. Your current data has not been changed.` };
       }
 
-      // 4. Resolve upload entries, rejecting any that would escape the data
-      //    folder, before we delete the existing uploads.
+      // 4. Resolve upload + finance-workbook entries, rejecting any that would
+      //    escape the data folder, before we delete the existing uploads.
+      const WORKBOOK_DIR_NAME = require('./finance_workbook').WORKBOOK_DIR;
+      const workbookPath = path.join(userDataPath, WORKBOOK_DIR_NAME);
       const uploadEntries = [];
+      const workbookEntries = [];
       for (const name of Object.keys(zip.files)) {
         if (zip.files[name].dir) continue;
         const normalized = name.replace(/\\/g, '/');
-        if (!normalized.startsWith(UPLOADS_DIR_NAME + '/')) continue;
+        const isUpload = normalized.startsWith(UPLOADS_DIR_NAME + '/');
+        const isWorkbook = normalized.startsWith(WORKBOOK_DIR_NAME + '/');
+        if (!isUpload && !isWorkbook) continue;
         const dest = safeExtractPath(userDataPath, normalized);
-        if (!dest || !dest.startsWith(path.resolve(uploadsPath) + path.sep)) {
+        const root = path.resolve(isUpload ? uploadsPath : workbookPath) + path.sep;
+        if (!dest || !dest.startsWith(root)) {
           recordAudit(db, 'restore_rejected', `Backup contains an unsafe file path: ${normalized}`, 'high');
           return { ok: false, error: 'This backup contains an unsafe file path and was rejected. Your current data has not been changed.' };
         }
-        uploadEntries.push({ dest, buffer: zip.files[name].asNodeBuffer() });
+        (isUpload ? uploadEntries : workbookEntries).push({ dest, buffer: zip.files[name].asNodeBuffer() });
       }
 
       // 5. Safety backup of the CURRENT data before we overwrite anything.
@@ -332,6 +361,14 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
         try { fs.rmSync(uploadsPath, { recursive: true, force: true }); } catch (e) {}
         ensureDir(uploadsPath);
         for (const entry of uploadEntries) {
+          ensureDir(path.dirname(entry.dest));
+          fs.writeFileSync(entry.dest, entry.buffer);
+        }
+
+        // 8b. Restore the offline finance workbook that shipped with this
+        //     backup, so the school's continuity copy matches the data they
+        //     just restored rather than the position before it.
+        for (const entry of workbookEntries) {
           ensureDir(path.dirname(entry.dest));
           fs.writeFileSync(entry.dest, entry.buffer);
         }
