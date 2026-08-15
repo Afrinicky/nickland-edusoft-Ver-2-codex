@@ -1904,6 +1904,59 @@ function runMigrations(db) {
       CREATE INDEX IF NOT EXISTS idx_transport_pay_term    ON transport_payments(term_id, student_id);
     `);
   });
+
+  // 29. Billing structure — bill types, supplementary charges, and voiding.
+  //
+  //     Ghanaian private schools issue exactly ONE school-fees bill per pupil
+  //     per term (tuition + the standing levies). Anything else that comes up
+  //     during the term — excursion, sports week, mock/BECE registration,
+  //     speech day — is a *supplementary* charge raised on top of the pupil's
+  //     existing term bill, not a second school-fees bill. Modelling extras as
+  //     line items on the one term bill keeps a single balance per pupil per
+  //     term, so payment allocation and the finance ledger stay unambiguous.
+  //
+  //     Bills are also never hard-deleted once money has been received against
+  //     them; they are VOIDED with a reason and an audit trail, and voided
+  //     bills drop out of every default listing and every total.
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(fee_templates)").all().map(c => c.name);
+    const add = (name, type) => { if (!cols.includes(name)) db.exec(`ALTER TABLE fee_templates ADD COLUMN ${name} ${type}`); };
+    // school_fees = the once-per-term bill; supplementary = an in-term extra
+    add('bill_type', "TEXT NOT NULL DEFAULT 'school_fees'");
+    add('academic_year_id', 'INTEGER');
+    add('notes', 'TEXT');
+    add('copied_from_template_id', 'INTEGER');
+  });
+
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(student_bills)").all().map(c => c.name);
+    const add = (name, type) => { if (!cols.includes(name)) db.exec(`ALTER TABLE student_bills ADD COLUMN ${name} ${type}`); };
+    add('status', "TEXT NOT NULL DEFAULT 'active'");   // active | voided
+    add('supplementary_total', 'REAL DEFAULT 0');
+    add('voided_at', 'TEXT');
+    add('voided_by', 'INTEGER');
+    add('void_reason', 'TEXT');
+    db.exec("UPDATE student_bills SET status = 'active' WHERE status IS NULL OR status = ''");
+    db.exec('CREATE INDEX IF NOT EXISTS idx_bills_status ON student_bills(status, term_id)');
+  });
+
+  safe(() => {
+    const cols = db.prepare("PRAGMA table_info(bill_line_items)").all().map(c => c.name);
+    const add = (name, type) => { if (!cols.includes(name)) db.exec(`ALTER TABLE bill_line_items ADD COLUMN ${name} ${type}`); };
+    // fees   — comes from the term's school-fees template, rebuilt on regeneration
+    // arrear — carried-forward balance, rebuilt on regeneration
+    // extra  — a supplementary charge, PRESERVED across regeneration
+    add('charge_type', "TEXT NOT NULL DEFAULT 'fees'");
+    add('source_template_id', 'INTEGER');
+    add('added_at', 'TEXT');
+    add('added_by', 'INTEGER');
+    db.exec(`
+      UPDATE bill_line_items
+         SET charge_type = CASE WHEN COALESCE(is_arrear, 0) = 1 THEN 'arrear' ELSE 'fees' END
+       WHERE charge_type IS NULL OR charge_type = ''
+    `);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_bill_items_type ON bill_line_items(student_bill_id, charge_type)');
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {

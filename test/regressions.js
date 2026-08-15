@@ -941,5 +941,211 @@ console.log('\n── Scores weighting ──');
     db.prepare('SELECT total_score FROM scores WHERE student_id=1 AND term_id=1 AND subject_id=1').get().total_score === 25);
 }
 
+
+console.log('\n── Billing: expected income, bill types, supplementary, voiding ──');
+{
+  const db = makeDb();
+  const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+  db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('receipt_counter','1','system')").run();
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2026/2027',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'FIRST TERM','2026-09-01','2026-12-20',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (2,1,2,'SECOND TERM','2027-01-10','2027-04-10',0)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (1,'BASIC 5','BS5','basic',10,1)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (2,'BASIC 6','BS6','basic',11,1)");
+  for (let i = 1; i <= 4; i++) {
+    db.prepare("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (?,?,'P',?,?, 'Active')")
+      .run(i, 'S' + i, 'X' + i, i <= 2 ? 1 : 2);
+  }
+  // The shipped situation from the screenshots: ONE template scoped to
+  // "All classes / All terms" — the fields the old dashboard join required.
+  db.exec("INSERT INTO fee_templates (id,name,class_group_id,term_id,is_active,bill_type) VALUES (1,'FIRST TERM BILLS 2026/2027',NULL,NULL,1,'school_fees')");
+  db.exec("INSERT INTO fee_line_items (fee_template_id,item_number,description,amount) VALUES (1,1,'Tuition',700)");
+  db.exec("INSERT INTO fee_line_items (fee_template_id,item_number,description,amount) VALUES (1,2,'PTA Dues',50.5)");
+
+  const h = {};
+  const ipc = { handle: (n, f) => { h[n] = f; } };
+  require(path.join(ROOT, 'electron/ipc/fees.js'))(ipc, db);
+  require(path.join(ROOT, 'electron/ipc/fees_extra.js'))(ipc, db);
+  require(path.join(ROOT, 'electron/ipc/fees_billing.js'))(ipc, db);
+  const call = (n, a) => h[n](null, a);
+
+  // ── Expected income ────────────────────────────────────────────────
+  // Nothing billed yet: every active pupil is projected from the template
+  // bill generation would actually pick. The old query joined on an exact
+  // class_group_id/term_id match against fee_template_items (a table the
+  // editor never writes) and returned 0.00.
+  const dashA = call('fees:dashboard', 1);
+  ck('expected income is not zero when only an "all classes/all terms" template exists',
+    dashA.metrics.expected_income === 3002);
+  ck('expected income reports how much of itself is a projection',
+    dashA.metrics.expected_projected === 3002 && dashA.metrics.unbilled_students === 4);
+
+  // Generating the bills must not move the number.
+  const gen = call('fees:generate-bulk', { termId: 1, scope: 'all' });
+  ck('bulk generation bills every active pupil', gen.generated === 4 && gen.skipped === 0);
+  const dashB = call('fees:dashboard', 1);
+  ck('generating the bills leaves expected income unchanged',
+    dashB.metrics.expected_income === 3002 && dashB.metrics.total_billed === 3002);
+  ck('expected income now comes from the bills themselves',
+    dashB.metrics.expected_billed === 3002 && dashB.metrics.unbilled_students === 0);
+  ck('per-class expected income matches the dashboard',
+    call('fees:expected-income', 1).total === 3002);
+
+  // ── One school fees bill per term ──────────────────────────────────
+  db.exec("INSERT INTO fee_templates (id,name,class_group_id,term_id,is_active,bill_type) VALUES (2,'BS5 First Term',1,1,1,'school_fees')");
+  const dup = call('fees:save-template', {
+    name: 'BS5 First Term (again)', class_group_id: 1, term_id: 1,
+    bill_type: 'school_fees', items: [{ description: 'Tuition', amount: 800 }],
+  });
+  ck('a second school-fees bill for the same class and term is refused',
+    dup.ok === false && dup.code === 'DUPLICATE_SCHOOL_FEES' && dup.existing.id === 2);
+  const replaced = call('fees:save-template', {
+    name: 'BS5 First Term (revised)', class_group_id: 1, term_id: 1,
+    bill_type: 'school_fees', confirm_replace: true, replaces_template_id: 2,
+    items: [{ description: 'Tuition', amount: 800 }],
+  });
+  ck('confirming the replacement is allowed and retires the old template',
+    replaced.ok === true &&
+    db.prepare('SELECT is_active FROM fee_templates WHERE id=2').get().is_active === 0);
+  const extraTpl = call('fees:save-template', {
+    name: 'Excursion — Kakum', term_id: 1, bill_type: 'supplementary',
+    items: [{ description: 'Excursion to Kakum', amount: 120 }],
+  });
+  ck('a supplementary bill in the same term is allowed', extraTpl.ok === true);
+
+  // ── Copy last term forward ─────────────────────────────────────────
+  const copied = call('fees:copy-template', {
+    sourceId: 1, name: 'SECOND TERM BILLS', termId: 2, adjustPercent: 10,
+  });
+  ck('a previous term\'s bill can be copied forward', copied.ok === true);
+  ck('copying forward carries the line items and applies the uplift',
+    db.prepare('SELECT COALESCE(SUM(amount),0) t FROM fee_line_items WHERE fee_template_id=?').get(copied.id).t === 825.55);
+
+  // ── Supplementary charges ──────────────────────────────────────────
+  // Restricted: nobody is logged in, so this must be refused.
+  security.clearCurrentUser();
+  ck('an unauthenticated caller cannot raise a supplementary charge',
+    call('fees:apply-supplementary', { templateId: extraTpl.id, termId: 1, scope: 'all' }).code === 'NOT_ELEVATED');
+
+  db.exec("INSERT INTO designations (id,name,is_system) VALUES (1,'Proprietor',1),(2,'Class Teacher',0)");
+  db.exec("INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (1,'prop','x','Owner',1,1),(2,'tr','x','Teacher',2,1)");
+  security.setCurrentUser(2, 'Class Teacher');
+  ck('a class teacher cannot raise a supplementary charge',
+    call('fees:apply-supplementary', { templateId: extraTpl.id, termId: 1, scope: 'all' }).code === 'NOT_ELEVATED');
+
+  security.setCurrentUser(1, 'Proprietor');
+  const applied = call('fees:apply-supplementary', { templateId: extraTpl.id, termId: 1, scope: 'class', classId: 1 });
+  ck('the proprietor can raise a supplementary charge on a class', applied.ok && applied.applied === 2);
+  const b1 = db.prepare('SELECT * FROM student_bills WHERE student_id=1 AND term_id=1').get();
+  ck('the supplementary charge lands on the pupil\'s existing term bill',
+    b1.total_billed === 870.5 && b1.supplementary_total === 120);
+  const again = call('fees:apply-supplementary', { templateId: extraTpl.id, termId: 1, scope: 'class', classId: 1 });
+  ck('applying the same supplementary charge twice does not charge twice',
+    again.applied === 0 && again.skipped === 2 &&
+    db.prepare('SELECT total_billed t FROM student_bills WHERE id=?').get(b1.id).t === 870.5);
+
+  // Regenerating the term bill must not erase an extra already raised.
+  // BASIC 5 now resolves to the revised template (Tuition 800), so the fees
+  // half is re-derived while the GHS 120 excursion survives untouched.
+  call('fees:generate-bill', { studentId: 1, termId: 1 });
+  const afterRegen = db.prepare('SELECT * FROM student_bills WHERE id=?').get(b1.id);
+  ck('regenerating the term bill preserves supplementary charges',
+    afterRegen.total_billed === 920 && afterRegen.supplementary_total === 120);
+  ck('regenerated bill line items are renumbered without gaps',
+    db.prepare("SELECT GROUP_CONCAT(item_number) g FROM (SELECT item_number FROM bill_line_items WHERE student_bill_id=? ORDER BY item_number)").get(b1.id).g === '1,2');
+
+  const removed = call('fees:remove-supplementary', { templateId: extraTpl.id, termId: 1 });
+  ck('a supplementary charge can be withdrawn again',
+    removed.ok && removed.removed === 2 &&
+    db.prepare('SELECT total_billed t FROM student_bills WHERE id=?').get(b1.id).t === 800);
+
+  // ── Voiding and deleting ───────────────────────────────────────────
+  call('fees:record-payment', { student_id: 1, student_bill_id: b1.id, term_id: 1, amount: 200, received_by: 1 });
+  ck('a bill with money against it cannot be deleted',
+    call('fees:delete-bill', { billId: b1.id, reason: 'issued in error' }).code === 'HAS_PAYMENTS');
+  ck('voiding requires a stated reason',
+    call('fees:void-bill', { billId: b1.id, reason: '' }).ok === false);
+  const voided = call('fees:void-bill', { billId: b1.id, reason: 'Pupil withdrew before the term started' });
+  ck('the proprietor can void a bill, and is told the money stays recorded',
+    voided.ok === true && voided.retained_payments === 200 && !!voided.warning);
+  ck('voiding writes an audit entry naming who and why',
+    db.prepare("SELECT COUNT(*) c FROM audit_log WHERE action='bill_voided' AND user_id=1").get().c === 1);
+  ck('a voided bill drops out of the bills list',
+    call('fees:list-bills', { termId: 1 }).every(b => b.id !== b1.id));
+  ck('a voided bill drops out of the debtors report',
+    call('fees:debtors-report', 1).every(d => d.id !== 1));
+  ck('a voided bill stops counting towards billed and outstanding totals',
+    call('fees:dashboard', 1).metrics.total_billed === 2251.5);
+  ck('a voided bill is listed on the review screen with its reason',
+    call('fees:list-voided-bills', 1).length === 1);
+  let regenThrew = false;
+  try { call('fees:generate-bill', { studentId: 1, termId: 1 }); } catch (_) { regenThrew = true; }
+  ck('"Generate ALL" does not silently resurrect a voided bill', regenThrew);
+  ck('a voided bill can be restored deliberately',
+    call('fees:restore-bill', { billId: b1.id }).ok === true &&
+    db.prepare('SELECT status FROM student_bills WHERE id=?').get(b1.id).status === 'active');
+
+  // An unpaid bill is deletable outright.
+  const b4 = db.prepare('SELECT id FROM student_bills WHERE student_id=4 AND term_id=1').get();
+  ck('an unpaid bill can be deleted with a reason',
+    call('fees:delete-bill', { billId: b4.id, reason: 'duplicate enrolment record' }).ok === true &&
+    !db.prepare('SELECT id FROM student_bills WHERE id=?').get(b4.id));
+
+  // ── Editing an issued bill ─────────────────────────────────────────
+  const b2 = db.prepare('SELECT id FROM student_bills WHERE student_id=2 AND term_id=1').get();
+  security.setCurrentUser(2, 'Class Teacher');
+  ck('a class teacher cannot edit an issued bill',
+    call('fees:adjust-bill-item', { billId: b2.id, description: 'Late fee', amount: 20, reason: 'because' }).code === 'NOT_ELEVATED');
+  security.setCurrentUser(1, 'Proprietor');
+  const adj = call('fees:adjust-bill-item', { billId: b2.id, description: 'Late registration', amount: 20, reason: 'registered after deadline' });
+  ck('the proprietor can add a one-off charge to a single bill',
+    adj.ok && adj.totals.totalBilled === 770.5);
+  ck('editing an issued bill is audited', db.prepare("SELECT COUNT(*) c FROM audit_log WHERE action='bill_item_added'").get().c === 1);
+
+  // ── Coverage warnings ──────────────────────────────────────────────
+  const overview = call('fees:billing-overview', 1);
+  ck('the billing overview resolves a template for every class',
+    overview.ok && overview.coverage.length === 2 && overview.coverage.every(c => c.template_id));
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (3,'CRECHE','CR','pre',1,1)");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (9,'N','B','X9',3,'Active')");
+  db.exec("UPDATE fee_templates SET is_active = 0 WHERE class_group_id IS NULL AND term_id IS NULL");
+  const overview2 = call('fees:billing-overview', 1);
+  const creche = overview2.coverage.find(c => c.class_id === 3);
+  ck('a class no template covers is reported as unbillable, not as owing nothing',
+    creche.template_scope === 'none' &&
+    overview2.warnings.some(w => w.level === 'error' && /CRECHE/.test(w.message)));
+  // The creche pupil, plus the pupil whose duplicate bill was deleted above —
+  // both now sit outside every active template.
+  ck('pupils no template covers are counted, not silently dropped',
+    call('fees:dashboard', 1).metrics.unbillable_students === 2);
+  security.clearCurrentUser();
+}
+
+console.log('\n── Bill printout ──');
+{
+  // The printed bill used to add the books balance twice: total_billed already
+  // carries books arrears, and the footer printed `balance + booksBalance`.
+  const reports = require(path.join(ROOT, 'electron/ipc/reports.js'));
+  const html = reports.__billHtmlForTest(
+    { name: 'S', motto: '', address: '', digital: '', email: '', phone1: '', phone2: '', logoData: null, primaryColor: '#123456', accentColor: '#333', colorMode: 'color' },
+    { index_number: 'X1', surname: 'A', first_name: 'B', class_name: 'BS5', term_label: 'FIRST TERM',
+      total_billed: 500, total_paid: 100, books_arrears: 200, discount_amount: 0 },
+    [
+      { item_number: 1, description: 'Tuition', amount: 300, charge_type: 'fees' },
+      { item_number: 2, description: 'Excursion', amount: 50, charge_type: 'extra' },
+    ]
+  );
+  // Fees 300 + extras 50 + books 200 = 550 due, less 100 paid = 450.
+  ck('the printed bill does not double-count the books balance',
+    html.includes('GHS 550.00') && html.includes('>450.00<'));
+  ck('supplementary charges get their own part on the printed bill',
+    html.includes('PART D'));
+  ck('the printed bill no longer fills every arrears row with colour',
+    !html.includes('background:#fef2f2;"') || !html.includes('#fecaca'));
+  ck('section bars are measured in points, not millimetres of solid fill',
+    !/bill-section-title[^>]*padding:\s*4px/.test(html));
+}
+
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

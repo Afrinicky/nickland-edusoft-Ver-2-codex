@@ -306,8 +306,11 @@ const api = {
 
   // ── Fees ─────────────────────────────────────────────
   fees: {
-    listTemplates:     ()                    => ipcRenderer.invoke('fees:list-templates'),
+    listTemplates:     (filters)             => ipcRenderer.invoke('fees:list-templates', filters || {}),
     getTemplate:       (id)                  => ipcRenderer.invoke('fees:get-template', id),
+    templatePresets:   ()                    => ipcRenderer.invoke('fees:template-presets'),
+    copyableTemplates: (data)                => ipcRenderer.invoke('fees:copyable-templates', data || {}),
+    copyTemplate:      (data)                => ipcRenderer.invoke('fees:copy-template', data),
     saveTemplate:      (data)                => ipcRenderer.invoke('fees:save-template', data),
     deleteTemplate:    (id)                  => ipcRenderer.invoke('fees:delete-template', id),
     generateBill:      (studentId, termId)   => ipcRenderer.invoke('fees:generate-bill', { studentId, termId }),
@@ -320,6 +323,19 @@ const api = {
     dashboard:         (termId)              => ipcRenderer.invoke('fees:dashboard', termId),
     expectedIncome:    (termId)              => ipcRenderer.invoke('fees:expected-income', termId),
     studentFinProfile: (studentId)           => ipcRenderer.invoke('fees:student-financial-profile', studentId),
+
+    // Billing administration — issuing extras and withdrawing bills.
+    // Every mutating call here is re-checked against the caller's designation
+    // on the Node side; the permissions probe only drives what the UI shows.
+    billingPermissions: ()                   => ipcRenderer.invoke('fees:billing-permissions'),
+    billingOverview:   (termId)              => ipcRenderer.invoke('fees:billing-overview', termId),
+    applySupplementary:(data)                => ipcRenderer.invoke('fees:apply-supplementary', data),
+    removeSupplementary:(data)               => ipcRenderer.invoke('fees:remove-supplementary', data),
+    voidBill:          (data)                => ipcRenderer.invoke('fees:void-bill', data),
+    restoreBill:       (data)                => ipcRenderer.invoke('fees:restore-bill', data),
+    deleteBill:        (data)                => ipcRenderer.invoke('fees:delete-bill', data),
+    adjustBillItem:    (data)                => ipcRenderer.invoke('fees:adjust-bill-item', data),
+    listVoidedBills:   (termId)              => ipcRenderer.invoke('fees:list-voided-bills', termId),
   },
 
   // ── Academics / Scores ────────────────────────────────

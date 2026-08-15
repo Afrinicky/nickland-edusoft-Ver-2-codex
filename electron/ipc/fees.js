@@ -2,62 +2,190 @@
 const { getNextReceiptNumber } = require('../utils/idgen');
 const { postIncome } = require('./_ledger');
 const { autoReceiptForPayment, autoDeliverReceipt } = require('./receipts_engine');
+const billing = require('./_billing');
 
 function registerFeesHandlers(ipcMain, db) {
   // ===== Templates =====
-  ipcMain.handle('fees:list-templates', () => {
-    return db.prepare(`
-      SELECT ft.*, c.name AS class_name, t.label AS term_label
+  ipcMain.handle('fees:list-templates', (_e, filters = {}) => {
+    let sql = `
+      SELECT ft.*, c.name AS class_name, t.label AS term_label,
+             COALESCE(ft.bill_type, 'school_fees') AS bill_type,
+             (SELECT COUNT(*) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS item_count,
+             (SELECT COALESCE(SUM(amount), 0) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS total_amount
       FROM fee_templates ft
       LEFT JOIN class_groups c ON c.id = ft.class_group_id
       LEFT JOIN terms t ON t.id = ft.term_id
-      ORDER BY ft.created_at DESC
-    `).all();
+      WHERE 1=1
+    `;
+    const params = [];
+    if (filters.billType) {
+      sql += " AND COALESCE(ft.bill_type, 'school_fees') = ?";
+      params.push(filters.billType);
+    }
+    if (filters.termId) { sql += ' AND (ft.term_id = ? OR ft.term_id IS NULL)'; params.push(filters.termId); }
+    sql += ' ORDER BY ft.created_at DESC';
+    return db.prepare(sql).all(...params);
   });
 
   ipcMain.handle('fees:get-template', (_e, id) => {
-    const template = db.prepare('SELECT * FROM fee_templates WHERE id = ?').get(id);
+    const template = db.prepare(`
+      SELECT ft.*, COALESCE(ft.bill_type, 'school_fees') AS bill_type,
+             c.name AS class_name, t.label AS term_label
+      FROM fee_templates ft
+      LEFT JOIN class_groups c ON c.id = ft.class_group_id
+      LEFT JOIN terms t ON t.id = ft.term_id
+      WHERE ft.id = ?
+    `).get(id);
     if (!template) return null;
-    template.items = db.prepare(`
-      SELECT * FROM fee_line_items WHERE fee_template_id = ? ORDER BY item_number
-    `).all(id);
+    template.items = billing.templateItems(db, id);
+    template.bill_count = db.prepare(
+      'SELECT COUNT(*) AS n FROM student_bills WHERE template_id = ?'
+    ).get(id).n;
     return template;
   });
 
-  ipcMain.handle('fees:save-template', (_e, data) => {
+  function saveTemplate(data) {
+    if (!data || !data.name) return { ok: false, error: 'Template name is required.' };
+    const billType = data.bill_type === billing.BILL_TYPES.SUPPLEMENTARY
+      ? billing.BILL_TYPES.SUPPLEMENTARY
+      : billing.BILL_TYPES.SCHOOL_FEES;
+
+    // "There can't be two school fees in the same term." Rather than silently
+    // creating a second school-fees template that shadows the first, hand the
+    // clash back so the user can decide: replace it, or make this one a
+    // supplementary bill. `confirmReplace` is the caller saying "replace it".
+    if (billType === billing.BILL_TYPES.SCHOOL_FEES && !data.confirm_replace) {
+      const clash = billing.findConflictingSchoolFeesTemplate(db, {
+        id: data.id || null,
+        classGroupId: data.class_group_id || null,
+        termId: data.term_id || null,
+      });
+      if (clash) {
+        return {
+          ok: false,
+          code: 'DUPLICATE_SCHOOL_FEES',
+          error: `A school fees bill already exists for ${clash.term_label || 'this term'}` +
+                 `${clash.class_name ? ` (${clash.class_name})` : ''}: "${clash.name}".`,
+          existing: {
+            id: clash.id, name: clash.name,
+            class_name: clash.class_name, term_label: clash.term_label,
+          },
+        };
+      }
+    }
+
     const tx = db.transaction(() => {
       let templateId = data.id;
       if (templateId) {
         db.prepare(`
-          UPDATE fee_templates SET name = ?, class_group_id = ?, term_id = ?, is_active = ?
-          WHERE id = ?
+          UPDATE fee_templates
+             SET name = ?, class_group_id = ?, term_id = ?, is_active = ?,
+                 bill_type = ?, notes = ?
+           WHERE id = ?
         `).run(data.name, data.class_group_id || null, data.term_id || null,
-          data.is_active ?? 1, templateId);
+          data.is_active ?? 1, billType, data.notes || null, templateId);
         db.prepare('DELETE FROM fee_line_items WHERE fee_template_id = ?').run(templateId);
       } else {
         const result = db.prepare(`
-          INSERT INTO fee_templates (name, class_group_id, term_id, is_active)
-          VALUES (?, ?, ?, ?)
-        `).run(data.name, data.class_group_id || null, data.term_id || null, data.is_active ?? 1);
+          INSERT INTO fee_templates
+            (name, class_group_id, term_id, is_active, bill_type, notes, copied_from_template_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(data.name, data.class_group_id || null, data.term_id || null,
+          data.is_active ?? 1, billType, data.notes || null, data.copied_from_template_id || null);
         templateId = result.lastInsertRowid;
       }
       const ins = db.prepare(`
         INSERT INTO fee_line_items (fee_template_id, item_number, description, amount, is_optional, category)
         VALUES (?, ?, ?, ?, ?, ?)
       `);
-      (data.items || []).forEach((item, i) => {
-        ins.run(templateId, item.item_number || (i + 1), item.description,
-          item.amount || 0, item.is_optional ? 1 : 0, item.category || '');
-      });
+      // Blank rows left behind by the editor are dropped rather than billed as
+      // an unnamed GHS 0.00 line on every parent's bill.
+      (data.items || [])
+        .filter(it => it && String(it.description || '').trim())
+        .forEach((item, i) => {
+          ins.run(templateId, item.item_number || (i + 1), String(item.description).trim(),
+            billing.round2(item.amount), item.is_optional ? 1 : 0, item.category || '');
+        });
+
+      // Replacing a term's school-fees template retires the old one instead of
+      // leaving two active templates fighting over the same (class, term).
+      if (billType === billing.BILL_TYPES.SCHOOL_FEES && data.confirm_replace && data.replaces_template_id) {
+        db.prepare('UPDATE fee_templates SET is_active = 0 WHERE id = ? AND id != ?')
+          .run(data.replaces_template_id, templateId);
+      }
       return templateId;
     });
     const id = tx();
     return { ok: true, id };
-  });
+  }
+
+  ipcMain.handle('fees:save-template', (_e, data) => saveTemplate(data));
 
   ipcMain.handle('fees:delete-template', (_e, id) => {
+    // student_bills.template_id references fee_templates, so deleting a
+    // template that has already been billed either fails on the foreign key or
+    // orphans the bills. Retire it instead — the bills keep their provenance.
+    const used = db.prepare('SELECT COUNT(*) AS n FROM student_bills WHERE template_id = ?').get(id).n;
+    if (used > 0) {
+      db.prepare('UPDATE fee_templates SET is_active = 0 WHERE id = ?').run(id);
+      return {
+        ok: true, retired: true,
+        message: `This template has already produced ${used} bill${used === 1 ? '' : 's'}, ` +
+                 `so it was deactivated rather than deleted. Existing bills are unchanged.`,
+      };
+    }
     db.prepare('DELETE FROM fee_templates WHERE id = ?').run(id);
-    return { ok: true };
+    return { ok: true, retired: false };
+  });
+
+  // Preset catalogue for the template editor — see _billing.js.
+  ipcMain.handle('fees:template-presets', () => billing.FEE_ITEM_PRESETS);
+
+  // ── Reuse last term's bill as this term's template ──────────────────
+  // The single most-requested shortcut: schools bill nearly the same schedule
+  // every term, so copying forward and editing two amounts beats retyping
+  // fifteen line items per class.
+  ipcMain.handle('fees:copyable-templates', (_e, { termId } = {}) => {
+    return db.prepare(`
+      SELECT ft.*, c.name AS class_name, t.label AS term_label, t.term_number,
+             y.label AS year_label,
+             COALESCE(ft.bill_type, 'school_fees') AS bill_type,
+             (SELECT COUNT(*) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS item_count,
+             (SELECT COALESCE(SUM(amount), 0) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS total_amount
+      FROM fee_templates ft
+      LEFT JOIN class_groups c ON c.id = ft.class_group_id
+      LEFT JOIN terms t ON t.id = ft.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
+      WHERE (? IS NULL OR ft.term_id IS NULL OR ft.term_id != ?)
+      ORDER BY ft.created_at DESC
+      LIMIT 50
+    `).all(termId || null, termId || null);
+  });
+
+  ipcMain.handle('fees:copy-template', (_e, { sourceId, name, termId, classGroupId, billType, adjustPercent } = {}) => {
+    const source = db.prepare('SELECT * FROM fee_templates WHERE id = ?').get(sourceId);
+    if (!source) return { ok: false, error: 'The template being copied no longer exists.' };
+    const items = billing.templateItems(db, sourceId);
+    if (items.length === 0) return { ok: false, error: 'That template has no line items to copy.' };
+
+    // A flat percentage bump covers the usual "fees went up 15% this year"
+    // without re-keying every amount. 0 / omitted copies the amounts as-is.
+    const factor = 1 + ((Number(adjustPercent) || 0) / 100);
+    return saveTemplate({
+      name: name || `${source.name} (copy)`,
+      class_group_id: classGroupId ?? source.class_group_id ?? null,
+      term_id: termId ?? null,
+      bill_type: billType || source.bill_type || billing.BILL_TYPES.SCHOOL_FEES,
+      is_active: 1,
+      copied_from_template_id: sourceId,
+      items: items.map((it, i) => ({
+        item_number: it.item_number || (i + 1),
+        description: it.description,
+        amount: billing.round2((it.amount || 0) * factor),
+        is_optional: it.is_optional,
+        category: it.category,
+      })),
+    });
   });
 
   // ===== Bill generation =====
@@ -84,11 +212,23 @@ function registerFeesHandlers(ipcMain, db) {
       students = scope.studentIds.map(id => ({ id }));
     }
     let count = 0;
+    // Failures used to be swallowed entirely, so a school whose template did
+    // not cover a class saw "Generated 0 bills" with no idea why. The reasons
+    // are counted and returned.
+    const problems = new Map();
     for (const s of students) {
       try { generateBillForStudent(db, s.id, scope.termId); count++; }
-      catch (e) { /* skip on error */ }
+      catch (e) {
+        const msg = String((e && e.message) || e);
+        problems.set(msg, (problems.get(msg) || 0) + 1);
+      }
     }
-    return { ok: true, generated: count };
+    return {
+      ok: true,
+      generated: count,
+      skipped: students.length - count,
+      problems: [...problems.entries()].map(([reason, count]) => ({ reason, count })),
+    };
   });
 
   ipcMain.handle('fees:list-bills', (_e, filters = {}) => {
@@ -106,6 +246,11 @@ function registerFeesHandlers(ipcMain, db) {
     if (filters.classId) { sql += ' AND s.current_class_id = ?'; params.push(filters.classId); }
     if (filters.studentId) { sql += ' AND b.student_id = ?'; params.push(filters.studentId); }
     if (filters.owing) { sql += ' AND b.balance > 0'; }
+    // Voided bills are hidden from every default listing. A parent must never
+    // be shown, or chased for, a bill the school has withdrawn — only the
+    // Proprietor/Administrator review screen asks for them explicitly.
+    if (filters.status === 'voided') sql += " AND COALESCE(b.status, 'active') = 'voided'";
+    else if (filters.status !== 'all') sql += " AND COALESCE(b.status, 'active') = 'active'";
     sql += ' ORDER BY s.surname, s.first_name';
     return db.prepare(sql).all(...params);
   });
@@ -267,6 +412,7 @@ function registerFeesHandlers(ipcMain, db) {
       JOIN students s ON s.id = b.student_id
       LEFT JOIN class_groups c ON c.id = s.current_class_id
       WHERE b.term_id = ? AND b.balance > 0 AND s.status = 'Active'
+        AND COALESCE(b.status, 'active') = 'active'
       ORDER BY c.level_order, s.surname, s.first_name
     `).all(termId);
   });
@@ -279,40 +425,23 @@ function generateBillForStudent(db, studentId, termId) {
   const term = db.prepare('SELECT * FROM terms WHERE id = ?').get(termId);
   if (!term) throw new Error('Term not found');
 
-  // Find applicable fee template (by class + term, fallback to class only, then term only, then any active)
-  let template = db.prepare(`
-    SELECT * FROM fee_templates
-    WHERE is_active = 1 AND class_group_id = ? AND term_id = ?
-    ORDER BY id DESC LIMIT 1
-  `).get(student.current_class_id, termId);
-
+  // One resolution order, shared with the dashboard's projection so the two
+  // can never disagree: class+term → class → term → global.
+  const template = billing.resolveFeeTemplate(db, student.current_class_id, termId);
   if (!template) {
-    template = db.prepare(`
-      SELECT * FROM fee_templates
-      WHERE is_active = 1 AND class_group_id = ? AND term_id IS NULL
-      ORDER BY id DESC LIMIT 1
-    `).get(student.current_class_id);
-  }
-  if (!template) {
-    template = db.prepare(`
-      SELECT * FROM fee_templates
-      WHERE is_active = 1 AND class_group_id IS NULL AND term_id = ?
-      ORDER BY id DESC LIMIT 1
-    `).get(termId);
-  }
-  if (!template) {
-    throw new Error('No fee template applies to this student/term. Create one in Settings → Fees.');
+    throw new Error('No fee template applies to this student/term. Create one under Fees → Bills → Fee Templates.');
   }
 
-  const items = db.prepare(`
-    SELECT * FROM fee_line_items WHERE fee_template_id = ? ORDER BY item_number
-  `).all(template.id);
+  const items = billing.templateItems(db, template.id);
 
-  // Calculate any unpaid arrears from previous terms (excluding the current term being regenerated)
+  // Calculate any unpaid arrears from previous terms (excluding the current
+  // term being regenerated). Voided bills are excluded: a bill the school
+  // withdrew must not come back as an arrear on the next term's bill.
   const prevArrears = db.prepare(`
     SELECT t.id AS term_id, t.label, b.balance
     FROM student_bills b JOIN terms t ON t.id = b.term_id
     WHERE b.student_id = ? AND b.balance > 0 AND b.term_id != ?
+      AND COALESCE(b.status, 'active') = 'active'
     ORDER BY t.start_date
   `).all(studentId, termId);
 
@@ -346,79 +475,108 @@ function generateBillForStudent(db, studentId, termId) {
     // handed over. The bill row is now updated in place and total_paid is
     // recomputed from the payments table, which is the source of truth.
     const existing = db.prepare(
-      'SELECT id FROM student_bills WHERE student_id = ? AND term_id = ?'
+      'SELECT * FROM student_bills WHERE student_id = ? AND term_id = ?'
     ).get(studentId, termId);
 
-    const alreadyPaid = db.prepare(`
+    // A bill the school deliberately withdrew is not silently resurrected by
+    // the next "Generate ALL". It has to be restored on purpose.
+    if (existing && (existing.status || 'active') === 'voided') {
+      throw new Error('This bill was voided. Restore it from Bills → Voided before regenerating.');
+    }
+
+    // Supplementary charges already raised on this term's bill (excursion,
+    // sports week…) are NOT template-derived, so regenerating the school-fees
+    // portion must leave them alone. Rebuilding the whole item list from the
+    // template used to erase them and hand the parent a smaller bill than the
+    // one they were given.
+    const keptExtras = existing
+      ? db.prepare(`
+          SELECT * FROM bill_line_items
+          WHERE student_bill_id = ? AND charge_type = 'extra'
+          ORDER BY item_number, id
+        `).all(existing.id)
+      : [];
+    const extrasSubtotal = billing.round2(keptExtras.reduce((s, it) => s + (it.amount || 0), 0));
+
+    const alreadyPaid = billing.round2(db.prepare(`
       SELECT COALESCE(SUM(amount), 0) AS t FROM payments
       WHERE student_id = ? AND term_id = ? AND COALESCE(is_reversed, 0) = 0
-    `).get(studentId, termId).t || 0;
+    `).get(studentId, termId).t || 0);
 
     // Compute totals BEFORE insert
-    let feeSubtotal = items.reduce((s, it) => s + (it.amount || 0), 0);
-    let arrearsSubtotal = prevArrears.reduce((s, a) => s + (a.balance || 0), 0);
-    const feeSubtotalWithArrears = feeSubtotal + arrearsSubtotal;
+    const feeSubtotal = billing.round2(items.reduce((s, it) => s + (it.amount || 0), 0));
+    const arrearsSubtotal = billing.round2(prevArrears.reduce((s, a) => s + (a.balance || 0), 0));
+    const chargeable = billing.round2(feeSubtotal + arrearsSubtotal + extrasSubtotal);
 
-    // Compute discount amount applied to fees subtotal (NOT books)
+    // Compute discount amount applied to the fees side (NOT books)
     let discountAmount = 0;
     let discountReason = null;
     if (discount) {
       discountReason = discount.reason;
       if (discount.discount_type === 'percent') {
-        discountAmount = Math.round(feeSubtotalWithArrears * (discount.discount_value / 100) * 100) / 100;
+        discountAmount = billing.round2(chargeable * (discount.discount_value / 100));
       } else {
-        discountAmount = Math.min(discount.discount_value, feeSubtotalWithArrears);
+        discountAmount = Math.min(billing.round2(discount.discount_value), chargeable);
       }
     }
 
-    const feesNet = Math.max(0, feeSubtotalWithArrears - discountAmount);
-    const totalBilled = feesNet + booksArrearsForThisTerm;
-
-    const balance = Math.round((totalBilled - alreadyPaid) * 100) / 100;
+    const feesNet = Math.max(0, billing.round2(chargeable - discountAmount));
+    const totalBilled = billing.round2(feesNet + booksArrearsForThisTerm);
+    const balance = billing.round2(totalBilled - alreadyPaid);
 
     let billId;
     if (existing) {
       db.prepare(`
         UPDATE student_bills
            SET template_id = ?, total_billed = ?, total_paid = ?, balance = ?,
-               arrears_from_prev = ?, books_arrears = ?,
+               arrears_from_prev = ?, books_arrears = ?, supplementary_total = ?,
                discount_amount = ?, discount_reason = ?
          WHERE id = ?
       `).run(
         template.id, totalBilled, alreadyPaid, balance,
-        arrearsSubtotal, booksArrearsForThisTerm,
+        arrearsSubtotal, booksArrearsForThisTerm, extrasSubtotal,
         discountAmount, discountReason, existing.id
       );
       billId = existing.id;
-      // Line items are rebuilt from the template below.
-      db.prepare('DELETE FROM bill_line_items WHERE student_bill_id = ?').run(billId);
+      // Only the template-derived rows are rebuilt; supplementary rows survive.
+      db.prepare(
+        "DELETE FROM bill_line_items WHERE student_bill_id = ? AND charge_type != 'extra'"
+      ).run(billId);
     } else {
       const result = db.prepare(`
         INSERT INTO student_bills
           (student_id, term_id, template_id, total_billed, total_paid, balance,
-           arrears_from_prev, books_arrears, discount_amount, discount_reason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           arrears_from_prev, books_arrears, supplementary_total,
+           discount_amount, discount_reason, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
       `).run(
         studentId, termId, template.id,
         totalBilled, alreadyPaid, balance,
-        arrearsSubtotal, booksArrearsForThisTerm,
+        arrearsSubtotal, booksArrearsForThisTerm, extrasSubtotal,
         discountAmount, discountReason
       );
       billId = result.lastInsertRowid;
     }
 
-    // Insert line items
+    // Insert line items — fees first, then arrears, then the retained extras,
+    // renumbered so the printed bill reads 1..n without gaps.
     const ins = db.prepare(`
-      INSERT INTO bill_line_items (student_bill_id, item_number, description, amount, is_arrear, arrear_from_term_id)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO bill_line_items
+        (student_bill_id, item_number, description, amount, is_arrear, arrear_from_term_id,
+         charge_type, source_template_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const renum = db.prepare('UPDATE bill_line_items SET item_number = ? WHERE id = ?');
     let itemNo = 1;
     for (const item of items) {
-      ins.run(billId, itemNo++, item.description, item.amount, 0, null);
+      ins.run(billId, itemNo++, item.description, billing.round2(item.amount), 0, null,
+        billing.CHARGE_TYPES.FEES, template.id);
     }
     for (const a of prevArrears) {
-      ins.run(billId, itemNo++, `Arrears from ${a.label}`, a.balance, 1, a.term_id);
+      ins.run(billId, itemNo++, `Arrears from ${a.label}`, billing.round2(a.balance), 1, a.term_id,
+        billing.CHARGE_TYPES.ARREAR, null);
     }
+    for (const e of keptExtras) renum.run(itemNo++, e.id);
 
     return billId;
   });
