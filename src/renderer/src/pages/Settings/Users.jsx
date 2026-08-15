@@ -1,20 +1,20 @@
 // Nickland Edusoft — Users & Logins
 // Create and manage user accounts. Photo uploader included.
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/index.js';
 import { sanitizeForForm } from '../../lib/formSafe.js';
 import PhotoUploader from '../../components/PhotoUploader.jsx';
-import UserPermissionsModal from './UserPermissionsModal.jsx';
 import UserAssignmentsModal from './UserAssignmentsModal.jsx';
 
 export default function Users() {
   const showToast = useStore(s => s.showToast);
   const { currentUser } = useStore();
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [designations, setDesignations] = useState([]);
   const [staffList, setStaffList] = useState([]);
   const [editing, setEditing] = useState(null);
-  const [permModal, setPermModal] = useState(null);
   const [assignModal, setAssignModal] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -134,7 +134,9 @@ export default function Users() {
                         </td>
                         <td>
                           <button className="btn btn-ghost btn-sm" onClick={() => setEditing(u)}>Edit</button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => setPermModal(u)} title="Edit per-user permissions">🔐 Perms</button>
+                          <button className="btn btn-ghost btn-sm"
+                            onClick={() => navigate(`/settings/access?tab=individuals&user=${u.id}`)}
+                            title="Set this person's access">🔐 Access</button>
                           <button className="btn btn-ghost btn-sm" onClick={() => setAssignModal(u)} title="Class & subject assignments">📚 Classes</button>
                           <button className="btn btn-ghost btn-sm" onClick={() => resetPassword(u)}>Reset PW</button>
                           {u.id !== currentUser?.id && (
@@ -159,9 +161,6 @@ export default function Users() {
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); refresh(); showToast('Saved', 'success'); }}
         />
-      )}
-      {permModal && (
-        <UserPermissionsModal user={permModal} onClose={() => setPermModal(null)} />
       )}
       {assignModal && (
         <UserAssignmentsModal user={assignModal} onClose={() => setAssignModal(null)} />

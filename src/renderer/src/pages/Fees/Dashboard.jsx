@@ -45,7 +45,23 @@ export default function FeesDashboard({ onSwitchTab }) {
           <div className="metric-body">
             <div className="metric-label">Expected Income</div>
             <div className="metric-value">{fmtCedi(m.expected_income)}</div>
-            <div className="metric-sub">If all bills are paid</div>
+            {/* Where the figure comes from. Without this, "expected" and
+                "billed" differing looks like a bug rather than pupils who
+                have not been billed yet. */}
+            <div className="metric-sub">
+              {(m.unbilled_students || 0) > 0
+                ? `${fmtCedi(m.expected_billed || 0)} billed + ${m.unbilled_students} pupil(s) not billed yet`
+                : 'If all bills are paid'}
+            </div>
+            {(m.unbillable_students || 0) > 0 && (
+              <div className="metric-link" style={{ color: 'var(--danger)' }}
+                onClick={() => onSwitchTab('bills')}>
+                {m.unbillable_students} pupil(s) no template covers →
+              </div>
+            )}
+            {(m.unbilled_students || 0) > 0 && (
+              <div className="metric-link" onClick={() => onSwitchTab('bills')}>Generate bills →</div>
+            )}
           </div>
         </div>
         <div className="metric-card">

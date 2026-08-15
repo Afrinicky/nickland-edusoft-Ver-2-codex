@@ -377,7 +377,9 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 // Combines designation defaults with per-user overrides.
 // Override row supersedes designation default for that module.
 function resolveEffectivePermissions(db, userId) {
-  const modules = ['dashboard','students','academics','fees','canteen','staff','payroll','finance','notifications','settings'];
+  // Single source of truth for the module list (electron/ipc/_access.js), so the
+  // resolver, the access-control UI and the seeds can never drift apart.
+  const modules = require('./_access').MODULE_KEYS;
   const result = {};
   for (const m of modules) {
     result[m] = { canView: false, canCreate: false, canEdit: false, canDelete: false };

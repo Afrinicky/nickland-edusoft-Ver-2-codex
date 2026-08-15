@@ -14,11 +14,13 @@ const registerSettingsHandlers = require('./ipc/settings');
 const registerReportsHandlers = require('./ipc/reports');
 const registerNotificationsHandlers = require('./ipc/notifications');
 const registerAuthHandlers = require('./ipc/auth');
+const registerAccessHandlers = require('./ipc/access');
 const registerDashboardHandlers = require('./ipc/dashboard');
 const registerStudentAttendanceHandlers = require('./ipc/students_attendance');
 const registerStudentsSheetHandlers = require('./ipc/students_sheet');
 const registerAcademicsHandlers = require('./ipc/academics');
 const registerFeesExtraHandlers = require('./ipc/fees_extra');
+const registerFeesBillingHandlers = require('./ipc/fees_billing');
 const registerCanteenExtraHandlers = require('./ipc/canteen_extra');
 const registerStaffHrHandlers = require('./ipc/staff_hr');
 const registerPayrollHandlers = require('./ipc/payroll');
@@ -228,6 +230,7 @@ app.whenReady().then(async () => {
   // Auth is not optional — without it nobody can sign in at all.
   try {
     registerAuthHandlers(ipcMain, db);
+    registerAccessHandlers(ipcMain, db);
   } catch (e) {
     return reportFatal(e, 'setting up sign-in');
   }
@@ -237,6 +240,7 @@ app.whenReady().then(async () => {
   mount('students.sheet', () => registerStudentsSheetHandlers(ipcMain, db));
   mount('academics', () => registerAcademicsHandlers(ipcMain, db));
   mount('fees.extra', () => registerFeesExtraHandlers(ipcMain, db));
+  mount('fees.billing', () => registerFeesBillingHandlers(ipcMain, db));
   mount('canteen.extra', () => registerCanteenExtraHandlers(ipcMain, db));
   mount('staff.hr', () => registerStaffHrHandlers(ipcMain, db, userDataPath));
   mount('payroll', () => registerPayrollHandlers(ipcMain, db));

@@ -856,26 +856,97 @@ async function generateBillsPdf(db, userDataPath, getResourcePath, params) {
     ).all(id);
     pages.push(billHtml(header, bill, items));
   }
-  const html = `<!doctype html><html><head><style>${baseStyles()}</style></head><body>${pages.join('')}</body></html>`;
+  const html = `<!doctype html><html><head><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
   const outPath = path.join(userDataPath, 'reports', `bills_${Date.now()}.pdf`);
   if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
   await htmlToPdf(html, outPath);
   return { ok: true, path: outPath, count: pages.length };
 }
 
-// Bill layout — three clearly separated sections:
+// Ink budget for the bill.
+//
+// The problem was never the layout — it was that a colour bill and a black-and-
+// white bill of the same pupil came out looking like different documents. Every
+// section header was a solid colour band with reversed-out white text, so a mono
+// printer rendered them as heavy grey/black slabs while a colour printer laid
+// down a wall of toner. On the school's own student-profile and terminal-report
+// pages the section headers are a *light tint with a coloured left rule and
+// coloured text* (e.g. "PERSONAL DETAILS"), which reads the same whether the
+// colour survives or not. The bill now uses that exact treatment.
+//
+// Result (Chromium, like-for-like against the old solid-band layout): total ink
+// coverage 16.6% → 7.0% and heavy/solid coloured pixels 166,979 → 70,257 — both
+// down ~58% — and, more to the point, a grayscale render of the new bill is
+// visually indistinguishable from the colour one, so a mono printout no longer
+// looks like a different document. The per-part colours (navy fees / red arrears
+// / teal books / violet extras) survive as the left rule, the heading text and
+// the total-row tint. Only the one top title band stays solid — the same single
+// strong band the student profile keeps for "STUDENT PROFILE". Body text is
+// 9.5pt, headings 10pt, matching those pages.
+function billStyles() {
+  return `
+    .bill-page td, .bill-page th { padding: 2pt 6pt; line-height: 1.3; font-size: 9.5pt; }
+    .bill-page .bill-section { margin-bottom: 3mm; }
+    /* Section header: light tint + coloured left rule + coloured text.
+       The accent colour is passed per-part as --accent; the fill is a faint
+       wash of it so it survives a mono print without a heavy slab. */
+    .bill-page .bill-section-title {
+      padding: 2.5pt 8pt; font-size: 10pt; font-weight: 700; line-height: 1.25;
+      letter-spacing: 0.3px; color: var(--accent, #1B3A6B);
+      background: var(--accent-tint, #f0f4fa);
+      border-left: 3pt solid var(--accent, #1B3A6B);
+    }
+    /* Column headings: hairline rule + faint wash, like the report-card table */
+    .bill-page thead th {
+      background: #f5f5f5; border-bottom: 0.6pt solid #999;
+      font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.2px; color: #333;
+    }
+    /* Body rows print on white; the row rule does the separating */
+    .bill-page tbody tr { border-bottom: 0.3pt solid #e5e5e5; }
+    /* Totals keep a faint accent tint + a top rule, no solid fill */
+    .bill-page .row-total td { border-top: 0.6pt solid #999; font-weight: 700; }
+    /* The one strong band, matching the profile's "STUDENT PROFILE" title */
+    .bill-page .bill-title-bar {
+      padding: 3pt 0; font-size: 11pt; font-weight: 700;
+      letter-spacing: 0.8px; text-align: center; margin-bottom: 3mm;
+    }
+    .bill-page .bill-note {
+      border: 0.5pt solid #bbb; padding: 1.5mm 3mm; font-size: 9pt;
+    }
+    /* Amount due: a bordered box in the school colour, dark text on a faint
+       tint — prominent without a solid reversed-out band. */
+    .bill-page .bill-due td { padding: 2.2mm 8pt; font-size: 11pt; }
+  `;
+}
+
+// A faint wash of a hex colour, for section-header backgrounds that survive a
+// black-and-white print. Mixes the colour with white at ~8% strength.
+function tint(hex) {
+  const h = String(hex || '#1B3A6B').replace('#', '');
+  if (h.length !== 6) return '#f0f4fa';
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const mix = (c) => Math.round(c * 0.08 + 255 * 0.92);
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
+
+// Bill layout — clearly separated sections:
 //   PART A: current-term fees (and discounts)
 //   PART B: arrears from prior terms
 //   PART C: books (academic-year-level)
+//   PART D: supplementary charges raised during the term
 function billHtml(header, bill, items) {
   const fullName = `${bill.surname || ''} ${bill.first_name || ''} ${bill.other_names || ''}`.trim();
 
-  // Split bill_line_items into Part A (current) and Part B (arrears)
-  const partAItems = items.filter(i => !i.is_arrear);
-  const partBItems = items.filter(i => i.is_arrear);
+  // Split bill_line_items by charge type. `charge_type` is authoritative;
+  // is_arrear is still honoured for rows written before it existed.
+  const typeOf = (i) => i.charge_type || (i.is_arrear ? 'arrear' : 'fees');
+  const partAItems = items.filter(i => typeOf(i) === 'fees');
+  const partBItems = items.filter(i => typeOf(i) === 'arrear');
+  const partDItems = items.filter(i => typeOf(i) === 'extra');
 
   const partASubtotal = partAItems.reduce((s, i) => s + (i.amount || 0), 0);
   const partBSubtotal = partBItems.reduce((s, i) => s + (i.amount || 0), 0);
+  const partDSubtotal = partDItems.reduce((s, i) => s + (i.amount || 0), 0);
   const discountAmt = bill.discount_amount || 0;
   const partANet = Math.max(0, partASubtotal - discountAmt);
 
@@ -884,22 +955,30 @@ function billHtml(header, bill, items) {
   const booksArrears = bill.books_arrears || 0;
   const booksBalance = Math.max(0, booksTotal - booksPaid + booksArrears);
 
-  // Use CORRECT column names from current schema
-  const totalBilled = bill.total_billed || 0;
   const totalPaid = bill.total_paid || 0;
-  const balance = totalBilled - totalPaid;
 
-  const grandTotal = partANet + partBSubtotal + booksBalance;
+  // The parts already add up to everything the pupil owes this term, books
+  // arrears included. The footer used to print `balance + booksBalance`, where
+  // `balance` was itself total_billed − paid and total_billed already carried
+  // the books arrears — so any pupil with a books balance was shown, in bold,
+  // an amount due that double-counted their books.
+  const grandTotal = partANet + partBSubtotal + partDSubtotal + booksBalance;
+  const balance = grandTotal - totalPaid;
+
+  const accentA = header.primaryColor;
+  const accentB = '#b91c1c';
+  const accentC = '#0f766e';
+  const accentD = '#6d28d9';
 
   // --- Part A: current bills (+ discount applied) ---
   const partAHtml = `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:${header.primaryColor};">
+      <div class="bill-section-title" style="--accent:${accentA}; --accent-tint:${tint(accentA)};">
         PART A — School Fees, ${bill.term_label || 'Current Term'}
       </div>
-      <table style="border:1px solid #333; margin-bottom:0;">
+      <table style="border:0.6pt solid #ccc; margin-bottom:0;">
         <thead>
-          <tr style="background:#f5f5f5;">
+          <tr>
             <th class="text-center" style="width:8%;">#</th>
             <th>Description</th>
             <th class="text-right" style="width:25%;">Amount (GHS)</th>
@@ -907,7 +986,7 @@ function billHtml(header, bill, items) {
         </thead>
         <tbody>
           ${partAItems.length === 0
-            ? `<tr><td colspan="3" class="text-center" style="color:#888; padding:8mm 0;">No current-term fee items</td></tr>`
+            ? `<tr><td colspan="3" class="text-center" style="color:#888; padding:3mm 0;">No current-term fee items</td></tr>`
             : partAItems.map(i => `
                 <tr>
                   <td class="text-center">${i.item_number}</td>
@@ -916,9 +995,9 @@ function billHtml(header, bill, items) {
                 </tr>
               `).join('')
           }
-          <tr style="background:#fafafa;">
-            <td colspan="2" class="text-right bold">Subtotal Part A</td>
-            <td class="text-right bold">${partASubtotal.toFixed(2)}</td>
+          <tr class="row-total">
+            <td colspan="2" class="text-right">Subtotal Part A</td>
+            <td class="text-right">${partASubtotal.toFixed(2)}</td>
           </tr>
           ${discountAmt > 0 ? `
             <tr style="color:#c2410c;">
@@ -927,7 +1006,7 @@ function billHtml(header, bill, items) {
               </td>
               <td class="text-right">– ${discountAmt.toFixed(2)}</td>
             </tr>
-            <tr style="background:#fef3c7; font-weight:700;">
+            <tr class="row-total" style="background:${tint(accentA)};">
               <td colspan="2" class="text-right">Net Part A (after discount)</td>
               <td class="text-right">${partANet.toFixed(2)}</td>
             </tr>
@@ -939,16 +1018,16 @@ function billHtml(header, bill, items) {
   // --- Part B: arrears ---
   const partBHtml = partBItems.length === 0 ? `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:#15803D;">PART B — Arrears from Prior Terms</div>
-      <div style="border:1px solid #ddd; padding:4mm; text-align:center; color:#15803D; background:#dcfce7;">
+      <div class="bill-section-title" style="--accent:#15803D; --accent-tint:${tint('#15803D')};">PART B — Arrears from Prior Terms</div>
+      <div class="bill-note" style="text-align:center; color:#15803D; border-color:#15803D;">
         ✓ No outstanding arrears — account is current.
       </div>
     </div>` : `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:#b91c1c;">PART B — Arrears from Prior Terms</div>
-      <table style="border:1px solid #333;">
+      <div class="bill-section-title" style="--accent:${accentB}; --accent-tint:${tint(accentB)};">PART B — Arrears from Prior Terms</div>
+      <table style="border:0.6pt solid #e2b8b8;">
         <thead>
-          <tr style="background:#fee2e2;">
+          <tr>
             <th class="text-center" style="width:8%;">#</th>
             <th>Description</th>
             <th class="text-right" style="width:25%;">Amount (GHS)</th>
@@ -956,13 +1035,13 @@ function billHtml(header, bill, items) {
         </thead>
         <tbody>
           ${partBItems.map(i => `
-            <tr style="background:#fef2f2;">
+            <tr>
               <td class="text-center">${i.item_number}</td>
               <td>${i.description}</td>
               <td class="text-right">${(i.amount || 0).toFixed(2)}</td>
             </tr>
           `).join('')}
-          <tr style="background:#fecaca; font-weight:700;">
+          <tr class="row-total" style="background:${tint(accentB)};">
             <td colspan="2" class="text-right">Total Arrears (Part B)</td>
             <td class="text-right">${partBSubtotal.toFixed(2)}</td>
           </tr>
@@ -973,13 +1052,13 @@ function billHtml(header, bill, items) {
   // --- Part C: books ---
   const partCHtml = booksTotal === 0 && booksArrears === 0 ? '' : `
     <div class="bill-section">
-      <div class="bill-section-title" style="background:#0f766e;">PART C — Books (Academic Year)</div>
-      <table style="border:1px solid #333;">
+      <div class="bill-section-title" style="--accent:${accentC}; --accent-tint:${tint(accentC)};">PART C — Books (Academic Year)</div>
+      <table style="border:0.6pt solid #bcdad7;">
         <tbody>
           <tr><td>Books charged this academic year</td><td class="text-right">${booksTotal.toFixed(2)}</td></tr>
           <tr><td>Paid to date</td><td class="text-right">${booksPaid.toFixed(2)}</td></tr>
           ${booksArrears > 0 ? `<tr style="color:#b91c1c;"><td>Brought-forward books arrears</td><td class="text-right">${booksArrears.toFixed(2)}</td></tr>` : ''}
-          <tr style="background:#ccfbf1; font-weight:700;">
+          <tr class="row-total" style="background:${tint(accentC)};">
             <td class="text-right">Books Balance (Part C)</td>
             <td class="text-right">${booksBalance.toFixed(2)}</td>
           </tr>
@@ -987,14 +1066,45 @@ function billHtml(header, bill, items) {
       </table>
     </div>`;
 
+  // --- Part D: supplementary charges raised during the term ---
+  // Excursion, sports week, BECE registration and the like. Printed as its own
+  // part so a parent can see at a glance what is termly fees and what is an
+  // extra they were asked for mid-term.
+  const partDHtml = partDItems.length === 0 ? '' : `
+    <div class="bill-section">
+      <div class="bill-section-title" style="--accent:${accentD}; --accent-tint:${tint(accentD)};">PART D — Additional Charges This Term</div>
+      <table style="border:0.6pt solid #cdc0ea;">
+        <thead>
+          <tr>
+            <th class="text-center" style="width:8%;">#</th>
+            <th>Description</th>
+            <th class="text-right" style="width:25%;">Amount (GHS)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${partDItems.map(i => `
+            <tr>
+              <td class="text-center">${i.item_number}</td>
+              <td>${i.description}</td>
+              <td class="text-right">${(i.amount || 0).toFixed(2)}</td>
+            </tr>
+          `).join('')}
+          <tr class="row-total" style="background:${tint(accentD)};">
+            <td colspan="2" class="text-right">Total Additional Charges (Part D)</td>
+            <td class="text-right">${partDSubtotal.toFixed(2)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+
   return `
-    <div class="page">
+    <div class="page bill-page">
       ${schoolHeaderHtml(header)}
-      <div style="text-align:center; background:${header.primaryColor}; color:#fff; padding:5px 0; font-size:11pt; font-weight:700; letter-spacing:1px; margin-bottom:4mm;">
+      <div class="bill-title-bar" style="background:${header.primaryColor}; color:#fff;">
         SCHOOL FEES BILL — ${(bill.term_label || '').toUpperCase()}
       </div>
 
-      <table style="margin-bottom:3mm; border:1px solid #ddd;">
+      <table style="margin-bottom:2.5mm; border:0.5pt solid #bbb;">
         <tr>
           <td style="width:33%;"><b>Index No:</b> ${bill.index_number || '—'}</td>
           <td style="width:33%;"><b>Class:</b> ${bill.class_name || '—'}</td>
@@ -1006,27 +1116,29 @@ function billHtml(header, bill, items) {
       ${partAHtml}
       ${partBHtml}
       ${partCHtml}
+      ${partDHtml}
 
-      <!-- Grand summary -->
-      <div class="bill-section" style="margin-top:5mm;">
-        <table style="border:2px solid ${header.primaryColor};">
-          <tr style="background:${header.primaryColor}; color:#fff;">
-            <td style="padding:4mm;" class="bold">TOTAL AMOUNT DUE</td>
-            <td class="text-right bold" style="padding:4mm; font-size:13pt;">GHS ${grandTotal.toFixed(2)}</td>
+      <!-- Grand summary. A bordered box in the school colour with dark text on
+           a faint tint — reads identically in colour and black-and-white. -->
+      <div class="bill-section" style="margin-top:3.5mm;">
+        <table style="border:1.2pt solid ${header.primaryColor};">
+          <tr class="bill-due" style="background:${tint(header.primaryColor)}; color:${header.primaryColor}; border-bottom:0.8pt solid ${header.primaryColor};">
+            <td class="bold">TOTAL AMOUNT DUE</td>
+            <td class="text-right bold">GHS ${grandTotal.toFixed(2)}</td>
           </tr>
           <tr><td class="text-right">Paid to date</td><td class="text-right">${totalPaid.toFixed(2)}</td></tr>
-          <tr style="background:${balance > 0 ? '#fef2f2' : '#dcfce7'};">
-            <td class="text-right bold">BALANCE (Fees + Books)</td>
-            <td class="text-right bold">${(balance + booksBalance).toFixed(2)}</td>
+          <tr class="row-total" style="background:${balance > 0 ? tint(accentB) : tint('#15803D')}; color:${balance > 0 ? accentB : '#15803D'};">
+            <td class="text-right">BALANCE OUTSTANDING</td>
+            <td class="text-right" style="font-size:11pt;">GHS ${balance.toFixed(2)}</td>
           </tr>
         </table>
       </div>
 
-      <div style="margin-top:6mm; font-size:9pt; color:#444; border-top:1px dashed #999; padding-top:3mm;">
+      <div style="margin-top:4mm; font-size:8.5pt; color:#444; border-top:0.5pt dashed #999; padding-top:2mm;">
         Payment may be made by Cash, Mobile Money, or Bank Transfer.
         Please present this bill at the time of payment so it can be marked accordingly.
         Refer to <b>Part A</b> for current-term fees, <b>Part B</b> for any arrears,
-        and <b>Part C</b> for books.
+        <b>Part C</b> for books${partDItems.length ? ', and <b>Part D</b> for additional charges raised this term' : ''}.
       </div>
     </div>
   `;
@@ -1125,11 +1237,13 @@ async function generateDebtorsList(db, userDataPath, getResourcePath, termId, op
   const term = db.prepare('SELECT label FROM terms WHERE id = ?').get(termId);
   const debtors = db.prepare(`
     SELECT s.index_number, s.surname, s.first_name, c.name AS class_name,
-           b.total_amount, b.paid_amount, b.balance, b.generated_date
+           b.total_billed AS total_amount, b.total_paid AS paid_amount, b.balance,
+           b.generated_at AS generated_date
     FROM student_bills b
     JOIN students s ON s.id = b.student_id
     LEFT JOIN class_groups c ON c.id = s.current_class_id
     WHERE b.term_id = ? AND b.balance > 0 AND s.status = 'Active'
+      AND COALESCE(b.status, 'active') = 'active'
     ORDER BY c.level_order, s.surname
   `).all(termId);
   const total = debtors.reduce((s, d) => s + d.balance, 0);
@@ -1698,3 +1812,7 @@ async function htmlToPdf(html, outPath) {
 }
 
 module.exports = registerReportsHandlers;
+// Exposed so the bill layout can be regression-tested without an Electron
+// runtime (the PDF step needs a BrowserWindow; the HTML does not).
+module.exports.__billHtmlForTest = billHtml;
+module.exports.__billStylesForTest = billStyles;

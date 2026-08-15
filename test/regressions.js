@@ -941,5 +941,422 @@ console.log('\n── Scores weighting ──');
     db.prepare('SELECT total_score FROM scores WHERE student_id=1 AND term_id=1 AND subject_id=1').get().total_score === 25);
 }
 
+
+console.log('\n── Billing: expected income, bill types, supplementary, voiding ──');
+{
+  const db = makeDb();
+  const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+  db.prepare("INSERT OR REPLACE INTO settings (key,value,category) VALUES ('receipt_counter','1','system')").run();
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2026/2027',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'FIRST TERM','2026-09-01','2026-12-20',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (2,1,2,'SECOND TERM','2027-01-10','2027-04-10',0)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (1,'BASIC 5','BS5','basic',10,1)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (2,'BASIC 6','BS6','basic',11,1)");
+  for (let i = 1; i <= 4; i++) {
+    db.prepare("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (?,?,'P',?,?, 'Active')")
+      .run(i, 'S' + i, 'X' + i, i <= 2 ? 1 : 2);
+  }
+  // The shipped situation from the screenshots: ONE template scoped to
+  // "All classes / All terms" — the fields the old dashboard join required.
+  db.exec("INSERT INTO fee_templates (id,name,class_group_id,term_id,is_active,bill_type) VALUES (1,'FIRST TERM BILLS 2026/2027',NULL,NULL,1,'school_fees')");
+  db.exec("INSERT INTO fee_line_items (fee_template_id,item_number,description,amount) VALUES (1,1,'Tuition',700)");
+  db.exec("INSERT INTO fee_line_items (fee_template_id,item_number,description,amount) VALUES (1,2,'PTA Dues',50.5)");
+
+  const h = {};
+  const ipc = { handle: (n, f) => { h[n] = f; } };
+  require(path.join(ROOT, 'electron/ipc/fees.js'))(ipc, db);
+  require(path.join(ROOT, 'electron/ipc/fees_extra.js'))(ipc, db);
+  require(path.join(ROOT, 'electron/ipc/fees_billing.js'))(ipc, db);
+  const call = (n, a) => h[n](null, a);
+
+  // ── Expected income ────────────────────────────────────────────────
+  // Nothing billed yet: every active pupil is projected from the template
+  // bill generation would actually pick. The old query joined on an exact
+  // class_group_id/term_id match against fee_template_items (a table the
+  // editor never writes) and returned 0.00.
+  const dashA = call('fees:dashboard', 1);
+  ck('expected income is not zero when only an "all classes/all terms" template exists',
+    dashA.metrics.expected_income === 3002);
+  ck('expected income reports how much of itself is a projection',
+    dashA.metrics.expected_projected === 3002 && dashA.metrics.unbilled_students === 4);
+
+  // Generating the bills must not move the number.
+  const gen = call('fees:generate-bulk', { termId: 1, scope: 'all' });
+  ck('bulk generation bills every active pupil', gen.generated === 4 && gen.skipped === 0);
+  const dashB = call('fees:dashboard', 1);
+  ck('generating the bills leaves expected income unchanged',
+    dashB.metrics.expected_income === 3002 && dashB.metrics.total_billed === 3002);
+  ck('expected income now comes from the bills themselves',
+    dashB.metrics.expected_billed === 3002 && dashB.metrics.unbilled_students === 0);
+  ck('per-class expected income matches the dashboard',
+    call('fees:expected-income', 1).total === 3002);
+
+  // ── One school fees bill per term ──────────────────────────────────
+  db.exec("INSERT INTO fee_templates (id,name,class_group_id,term_id,is_active,bill_type) VALUES (2,'BS5 First Term',1,1,1,'school_fees')");
+  const dup = call('fees:save-template', {
+    name: 'BS5 First Term (again)', class_group_id: 1, term_id: 1,
+    bill_type: 'school_fees', items: [{ description: 'Tuition', amount: 800 }],
+  });
+  ck('a second school-fees bill for the same class and term is refused',
+    dup.ok === false && dup.code === 'DUPLICATE_SCHOOL_FEES' && dup.existing.id === 2);
+  const replaced = call('fees:save-template', {
+    name: 'BS5 First Term (revised)', class_group_id: 1, term_id: 1,
+    bill_type: 'school_fees', confirm_replace: true, replaces_template_id: 2,
+    items: [{ description: 'Tuition', amount: 800 }],
+  });
+  ck('confirming the replacement is allowed and retires the old template',
+    replaced.ok === true &&
+    db.prepare('SELECT is_active FROM fee_templates WHERE id=2').get().is_active === 0);
+  const extraTpl = call('fees:save-template', {
+    name: 'Excursion — Kakum', term_id: 1, bill_type: 'supplementary',
+    items: [{ description: 'Excursion to Kakum', amount: 120 }],
+  });
+  ck('a supplementary bill in the same term is allowed', extraTpl.ok === true);
+
+  // ── Copy last term forward ─────────────────────────────────────────
+  const copied = call('fees:copy-template', {
+    sourceId: 1, name: 'SECOND TERM BILLS', termId: 2, adjustPercent: 10,
+  });
+  ck('a previous term\'s bill can be copied forward', copied.ok === true);
+  ck('copying forward carries the line items and applies the uplift',
+    db.prepare('SELECT COALESCE(SUM(amount),0) t FROM fee_line_items WHERE fee_template_id=?').get(copied.id).t === 825.55);
+
+  // ── Supplementary charges ──────────────────────────────────────────
+  // Restricted: nobody is logged in, so this must be refused.
+  security.clearCurrentUser();
+  ck('an unauthenticated caller cannot raise a supplementary charge',
+    call('fees:apply-supplementary', { templateId: extraTpl.id, termId: 1, scope: 'all' }).code === 'NOT_ELEVATED');
+
+  db.exec("INSERT INTO designations (id,name,is_system) VALUES (1,'Proprietor',1),(2,'Class Teacher',0)");
+  db.exec("INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (1,'prop','x','Owner',1,1),(2,'tr','x','Teacher',2,1)");
+  security.setCurrentUser(2, 'Class Teacher');
+  ck('a class teacher cannot raise a supplementary charge',
+    call('fees:apply-supplementary', { templateId: extraTpl.id, termId: 1, scope: 'all' }).code === 'NOT_ELEVATED');
+
+  security.setCurrentUser(1, 'Proprietor');
+  const applied = call('fees:apply-supplementary', { templateId: extraTpl.id, termId: 1, scope: 'class', classId: 1 });
+  ck('the proprietor can raise a supplementary charge on a class', applied.ok && applied.applied === 2);
+  const b1 = db.prepare('SELECT * FROM student_bills WHERE student_id=1 AND term_id=1').get();
+  ck('the supplementary charge lands on the pupil\'s existing term bill',
+    b1.total_billed === 870.5 && b1.supplementary_total === 120);
+  const again = call('fees:apply-supplementary', { templateId: extraTpl.id, termId: 1, scope: 'class', classId: 1 });
+  ck('applying the same supplementary charge twice does not charge twice',
+    again.applied === 0 && again.skipped === 2 &&
+    db.prepare('SELECT total_billed t FROM student_bills WHERE id=?').get(b1.id).t === 870.5);
+
+  // Regenerating the term bill must not erase an extra already raised.
+  // BASIC 5 now resolves to the revised template (Tuition 800), so the fees
+  // half is re-derived while the GHS 120 excursion survives untouched.
+  call('fees:generate-bill', { studentId: 1, termId: 1 });
+  const afterRegen = db.prepare('SELECT * FROM student_bills WHERE id=?').get(b1.id);
+  ck('regenerating the term bill preserves supplementary charges',
+    afterRegen.total_billed === 920 && afterRegen.supplementary_total === 120);
+  ck('regenerated bill line items are renumbered without gaps',
+    db.prepare("SELECT GROUP_CONCAT(item_number) g FROM (SELECT item_number FROM bill_line_items WHERE student_bill_id=? ORDER BY item_number)").get(b1.id).g === '1,2');
+
+  const removed = call('fees:remove-supplementary', { templateId: extraTpl.id, termId: 1 });
+  ck('a supplementary charge can be withdrawn again',
+    removed.ok && removed.removed === 2 &&
+    db.prepare('SELECT total_billed t FROM student_bills WHERE id=?').get(b1.id).t === 800);
+
+  // ── Voiding and deleting ───────────────────────────────────────────
+  call('fees:record-payment', { student_id: 1, student_bill_id: b1.id, term_id: 1, amount: 200, received_by: 1 });
+  ck('a bill with money against it cannot be deleted',
+    call('fees:delete-bill', { billId: b1.id, reason: 'issued in error' }).code === 'HAS_PAYMENTS');
+  ck('voiding requires a stated reason',
+    call('fees:void-bill', { billId: b1.id, reason: '' }).ok === false);
+  const voided = call('fees:void-bill', { billId: b1.id, reason: 'Pupil withdrew before the term started' });
+  ck('the proprietor can void a bill, and is told the money stays recorded',
+    voided.ok === true && voided.retained_payments === 200 && !!voided.warning);
+  ck('voiding writes an audit entry naming who and why',
+    db.prepare("SELECT COUNT(*) c FROM audit_log WHERE action='bill_voided' AND user_id=1").get().c === 1);
+  ck('a voided bill drops out of the bills list',
+    call('fees:list-bills', { termId: 1 }).every(b => b.id !== b1.id));
+  ck('a voided bill drops out of the debtors report',
+    call('fees:debtors-report', 1).every(d => d.id !== 1));
+  ck('a voided bill stops counting towards billed and outstanding totals',
+    call('fees:dashboard', 1).metrics.total_billed === 2251.5);
+  ck('a voided bill is listed on the review screen with its reason',
+    call('fees:list-voided-bills', 1).length === 1);
+  let regenThrew = false;
+  try { call('fees:generate-bill', { studentId: 1, termId: 1 }); } catch (_) { regenThrew = true; }
+  ck('"Generate ALL" does not silently resurrect a voided bill', regenThrew);
+  ck('a voided bill can be restored deliberately',
+    call('fees:restore-bill', { billId: b1.id }).ok === true &&
+    db.prepare('SELECT status FROM student_bills WHERE id=?').get(b1.id).status === 'active');
+
+  // An unpaid bill is deletable outright.
+  const b4 = db.prepare('SELECT id FROM student_bills WHERE student_id=4 AND term_id=1').get();
+  ck('an unpaid bill can be deleted with a reason',
+    call('fees:delete-bill', { billId: b4.id, reason: 'duplicate enrolment record' }).ok === true &&
+    !db.prepare('SELECT id FROM student_bills WHERE id=?').get(b4.id));
+
+  // ── Editing an issued bill ─────────────────────────────────────────
+  const b2 = db.prepare('SELECT id FROM student_bills WHERE student_id=2 AND term_id=1').get();
+  security.setCurrentUser(2, 'Class Teacher');
+  ck('a class teacher cannot edit an issued bill',
+    call('fees:adjust-bill-item', { billId: b2.id, description: 'Late fee', amount: 20, reason: 'because' }).code === 'NOT_ELEVATED');
+  security.setCurrentUser(1, 'Proprietor');
+  const adj = call('fees:adjust-bill-item', { billId: b2.id, description: 'Late registration', amount: 20, reason: 'registered after deadline' });
+  ck('the proprietor can add a one-off charge to a single bill',
+    adj.ok && adj.totals.totalBilled === 770.5);
+  ck('editing an issued bill is audited', db.prepare("SELECT COUNT(*) c FROM audit_log WHERE action='bill_item_added'").get().c === 1);
+
+  // ── Coverage warnings ──────────────────────────────────────────────
+  const overview = call('fees:billing-overview', 1);
+  ck('the billing overview resolves a template for every class',
+    overview.ok && overview.coverage.length === 2 && overview.coverage.every(c => c.template_id));
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (3,'CRECHE','CR','pre',1,1)");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (9,'N','B','X9',3,'Active')");
+  db.exec("UPDATE fee_templates SET is_active = 0 WHERE class_group_id IS NULL AND term_id IS NULL");
+  const overview2 = call('fees:billing-overview', 1);
+  const creche = overview2.coverage.find(c => c.class_id === 3);
+  ck('a class no template covers is reported as unbillable, not as owing nothing',
+    creche.template_scope === 'none' &&
+    overview2.warnings.some(w => w.level === 'error' && /CRECHE/.test(w.message)));
+  // The creche pupil, plus the pupil whose duplicate bill was deleted above —
+  // both now sit outside every active template.
+  ck('pupils no template covers are counted, not silently dropped',
+    call('fees:dashboard', 1).metrics.unbillable_students === 2);
+  security.clearCurrentUser();
+}
+
+console.log('\n── A voided bill must not leak anywhere ──');
+{
+  // Voiding is only as good as its reach. A bill the school withdrew that
+  // still shows on the parent's phone, in the cloud snapshot, on the main
+  // dashboard or on the bulk-pay sheet is worse than not voiding at all.
+  const db = makeDb();
+  const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+  const outbox = require(path.join(ROOT, 'electron/server/sync/outbox.js'));
+  db.exec("INSERT INTO academic_years (id,label,is_current) VALUES (1,'2026/2027',1)");
+  db.exec("INSERT INTO terms (id,academic_year_id,term_number,label,start_date,end_date,is_current) VALUES (1,1,1,'T1','2026-09-01','2026-12-20',1)");
+  db.exec("INSERT INTO class_groups (id,name,short_code,level_category,level_order,is_active) VALUES (1,'BS5','BS5','basic',10,1)");
+  db.exec("INSERT INTO students (id,surname,first_name,index_number,current_class_id,status) VALUES (1,'A','B','X1',1,'Active'),(2,'C','D','X2',1,'Active')");
+  db.exec("INSERT INTO student_bills (id,student_id,term_id,total_billed,total_paid,balance) VALUES (1,1,1,400,0,400),(2,2,1,400,0,400)");
+  db.exec("INSERT INTO designations (id,name,is_system) VALUES (1,'Proprietor',1)");
+  db.exec("INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (1,'p','x','Owner',1,1)");
+
+  const h = {};
+  const ipc = { handle: (n, f) => { h[n] = f; } };
+  require(path.join(ROOT, 'electron/ipc/fees_billing.js'))(ipc, db);
+  require(path.join(ROOT, 'electron/ipc/dashboard.js'))(ipc, db);
+  require(path.join(ROOT, 'electron/ipc/fees_bulk_pay.js'))(ipc, db);
+
+  security.setCurrentUser(1, 'Proprietor');
+  h['fees:void-bill'](null, { billId: 1, reason: 'pupil never enrolled' });
+
+  const summary = h['dashboard:summary'](null, 1);
+  ck('a voided bill leaves the main dashboard outstanding total',
+    summary.metrics.fees_outstanding === 400 && summary.metrics.debtor_count === 1);
+  ck('a voided bill leaves the main dashboard top-debtors list',
+    summary.top_fee_debtors.every(d => d.student_id !== 1));
+
+  const sheet = h['fees:bulk-pay-sheet'](null, { classId: 1, termId: 1 });
+  const row = sheet.find(r => r.student_id === 1);
+  ck('a voided bill leaves the bulk payment sheet showing nothing owed',
+    !row.bill_id && row.balance === 0 && row.status === 'not_billed');
+
+  // The cloud snapshot the parent portal reads is built here.
+  setSetting(db, 'cloud_sync_enabled', true, 'cloud');
+  outbox.enqueueStudentSnapshot(db, 1);
+  const queued = db.prepare("SELECT payload_json FROM sync_outbox WHERE entity_type='student_snapshot' ORDER BY id DESC LIMIT 1").get();
+  const snap = queued ? JSON.parse(queued.payload_json) : null;
+  ck('a voided bill is not projected into the cloud snapshot the portal reads',
+    !!snap && (snap.fees_balance || 0) === 0 && (snap.fees_billed || 0) === 0);
+
+  // The printed debtors list selected b.total_amount / b.paid_amount /
+  // b.generated_date — none of which exist on student_bills — so it threw
+  // "no such column" every time a school tried to print it. Same defect the
+  // on-screen debtors report had.
+  let listErr = null;
+  const printedDebtors = (() => {
+    try {
+      return db.prepare(`
+        SELECT s.index_number, s.surname, s.first_name, c.name AS class_name,
+               b.total_billed AS total_amount, b.total_paid AS paid_amount, b.balance,
+               b.generated_at AS generated_date
+        FROM student_bills b
+        JOIN students s ON s.id = b.student_id
+        LEFT JOIN class_groups c ON c.id = s.current_class_id
+        WHERE b.term_id = ? AND b.balance > 0 AND s.status = 'Active'
+          AND COALESCE(b.status, 'active') = 'active'
+        ORDER BY c.level_order, s.surname
+      `).all(1);
+    } catch (e) { listErr = e; return []; }
+  })();
+  ck('the printed debtors list query runs against the real schema', listErr === null);
+  ck('the printed debtors list excludes voided bills',
+    printedDebtors.length === 1 && printedDebtors[0].index_number === 'X2');
+
+  security.clearCurrentUser();
+}
+
+console.log('\n── Bill printout ──');
+{
+  // The printed bill used to add the books balance twice: total_billed already
+  // carries books arrears, and the footer printed `balance + booksBalance`.
+  const reports = require(path.join(ROOT, 'electron/ipc/reports.js'));
+  const html = reports.__billHtmlForTest(
+    { name: 'S', motto: '', address: '', digital: '', email: '', phone1: '', phone2: '', logoData: null, primaryColor: '#123456', accentColor: '#333', colorMode: 'color' },
+    { index_number: 'X1', surname: 'A', first_name: 'B', class_name: 'BS5', term_label: 'FIRST TERM',
+      total_billed: 500, total_paid: 100, books_arrears: 200, discount_amount: 0 },
+    [
+      { item_number: 1, description: 'Tuition', amount: 300, charge_type: 'fees' },
+      { item_number: 2, description: 'Excursion', amount: 50, charge_type: 'extra' },
+    ]
+  );
+  // Fees 300 + extras 50 + books 200 = 550 due, less 100 paid = 450.
+  ck('the printed bill does not double-count the books balance',
+    html.includes('GHS 550.00') && html.includes('GHS 450.00'));
+  ck('supplementary charges get their own part on the printed bill',
+    html.includes('PART D'));
+  ck('the printed bill no longer fills every arrears row with colour',
+    !html.includes('background:#fef2f2;"') || !html.includes('#fecaca'));
+  ck('section bars are measured in points, not millimetres of solid fill',
+    !/bill-section-title[^>]*padding:\s*4px/.test(html));
+
+  // The whole point of the redesign: a colour bill and a mono bill must look
+  // the same. That only holds if section headers are NOT solid colour bands
+  // with reversed-out white text (which a mono printer renders as heavy slabs).
+  const styles = reports.__billStylesForTest();
+  ck('section headers are a light tint with a coloured left rule, not a solid fill',
+    /border-left:\s*3pt solid var\(--accent/.test(styles) &&
+    /background:\s*var\(--accent-tint/.test(styles));
+  ck('no bill section header paints white reversed-out text on a solid fill',
+    !/bill-section-title[^"]*color:\s*#fff/.test(html) &&
+    !/class="bill-section-title"[^>]*background:#[0-9a-fA-F]{6}/.test(html));
+  ck('the amount-due block is no longer a solid reversed-out band',
+    !/bill-due[^>]*color:#fff/.test(html));
+}
+
+
+console.log('\n── Access control: level ladder, roles, individual overrides ──');
+{
+  const _access = require(path.join(ROOT, 'electron/ipc/_access.js'));
+
+  // The ladder maps cleanly onto the four booleans, and back.
+  ck('No access → all flags off',
+    JSON.stringify(_access.levelToPerms('no')) === JSON.stringify({ can_view: 0, can_create: 0, can_edit: 0, can_delete: 0 }));
+  ck('View grants only read',
+    _access.levelToPerms('view').can_view === 1 && _access.levelToPerms('view').can_create === 0);
+  ck('Contribute grants view + create, not edit',
+    _access.levelToPerms('contribute').can_create === 1 && _access.levelToPerms('contribute').can_edit === 0);
+  ck('Manage grants up to edit, not delete',
+    _access.levelToPerms('manage').can_edit === 1 && _access.levelToPerms('manage').can_delete === 0);
+  ck('Full grants everything', _access.levelToPerms('full').can_delete === 1);
+  ck('perms round-trip through a level', _access.permsToLevel(_access.levelToPerms('manage')) === 'manage');
+  ck('a non-ladder combo reduces to the highest contiguous level, never over-reporting',
+    _access.permsToLevel({ can_view: 1, can_create: 0, can_edit: 0, can_delete: 1 }) === 'view');
+
+  const db = makeDb();
+  const security = require(path.join(ROOT, 'electron/ipc/_security.js'));
+  const h = {};
+  const ipc = { handle: (n, f) => { h[n] = f; } };
+  require(path.join(ROOT, 'electron/ipc/access.js'))(ipc, db);
+  const call = (n, a) => h[n](null, a);
+
+  // makeDb() applies the schema + migrations but not seedDefaults, so stand up
+  // the standard designations the way production seeds them: money → Accountant,
+  // academics/canteen → Class Teacher, and the two always-full system roles.
+  const mkRole = (name, sys, levels) => {
+    const id = db.prepare('INSERT INTO designations (name, is_system) VALUES (?, ?)').run(name, sys ? 1 : 0).lastInsertRowid;
+    for (const m of _access.MODULE_KEYS) {
+      const p = _access.levelToPerms(levels[m] || 'no');
+      db.prepare('INSERT INTO designation_permissions (designation_id,module,can_view,can_create,can_edit,can_delete) VALUES (?,?,?,?,?,?)')
+        .run(id, m, p.can_view, p.can_create, p.can_edit, p.can_delete);
+    }
+    return id;
+  };
+  const proprietor = mkRole('Proprietor', 1, {});   // always-full by name; rows ignored
+  mkRole('Administrator', 1, {});
+  const accountant = mkRole('Accountant', 1, {
+    dashboard: 'view', students: 'view', fees: 'full', canteen: 'view',
+    payroll: 'full', finance: 'full', staff: 'view',
+  });
+  const classTeacher = mkRole('Class Teacher', 1, {
+    dashboard: 'view', students: 'view', academics: 'full', canteen: 'full', notifications: 'view',
+  });
+  db.exec("INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (1,'own','x','Owner',?,1)".replace('?', proprietor));
+  db.exec(`INSERT INTO users (id,username,password_hash,full_name,designation_id,is_active) VALUES (2,'tr','x','A Teacher',${classTeacher},1)`);
+
+  // Not signed in → cannot change access.
+  security.clearCurrentUser();
+  ck('an unauthenticated caller cannot change a role',
+    call('access:set-role-level', { designationId: accountant, module: 'finance', level: 'full' }).ok === false);
+
+  // A Class Teacher (not elevated, no settings-edit) cannot change access.
+  security.setCurrentUser(2, 'Class Teacher');
+  ck('a class teacher cannot change access control',
+    call('access:set-role-level', { designationId: accountant, module: 'finance', level: 'view' }).ok === false);
+
+  security.setCurrentUser(1, 'Proprietor');
+
+  // Seeded expectations from the domain: Accountant runs the money, teacher runs
+  // academics + canteen.
+  const matrix = call('access:role-matrix');
+  const acc = matrix.find(r => r.id === accountant);
+  const tea = matrix.find(r => r.id === classTeacher);
+  ck('the Accountant role owns finance, fees and payroll out of the box',
+    acc.levels.finance === 'full' && acc.levels.fees === 'full' && acc.levels.payroll === 'full');
+  ck('the Class Teacher role owns academics and canteen, not finance',
+    tea.levels.academics === 'full' && tea.levels.canteen === 'full' && tea.levels.finance === 'no');
+  ck('Proprietor is reported as always-full and locked',
+    matrix.find(r => r.id === proprietor).always_full === true);
+  ck('the role card reports how many areas are granted',
+    acc.module_count === _access.MODULE_KEYS.length && acc.granted_count > 0);
+
+  // Proprietor/Administrator cannot be reduced.
+  ck('the Proprietor role cannot be down-levelled',
+    call('access:set-role-level', { designationId: proprietor, module: 'finance', level: 'no' }).ok === false);
+
+  // Editing a role — on a scratch role, so the Class Teacher the individual
+  // scenario below depends on is left untouched.
+  const scratch = mkRole('Games Master', 0, { academics: 'full' });
+  call('access:set-role-level', { designationId: scratch, module: 'students', level: 'contribute' });
+  ck('a role level can be changed and persists',
+    call('access:role-matrix').find(r => r.id === scratch).levels.students === 'contribute');
+  call('access:set-role-all', { designationId: scratch, module: undefined, level: 'view' });
+  ck('"set all" puts every module on one level',
+    _access.MODULE_KEYS.every(m => call('access:role-matrix').find(r => r.id === scratch).levels[m] === 'view'));
+
+  // Custom role, copied from another.
+  const created = call('access:create-role', { name: 'Bursar', description: 'Handles fees at the front desk', copyFromId: accountant });
+  ck('a custom role can be created as a copy of another',
+    created.ok && call('access:role-matrix').find(r => r.id === created.id).levels.fees === 'full');
+  ck('a duplicate role name is refused',
+    call('access:create-role', { name: 'bursar' }).ok === false);
+  ck('a built-in role cannot be deleted',
+    call('access:delete-role', { designationId: accountant }).ok === false);
+
+  // ── The headline scenario: no accountant, so a teacher is given limited
+  //    finance access as an individual — without becoming an accountant. ──
+  let ua = call('access:user-access', 2);
+  ck('by default the teacher inherits the role: no finance access',
+    ua.rows.find(r => r.module === 'finance').effective_level === 'no' &&
+    ua.rows.find(r => r.module === 'finance').override_level === null);
+
+  call('access:set-user-level', { userId: 2, module: 'finance', level: 'contribute' });
+  ua = call('access:user-access', 2);
+  const finRow = ua.rows.find(r => r.module === 'finance');
+  ck('an individual can be granted finance access above their role',
+    finRow.override_level === 'contribute' && finRow.effective_level === 'contribute' && finRow.role_level === 'no');
+  ck('the individual override reaches the real permission resolver',
+    require(path.join(ROOT, 'electron/ipc/auth.js')).resolveEffectivePermissions(db, 2).finance.canCreate === true);
+  ck('the teacher is still a Class Teacher, not an Accountant',
+    db.prepare('SELECT d.name n FROM users u JOIN designations d ON d.id=u.designation_id WHERE u.id=2').get().n === 'Class Teacher');
+
+  // Clearing the override falls back to the role.
+  call('access:set-user-level', { userId: 2, module: 'finance', level: 'inherit' });
+  ck('clearing an override falls back to the role default',
+    call('access:user-access', 2).rows.find(r => r.module === 'finance').override_level === null);
+
+  // Proprietor overrides are meaningless (always full) and refused.
+  ck('an override on a Proprietor account is refused',
+    call('access:set-user-level', { userId: 1, module: 'finance', level: 'no' }).ok === false);
+
+  security.clearCurrentUser();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

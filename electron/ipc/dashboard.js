@@ -44,7 +44,7 @@ module.exports = function registerDashboardHandlers(ipcMain, db) {
       SELECT COALESCE(SUM(balance), 0) AS total,
              COUNT(*) FILTER (WHERE balance > 0) AS debtor_count
       FROM student_bills
-      WHERE term_id = ?
+      WHERE term_id = ? AND COALESCE(status, 'active') = 'active'
     `).get(currentTerm);
 
     // Canteen owed = days unpaid × daily rate
@@ -60,7 +60,7 @@ module.exports = function registerDashboardHandlers(ipcMain, db) {
     // Total billed this term
     const billedRow = db.prepare(`
       SELECT COALESCE(SUM(total_billed), 0) AS total
-      FROM student_bills WHERE term_id = ?
+      FROM student_bills WHERE term_id = ? AND COALESCE(status, 'active') = 'active'
     `).get(currentTerm);
 
     // ── Income vs Expenses chart (monthly breakdown) ─────
@@ -119,6 +119,7 @@ module.exports = function registerDashboardHandlers(ipcMain, db) {
       JOIN students s ON s.id = sb.student_id
       LEFT JOIN class_groups cg ON cg.id = s.current_class_id
       WHERE sb.balance > 0 AND sb.term_id = ?
+        AND COALESCE(sb.status, 'active') = 'active'
       ORDER BY sb.balance DESC
       LIMIT 5
     `).all(currentTerm);

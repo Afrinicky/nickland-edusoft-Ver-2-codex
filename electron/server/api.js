@@ -109,7 +109,9 @@ function childSummary(db, studentId) {
   `).get(studentId);
   if (!s) return null;
   const term = db.prepare('SELECT * FROM terms WHERE is_current = 1').get();
-  const bill = term ? db.prepare('SELECT total_billed, total_paid, balance FROM student_bills WHERE student_id = ? AND term_id = ?').get(studentId, term.id) : null;
+  // Voided bills are excluded everywhere a balance is shown. A bill the
+  // school withdrew must never reach a parent's phone as money owed.
+  const bill = term ? db.prepare("SELECT total_billed, total_paid, balance FROM student_bills WHERE student_id = ? AND term_id = ? AND COALESCE(status, 'active') = 'active'").get(studentId, term.id) : null;
   const rate = parseFloat(getSetting(db, 'canteen_daily_rate', '5'));
   const canteenUnpaid = term ? db.prepare(`
     SELECT COUNT(*) c FROM school_calendar sc
@@ -350,7 +352,7 @@ function createApiServer(db, opts = {}) {
     let collected = 0, outstanding = 0;
     if (term && can(ctx, 'fees', 'view')) {
       collected = db.prepare('SELECT COALESCE(SUM(amount),0) t FROM payments WHERE term_id=? AND is_reversed=0').get(term.id).t;
-      outstanding = db.prepare('SELECT COALESCE(SUM(balance),0) t FROM student_bills WHERE term_id=?').get(term.id).t;
+      outstanding = db.prepare("SELECT COALESCE(SUM(balance),0) t FROM student_bills WHERE term_id=? AND COALESCE(status, 'active') = 'active'").get(term.id).t;
     }
     return json(res, 200, { ok: true, term: term ? { id: term.id, label: term.label } : null,
       metrics: { students, staff, fees_collected: collected, fees_outstanding: outstanding } });
@@ -375,6 +377,7 @@ function createApiServer(db, opts = {}) {
       FROM student_bills b JOIN students s ON s.id = b.student_id
       LEFT JOIN class_groups c ON c.id = s.current_class_id
       WHERE b.term_id = ? AND b.balance > 0 AND s.status='Active'
+        AND COALESCE(b.status, 'active') = 'active'
       ORDER BY b.balance DESC LIMIT 300
     `).all(term.id);
     return json(res, 200, { ok: true, debtors: rows });

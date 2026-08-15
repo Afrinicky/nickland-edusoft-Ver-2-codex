@@ -24,6 +24,32 @@ function getCurrentUserId() {
   return currentUserId;
 }
 
+function getCurrentDesignation() {
+  return currentUserDesignation;
+}
+
+// The two designations that may take destructive/controversial financial
+// actions (voiding or deleting a bill). Deliberately narrower than
+// checkPermission: an Accountant with fees.delete can still not void a bill,
+// because a voided bill rewrites what a parent was told they owe.
+const ELEVATED = ['Proprietor', 'Administrator'];
+
+// Resolves elevation from the database rather than trusting the renderer, and
+// falls back to the designation captured at login when the user row is gone.
+function isElevated(db, userId = currentUserId) {
+  if (!userId) return false;
+  let designation = userId === currentUserId ? currentUserDesignation : null;
+  try {
+    const row = db.prepare(`
+      SELECT d.name AS designation
+      FROM users u LEFT JOIN designations d ON d.id = u.designation_id
+      WHERE u.id = ?
+    `).get(userId);
+    if (row && row.designation) designation = row.designation;
+  } catch (_) { /* fall back to the login-time designation */ }
+  return ELEVATED.includes(designation);
+}
+
 // Returns true if the current user is allowed to perform `action` on `module`.
 // Proprietor and Administrator always pass.
 function checkPermission(db, module, action = 'view') {
@@ -63,6 +89,9 @@ module.exports = {
   setCurrentUser,
   clearCurrentUser,
   getCurrentUserId,
+  getCurrentDesignation,
+  isElevated,
+  ELEVATED,
   checkPermission,
   requirePerm,
 };

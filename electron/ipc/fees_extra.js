@@ -1,6 +1,8 @@
 // Nickland Edusoft — Fees Extra IPC (dashboard, financial profile, expected income)
 // Copyright © 2026 Nickland Sales. All rights reserved.
 
+const billing = require('./_billing');
+
 module.exports = function registerFeesExtraHandlers(ipcMain, db) {
 
   // ── Fees Dashboard ───────────────────────────────────
@@ -10,11 +12,12 @@ module.exports = function registerFeesExtraHandlers(ipcMain, db) {
       : db.prepare("SELECT * FROM terms WHERE is_current = 1").get();
     if (!term) return { metrics: {}, top_debtors: [], recent_payments: [] };
 
-    // Total billed for this term
+    // Total billed for this term. Voided bills are excluded everywhere — a
+    // withdrawn bill is not money the school is owed.
     const billedRow = db.prepare(`
       SELECT COALESCE(SUM(total_billed), 0) AS total,
              COUNT(*) AS count
-      FROM student_bills WHERE term_id = ?
+      FROM student_bills WHERE term_id = ? AND COALESCE(status, 'active') = 'active'
     `).get(term.id);
 
     // Total collected (sum of all valid payments this term)
@@ -30,26 +33,23 @@ module.exports = function registerFeesExtraHandlers(ipcMain, db) {
       SELECT COALESCE(SUM(balance), 0) AS total,
              COUNT(*) FILTER (WHERE balance > 0) AS debtor_count
       FROM student_bills
-      WHERE term_id = ?
+      WHERE term_id = ? AND COALESCE(status, 'active') = 'active'
     `).get(term.id);
 
-    // Expected income (template amount × active students per class)
-    const expectedRow = db.prepare(`
-      SELECT
-        cg.id AS class_id, cg.name AS class_name, cg.short_code,
-        COUNT(DISTINCT s.id) AS active_students,
-        COALESCE(SUM(fti.amount), 0) AS template_amount
-      FROM class_groups cg
-      LEFT JOIN students s ON s.current_class_id = cg.id AND s.status = 'Active'
-      LEFT JOIN fee_templates ft ON ft.class_group_id = cg.id AND ft.term_id = ? AND ft.is_active = 1
-      LEFT JOIN fee_template_items fti ON fti.template_id = ft.id
-      WHERE cg.is_active = 1
-      GROUP BY cg.id
-    `).all(term.id);
-
-    const expectedTotal = expectedRow.reduce(
-      (s, r) => s + (r.active_students * r.template_amount), 0
-    );
+    // Expected income — "if all bills are paid".
+    //
+    // This used to be re-derived from templates with a stricter join than bill
+    // generation itself uses: it required a template whose class_group_id AND
+    // term_id both matched exactly, and it read fee_template_items, a table the
+    // template editor never writes to (it writes fee_line_items). A school with
+    // an "All classes / All terms" template — the ordinary setup — therefore saw
+    // "Expected Income GHS 0.00" next to a Bills tab showing thousands billed.
+    //
+    // Bills that exist are now authoritative, and pupils who have no bill yet
+    // are projected through the SAME template resolution bill generation uses,
+    // so generating the missing bills does not move the number.
+    const projected = billing.projectedIncomeForTerm(db, term.id);
+    const expectedTotal = projected.total;
 
     // Top debtors (5 biggest balances this term)
     const topDebtors = db.prepare(`
@@ -62,6 +62,7 @@ module.exports = function registerFeesExtraHandlers(ipcMain, db) {
       JOIN students s ON s.id = sb.student_id
       LEFT JOIN class_groups cg ON cg.id = s.current_class_id
       WHERE sb.balance > 0 AND sb.term_id = ?
+        AND COALESCE(sb.status, 'active') = 'active'
       ORDER BY sb.balance DESC
       LIMIT 10
     `).all(term.id);
@@ -96,6 +97,7 @@ module.exports = function registerFeesExtraHandlers(ipcMain, db) {
       FROM class_groups cg
       LEFT JOIN students s ON s.current_class_id = cg.id AND s.status = 'Active'
       LEFT JOIN student_bills sb ON sb.student_id = s.id AND sb.term_id = ?
+                                AND COALESCE(sb.status, 'active') = 'active'
       WHERE cg.is_active = 1
       GROUP BY cg.id
       HAVING student_count > 0
@@ -105,10 +107,16 @@ module.exports = function registerFeesExtraHandlers(ipcMain, db) {
     return {
       term: { id: term.id, label: term.label, start_date: term.start_date, end_date: term.end_date },
       metrics: {
-        expected_income: Math.round(expectedTotal),
-        total_billed: Math.round(billedRow.total),
-        total_collected: Math.round(collectedRow.total),
-        outstanding: Math.round(outstandingRow.total),
+        expected_income: billing.round2(expectedTotal),
+        // Where the expected figure comes from, so a school can tell "nobody
+        // owes anything" apart from "nobody has been billed yet".
+        expected_billed: projected.billed_total,
+        expected_projected: projected.projected_total,
+        unbilled_students: projected.projected_count,
+        unbillable_students: projected.unresolved_count,
+        total_billed: billing.round2(billedRow.total),
+        total_collected: billing.round2(collectedRow.total),
+        outstanding: billing.round2(outstandingRow.total),
         collection_pct: collectionPct,
         debtor_count: outstandingRow.debtor_count,
         bill_count: billedRow.count,
@@ -125,27 +133,44 @@ module.exports = function registerFeesExtraHandlers(ipcMain, db) {
     const term = termId || db.prepare("SELECT id FROM terms WHERE is_current = 1").get()?.id;
     if (!term) return { total: 0, breakdown: [] };
 
-    const breakdown = db.prepare(`
+    // Same rule as the dashboard: bills that exist are authoritative, pupils
+    // without one are projected through the template bill generation would use.
+    const rows = db.prepare(`
       SELECT
         cg.id AS class_id, cg.name AS class_name, cg.short_code,
-        COUNT(DISTINCT s.id) AS active_students,
-        COALESCE(SUM(fti.amount), 0) AS template_amount
+        COUNT(DISTINCT s.id) AS active_students
       FROM class_groups cg
       LEFT JOIN students s ON s.current_class_id = cg.id AND s.status = 'Active'
-      LEFT JOIN fee_templates ft ON ft.class_group_id = cg.id AND ft.term_id = ? AND ft.is_active = 1
-      LEFT JOIN fee_template_items fti ON fti.template_id = ft.id
       WHERE cg.is_active = 1
       GROUP BY cg.id
       HAVING active_students > 0
       ORDER BY cg.level_order
-    `).all(term);
+    `).all();
 
-    const enriched = breakdown.map(r => ({
-      ...r,
-      expected: r.active_students * r.template_amount,
-    }));
-    const total = enriched.reduce((s, r) => s + r.expected, 0);
-    return { total, breakdown: enriched };
+    const breakdown = rows.map(r => {
+      const billed = db.prepare(`
+        SELECT COALESCE(SUM(b.total_billed), 0) AS total, COUNT(*) AS n
+        FROM student_bills b
+        JOIN students s ON s.id = b.student_id
+        WHERE b.term_id = ? AND s.current_class_id = ? AND s.status = 'Active'
+          AND COALESCE(b.status, 'active') = 'active'
+      `).get(term, r.class_id);
+      const tpl = billing.resolveFeeTemplate(db, r.class_id, term);
+      const perStudent = tpl ? billing.templateTotal(db, tpl.id) : 0;
+      const unbilled = Math.max(0, r.active_students - billed.n);
+      return {
+        ...r,
+        template_id: tpl ? tpl.id : null,
+        template_name: tpl ? tpl.name : null,
+        template_amount: perStudent,
+        billed_students: billed.n,
+        billed_total: billing.round2(billed.total),
+        unbilled_students: unbilled,
+        expected: billing.round2(billed.total + unbilled * perStudent),
+      };
+    });
+    const total = billing.round2(breakdown.reduce((s, r) => s + r.expected, 0));
+    return { total, breakdown };
   });
 
   // ── Student Financial Profile (full payment history since admission) ──
