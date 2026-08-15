@@ -4,3 +4,19 @@ dist/
 web-build/
 *.log
 .DS_Store
+
+# Native projects are GENERATED from app.json by `expo prebuild`, not edited by
+# hand — that is what keeps app.json the single source of truth for the icon,
+# splash, permissions and version. Regenerate with `npm run prebuild` (or let
+# EAS Build do it in the cloud). Anything hand-edited under android/ or ios/
+# would be silently thrown away on the next prebuild.
+android/
+ios/
+
+# Local build output
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+credentials.json
+google-services.json
