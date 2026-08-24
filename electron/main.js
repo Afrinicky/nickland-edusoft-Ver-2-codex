@@ -265,6 +265,10 @@ app.whenReady().then(async () => {
   mount('reports', () => registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath));
   mount('notifications', () => registerNotificationsHandlers(ipcMain, db));
   mount('backup', () => registerBackupHandlers(ipcMain, db, app, userDataPath));
+  // Heal absolute upload paths (logo, signatures, photos) the moment the app
+  // starts, so a data-folder move from an update — or a restore taken on
+  // another PC — never leaves the logo showing broken.
+  mount('backup.repair', () => require('./ipc/backup').repairUploadPathsOnStartup(db, userDataPath));
   mount('backup.scheduler', () => require('./ipc/backup').startScheduler(db, userDataPath));
   mount('session', () => registerSessionHandlers(ipcMain, db));
   mount('mobile', () => registerMobileHandlers(ipcMain, db));
