@@ -1,24 +1,38 @@
 // Nickland Edusoft mobile — API client
 //
 // Two connection modes, one method surface:
-//   • host  — talks to a school's DESKTOP over LAN (or a tunnel):
-//             http://<ip>:4747/api/v1, routes under /auth/* /parent/* /staff-*.
-//             Full parent + staff features, including payments.
-//   • cloud — talks to the hosted multi-tenant PORTAL over the internet:
-//             https://<portal>/api/v1, routes under /portal/*. Parent-only,
-//             read + notices (the cloud is a thin read model). Cloud responses
-//             are normalised here into the SAME shapes the screens already use,
-//             so the parent screens work unchanged in either mode.
+//   • host  — talks to a school's DESKTOP, over the school Wi-Fi or a tunnel:
+//             http(s)://<address>/api/v1, routes under /auth/*, /parent/* and
+//             the staff routes. Everything, including taking payments, and it
+//             works with the internet down.
+//   • cloud — talks to the hosted multi-tenant service over the internet:
+//             https://<portal>/api/v1, routes under /portal/* for parents and
+//             /staff/* for teachers. Works with the school's DESKTOP switched
+//             off: reads come from the projections the desktop pushes up, and
+//             writes are queued for it to apply when it next syncs.
+//
+// Cloud responses are normalised here into the SAME shapes the screens already
+// use, so no screen knows or cares which mode it is running in. Where the
+// cloud genuinely cannot do something — taking a fee payment, which needs the
+// desktop's own receipt numbering — the method says so rather than pretending.
 
 let BASE = null;
 let MODE = 'host';          // 'host' | 'cloud'
 let SCHOOL_ID = null;       // required in cloud mode (chosen at connect time)
+let ROLE = null;            // 'parent' | 'staff' — which surface this session is on
 
-export function setConnection({ baseUrl, mode = 'host', schoolId = null } = {}) {
+export function setConnection({ baseUrl, mode = 'host', schoolId = null, role = null } = {}) {
   BASE = baseUrl ? baseUrl.replace(/\/+$/, '') : null;
   MODE = mode === 'cloud' ? 'cloud' : 'host';
   SCHOOL_ID = schoolId || null;
+  ROLE = role || null;
 }
+
+// The cloud has two `me` endpoints and two sets of routes, and a bearer token
+// does not say which it belongs to. Remembering the role from sign-in avoids a
+// guessing round trip on every cold start.
+export function setRole(role) { ROLE = role || null; }
+export function getRole() { return ROLE; }
 // Back-compat: setting a bare base URL means host mode.
 export function setBaseUrl(url) { setConnection({ baseUrl: url, mode: 'host' }); }
 export function getBaseUrl() { return BASE; }
@@ -92,14 +106,27 @@ async function cloudChildReport(token, id) {
   };
 }
 
-const hostOnly = (name) => () => { throw new Error(`${name} is not available over the internet. Connect on the school Wi-Fi to do this.`); };
+// A few things genuinely need the desktop: taking a fee payment writes a
+// receipt against the school's own numbering, and a parent registering has to
+// be matched against the school's guardian contacts. Both say so plainly
+// rather than failing with a bare network error.
+const hostOnly = (name) => () => {
+  throw new Error(`${name} needs the school's own system. Connect to your school — on its Wi-Fi, or at its internet address — to do this.`);
+};
+
+// In cloud mode a staff route lives under /staff; on the desktop it is at the
+// top level. One helper, so every staff method reads the same.
+const staffPath = (path) => (MODE === 'cloud' ? `/staff${path}` : path);
 
 export const api = {
   // Public
   info: () => request('/info'),
   health: () => request('/health'),
   schools: () => request('/portal/schools'),          // cloud: list tenants to pick from
-  staffLogin: (username, password, device) => request('/auth/login', { method: 'POST', body: { username, password, device } }),
+  staffLogin: (username, password, device) =>
+    MODE === 'cloud'
+      ? request('/staff/login', { method: 'POST', body: { school_id: SCHOOL_ID, username, password } })
+      : request('/auth/login', { method: 'POST', body: { username, password, device } }),
   parentRegister: (data) => request('/auth/parent/register', { method: 'POST', body: data }),
 
   parentLogin: (identifier, password, device) =>
@@ -108,10 +135,12 @@ export const api = {
       : request('/auth/parent/login', { method: 'POST', body: { identifier, password, device } }),
 
   // Authed
-  me: (token) =>
-    MODE === 'cloud'
-      ? request('/portal/me', { token }).then(r => ({ ok: true, role: 'parent', parent: r.parent, school: r.school, mode: 'cloud' }))
-      : request('/me', { token }),
+  me: (token) => {
+    if (MODE !== 'cloud') return request('/me', { token });
+    if (ROLE === 'staff') return request('/staff/me', { token });
+    return request('/portal/me', { token })
+      .then(r => ({ ok: true, role: 'parent', parent: r.parent, school: r.school, mode: 'cloud' }));
+  },
   logout: (token) => MODE === 'cloud' ? Promise.resolve({ ok: true }) : request('/auth/logout', { method: 'POST', token }),
 
   // Parent
@@ -172,12 +201,15 @@ export const api = {
       : request('/parent/messages', { method: 'POST', token, body: { threadId, studentId, subject, body } }),
 
   // Homework / assignments
-  classHomework: (token, classId, all) => request(`/homework?classId=${classId}${all ? '&all=1' : ''}`, { token }), // staff
+  classHomework: (token, classId, all) => request(staffPath(`/homework?classId=${classId}${all ? '&all=1' : ''}`), { token }), // staff
   saveHomework: (token, { classId, subjectId, title, description, dueDate, maxMarks }) =>
-    request('/homework', { method: 'POST', token, body: { classId, subjectId, title, description, dueDate, maxMarks } }), // staff
-  homeworkSheet: (token, homeworkId) => request(`/homework/${homeworkId}/sheet`, { token }),                        // staff
+    request(staffPath('/homework'), { method: 'POST', token, body: { classId, subjectId, title, description, dueDate, maxMarks } }), // staff
+  // Marking homework needs the assignment's id, which exists only once the
+  // desktop has created it — so marking stays a desktop capability.
+  homeworkSheet: (token, homeworkId) =>
+    MODE === 'cloud' ? hostOnly('Marking homework')() : request(`/homework/${homeworkId}/sheet`, { token }),
   saveHomeworkMarks: (token, homeworkId, entries) =>
-    request(`/homework/${homeworkId}/marks`, { method: 'POST', token, body: { entries } }),                         // staff
+    MODE === 'cloud' ? hostOnly('Marking homework')() : request(`/homework/${homeworkId}/marks`, { method: 'POST', token, body: { entries } }),
   childHomework: (token, id) =>
     MODE === 'cloud'
       ? cloudChildren(token).then(cs => {
@@ -187,7 +219,7 @@ export const api = {
       : request(`/parent/children/${id}/homework`, { token }),
 
   // Timetable
-  myTimetable: (token) => request('/timetable/mine', { token }),   // staff (host)
+  myTimetable: (token) => request(staffPath('/timetable/mine'), { token }),   // staff, either mode
   childTransport: (token, id) =>
     MODE === 'cloud'
       ? cloudChildren(token).then(cs => {
@@ -204,25 +236,35 @@ export const api = {
         })
       : request(`/parent/children/${id}/timetable`, { token }),
 
-  // Staff (host only)
-  dashboard: (token) => request('/dashboard', { token }),
-  students: (token, classId) => request(`/students${classId ? `?classId=${classId}` : ''}`, { token }),
-  debtors: (token) => request('/fees/debtors', { token }),
-  classes: (token) => request('/classes', { token }),
+  // ── Staff ──
+  // Available in BOTH modes. On the desktop these hit the school's database
+  // directly; over the internet they read the projected class rosters and
+  // queue writes for the desktop to apply — which is what lets a teacher mark
+  // a register at home with the school's machine switched off.
+  dashboard: (token) => request(staffPath('/dashboard'), { token }),
+  students: (token, classId) => request(staffPath(`/students${classId ? `?classId=${classId}` : ''}`), { token }),
+  debtors: (token) => request(MODE === 'cloud' ? '/staff/debtors' : '/fees/debtors', { token }),
+  classes: (token) => request(staffPath('/classes'), { token }),
 
   // Staff — attendance register
-  attendanceRoster: (token, classId, date) => request(`/attendance?classId=${classId}&date=${encodeURIComponent(date)}`, { token }),
-  markAttendance: (token, date, marks) => request('/attendance', { method: 'POST', token, body: { date, marks } }),
+  attendanceRoster: (token, classId, date) => request(staffPath(`/attendance?classId=${classId}&date=${encodeURIComponent(date)}`), { token }),
+  markAttendance: (token, date, marks) => request(staffPath('/attendance'), { method: 'POST', token, body: { date, marks } }),
 
   // Staff — score entry (raw exam marks 0–100 for a class + subject)
-  scoreSubjects: (token, classId) => request(`/scores/subjects?classId=${classId}`, { token }),
-  scoreSheet: (token, classId, subjectId) => request(`/scores?classId=${classId}&subjectId=${subjectId}`, { token }),
-  saveScores: (token, subjectId, marks) => request('/scores', { method: 'POST', token, body: { subjectId, marks } }),
+  scoreSubjects: (token, classId) => request(staffPath(`/scores/subjects?classId=${classId}`), { token }),
+  scoreSheet: (token, classId, subjectId) => request(staffPath(`/scores?classId=${classId}&subjectId=${subjectId}`), { token }),
+  saveScores: (token, subjectId, marks) => request(staffPath('/scores'), { method: 'POST', token, body: { subjectId, marks } }),
 
   // Staff — canteen collection
-  canteenStudent: (token, studentId) => request(`/canteen/student/${studentId}`, { token }),
+  canteenStudent: (token, studentId) => request(staffPath(`/canteen/student/${studentId}`), { token }),
   canteenCollect: (token, { student_id, amount, payment_method, notes }) =>
-    request('/canteen/collect', { method: 'POST', token, body: { student_id, amount, payment_method, notes } }),
+    request(staffPath('/canteen/collect'), { method: 'POST', token, body: { student_id, amount, payment_method, notes } }),
+
+  // Staff — how much of this teacher's work has not reached the school yet.
+  // Only meaningful over the internet; on the desktop a write has landed by
+  // the time the request returns.
+  staffPending: (token) =>
+    MODE === 'cloud' ? request('/staff/pending', { token }) : Promise.resolve({ ok: true, pending: 0 }),
 };
 
 export function money(n) {

@@ -1,11 +1,21 @@
 import React from 'react';
-import { Tabs } from 'expo-router';
+import { Tabs, Redirect } from 'expo-router';
 import { Text } from 'react-native';
 import { colors } from '../../src/theme';
+import { useAuth } from '../../src/auth';
+import { Loading } from '../../src/ui';
 
 function Icon({ emoji }) { return <Text style={{ fontSize: 20 }}>{emoji}</Text>; }
 
 export default function StaffLayout() {
+  const { ready, token, profile } = useAuth();
+
+  // See the note in ../parent/_layout.jsx: on the web a reload or a bookmarked
+  // link mounts a screen before the stored session has been read back.
+  if (!ready) return <Loading label="Starting…" />;
+  if (!token || !profile) return <Redirect href="/" />;
+  if (profile.role === 'parent') return <Redirect href="/parent" />;
+
   return (
     <Tabs screenOptions={{
       headerStyle: { backgroundColor: colors.primary },

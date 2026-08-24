@@ -50,9 +50,30 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const base = 'http://127.0.0.1:' + server.address().port;
 
-  // Site is served
-  let r = await new Promise(res => http.get(base + '/', x => { let d=''; x.on('data',c=>d+=c); x.on('end',()=>res({status:x.statusCode,body:d})); }));
-  ck('website served at /', r.status === 200 && /Student Portal/.test(r.body));
+  // Site is served. `/legacy` is always the hand-written parent page; `/`
+  // is that too, unless a web-app build has been installed under cloud/webapp,
+  // in which case the app takes the root (see src/webapp.js).
+  const get = (p) => new Promise(res => http.get(base + p, x => { let d=''; x.on('data',c=>d+=c); x.on('end',()=>res({status:x.statusCode,body:d,headers:x.headers})); }));
+  let r = await get('/legacy');
+  ck('legacy portal served at /legacy', r.status === 200 && /Student Portal/.test(r.body));
+
+  const webapp = require('../src/webapp');
+  r = await get('/');
+  ck('root serves a page', r.status === 200 && /<!DOCTYPE html>/i.test(r.body));
+  if (webapp.isAvailable()) {
+    ck('root serves the web app when one is installed', /Nickland Edusoft/.test(r.body) && !/Student Portal/.test(r.body));
+    // Client-side routes have no file of their own — they must all get the shell.
+    r = await get('/parent/child/1');
+    ck('client-side route falls back to the shell', r.status === 200 && /<div id="root">/.test(r.body));
+    // Nothing above may shadow the API.
+    r = await get('/api/v1/portal/nope');
+    ck('API still answers under the web app', r.status === 401 || r.status === 404);
+    // A traversal attempt must not escape the build directory.
+    r = await get('/../../package.json');
+    ck('path traversal is refused', !/\"name\"\s*:\s*\"nickland-edusoft\"/.test(r.body));
+  } else {
+    ck('root falls back to the legacy portal with no build installed', /Student Portal/.test(r.body));
+  }
 
   r = await req(base, 'GET', '/api/v1/portal/schools');
   ck('schools list includes tenant', r.json.ok && r.json.schools.some(s => s.school_id === school_id));

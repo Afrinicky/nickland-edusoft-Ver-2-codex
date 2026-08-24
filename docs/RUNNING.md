@@ -104,7 +104,23 @@ timetable, messages) and parents their ward's info — all over the local networ
    let a parent self-register in the app if their phone/email matches a
    student's guardian contact on file.
 
-### 2B. Run the mobile app
+### 2B. The fastest option — no install at all
+
+The desktop serves the mobile app to browsers on the same address. Once the
+server is running, a teacher or parent on the school Wi‑Fi opens
+`http://192.168.1.20:4747` in Chrome and signs in. Same screens as the phone
+app, nothing to install, and no internet needed. Settings → Mobile App says so
+when the build is present.
+
+Installers built by CI carry it. Building from source, produce it once:
+
+```bash
+npm run build:web      # from the repo root
+```
+
+Full guide: [`WEB_APP.md`](WEB_APP.md).
+
+### 2C. Run the mobile app
 
 The mobile app is a React Native / **Expo** project in `mobile/`.
 
@@ -125,7 +141,7 @@ phone is on the **same Wi‑Fi** as the desktop, then scan the QR.
 - iOS: `eas build -p ios` → requires a paid **Apple Developer account**
   ($99/yr) to install on devices / TestFlight / the App Store.
 
-### 2C. Connect and sign in
+### 2D. Connect and sign in
 
 1. Open the app → **Connect** → **School Wi‑Fi** tab → enter the host address
    from step 2A → **Connect**.
@@ -145,9 +161,13 @@ you the public website. It's optional — the school runs fine without it — bu
 it's the "reach-anywhere" half of the vision.
 
 There are two identical implementations; pick one:
-- **`cloud/`** — Node (no framework). Simple to run anywhere Node runs.
-- **`cloud-python/`** — Python/FastAPI (same API), with `Dockerfile`,
-  `render.yaml`, and `fly.toml` for one-click-ish deploys.
+- **`cloud-python/`** — Python/FastAPI, with `Dockerfile`, `render.yaml` and
+  `fly.toml` for one-click-ish deploys. **This is the one to deploy.**
+- **`cloud/`** — Node (no framework), kept as the reference implementation.
+
+The shape in production: **Vercel** serves the web app, **Render** runs this
+service, **Neon** holds the data. [`WEB_APP.md`](WEB_APP.md) walks through all
+three; the rest of this part is the service on its own.
 
 ### 3A. Get a database and a host
 
@@ -171,8 +191,14 @@ DATABASE_URL=postgres://…  PORT=8080  npm start
 `fly.toml`; set `DATABASE_URL` as an environment variable on the platform, and
 apply `cloud-python/schema.sql` once.
 
-You now have a URL like `https://portal.yourschool.com`. Visiting it in a browser
-serves the **parent website** (the student portal).
+You now have a URL like `https://portal.yourschool.com`. That is the **API**;
+`/legacy` on it serves the old hand-written parent page, and `/` serves the web
+app if one has been installed alongside it.
+
+The web app is normally deployed separately, on **Vercel** — import the repo
+(`vercel.json` at the root configures the build) and set one environment
+variable, `EXPO_PUBLIC_PORTAL_URL`, to this service's URL. Parents then open the
+Vercel address. See [`WEB_APP.md`](WEB_APP.md).
 
 ### 3C. Register each school (tenant)
 
@@ -193,10 +219,12 @@ On the desktop → **Settings → Cloud Sync**:
 
 ### 3E. Parents use it
 
-- **Web:** parents open the portal URL, pick the school, and sign in with the
-  phone/email + password the school set (or they registered on the LAN app).
-  They see fees, receipts, attendance, results, timetable, homework, and school
-  messages.
+- **Web:** parents open the web app's address, pick the school if the portal
+  hosts more than one, and sign in with the phone/email + password the school
+  set (or that they registered with on the LAN app). They see fees, receipts,
+  attendance, results, timetable, homework, and school messages — and on a
+  phone they can add it to the home screen, where it behaves like an installed
+  app.
 - **Mobile over the internet:** in the app → **Connect** → **Over the internet**
   tab → enter the portal URL → pick the school → sign in. (In this mode the app
   is parent-only and read-focused; staff features and payments stay on the LAN.)
@@ -226,6 +254,7 @@ Configure these in **Settings** on the desktop when you want them:
 | For… | You need | Cost |
 |------|----------|------|
 | Building the Windows installer | GitHub account | Free |
+| Hosting the web app | Vercel (or any static host) | Free tier exists |
 | Testing the mobile app | Expo Go app on a phone | Free |
 | A real Android app | Expo account (EAS) | Free tier works |
 | A real iOS app | Apple Developer account | $99/yr |
@@ -243,9 +272,13 @@ Configure these in **Settings** on the desktop when you want them:
 1. [ ] Build + install the **desktop** app; complete first-run admin setup.
 2. [ ] Configure school identity, terms, classes, subjects, grading, users.
 3. [ ] (If teachers/parents want phone access on-site) start the **Mobile App**
-       server; provision parents; run the mobile app and connect over Wi‑Fi.
-4. [ ] (If parents need internet access) deploy the **cloud portal**, register
-       the school, and enable **Cloud Sync** on the desktop.
+       server; provision parents; then either point a browser at the address it
+       shows — nothing to install — or run the mobile app and connect over Wi‑Fi.
+4. [ ] (If anyone needs access off-site — parents at home, teachers in the
+       evening) deploy the **cloud service**, register the school, and enable
+       **Cloud Sync** on the desktop. Run **Push now / Re-send everything** once
+       so staff accounts and class rosters are projected; until you do, nobody
+       can sign in online.
 5. [ ] (Optional) turn on **payments**, **SMS/email**, and **backups**.
 6. [ ] Build a real mobile app with **EAS** and distribute it.
 
@@ -255,19 +288,27 @@ Configure these in **Settings** on the desktop when you want them:
 
 Be aware of these before going live:
 
-- **Mobile/desktop UI hasn't been run in this workspace.** The desktop pages and
-  mobile screens (including the recent timetable, messaging, homework, and
-  cloud-mode work) are written and the backend is unit-tested, but the React /
-  React Native UI needs a real `npm run dev` and `expo start` pass to eyeball and
-  shake out any runtime issues. **Do a full click-through before relying on it.**
+- **The desktop UI hasn't been run in this workspace.** The desktop pages are
+  written and the backend is unit-tested, but the React UI needs a real
+  `npm run dev` pass to eyeball. **Do a full click-through before relying on
+  it.** The mobile screens *have* now been driven in a real browser through the
+  web build — sign-in, children, a child's fees/attendance/results/receipts,
+  and a reload landing back on the same screen — but not yet on a real Android
+  device.
 - **Parent replies over the internet** aren't wired yet. Messaging is fully
-  two-way on the LAN; over the cloud portal parents can *read* school messages
-  (and are reachable by the SMS mirror), but replying from the web/cloud is a
-  planned follow-up.
+  two-way on the LAN; over the cloud parents can *read* school messages (and are
+  reachable by the SMS mirror), but replying online is a planned follow-up.
 - **Online payments run through the LAN/host or a tunnel**, not the hosted cloud
   portal directly.
 - **Push notifications** (phone alerts) and an **offline write queue** for the
-  mobile app are not built.
+  mobile app are not built. The web build caches its own shell so it opens
+  offline, but never caches school data.
+- **Teachers can work over the internet with the school's computer off** —
+  register, scores, canteen, homework. Their work is saved online at once and
+  reaches the school when it next syncs. Two things still need the school's own
+  system, and say so: **taking a fee payment** (receipts are numbered there) and
+  **marking homework**. A tunnel to the desktop covers those from anywhere, at
+  the cost of the machine having to stay on. See [`WEB_APP.md`](WEB_APP.md).
 - **Multi-school SaaS control plane** (self-service onboarding, billing) isn't
   built — you provision each school with the `create-school` script.
 - Modules a mature SMS might add later: **library circulation, transport, online
@@ -282,6 +323,8 @@ Be aware of these before going live:
 - [`../GITHUB_BUILD_GUIDE.md`](../GITHUB_BUILD_GUIDE.md) — building the installer.
 - [`INSTALLATION.md`](INSTALLATION.md) — installation notes.
 - [`USER_GUIDE.md`](USER_GUIDE.md) — day-to-day desktop usage.
+- [`WEB_APP.md`](WEB_APP.md) — the web app: building, hosting, offline, install.
+- [`MOBILE_BUILD.md`](MOBILE_BUILD.md) — turning `mobile/` into an APK.
 - [`MOBILE_API.md`](MOBILE_API.md) — the mobile/cloud API contract + connection modes.
 - [`CLOUD_SYNC.md`](CLOUD_SYNC.md) — the two-database sync design.
 - [`GAP_ANALYSIS.md`](GAP_ANALYSIS.md) — current gaps, priorities, and what's done.

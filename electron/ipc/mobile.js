@@ -7,6 +7,7 @@
 
 const os = require('os');
 const { createApiServer } = require('../server/api');
+const webapp = require('../server/webapp');
 const tokens = require('../server/tokens');
 const parents = require('../server/parents');
 const { getSetting, setSetting } = require('../utils/idgen');
@@ -96,6 +97,10 @@ module.exports = function registerMobileHandlers(ipcMain, db) {
     error: serverError,
     device_count: db.prepare('SELECT COUNT(*) c FROM api_tokens WHERE revoked = 0').get().c,
     parent_count: db.prepare('SELECT COUNT(*) c FROM parents').get().c,
+    // Whether staff and parents can also just open the address in a browser,
+    // rather than installing the app. Settings → Mobile App says so either way,
+    // because "type this into Chrome" is the fastest way to get a teacher on.
+    web_app: webapp.isAvailable(),
   }));
 
   ipcMain.handle('mobile:start', async () => {

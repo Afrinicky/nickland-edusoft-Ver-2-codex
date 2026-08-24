@@ -1,10 +1,21 @@
-# Nickland Edusoft — tests + Windows .exe builder
+# Nickland Edusoft — tests, and the three things a school downloads
 #
 # The `test` job runs on every push and pull request, on any branch — it needs
 # no native build and no dependency install, so it is fast and always runs.
-# The Windows installer is only produced for main/master and v* tags, and only
-# after the tests pass, so a broken build can never ship as an installer.
-name: Build Windows Installer
+# `web` builds the browser version of the mobile app on every branch too, so a
+# screen that will not bundle is caught on the pull request rather than at
+# deploy time.
+#
+# The two installers are produced only for main/master and v* tags, and only
+# after both pass, so a broken build can never ship:
+#
+#   build-windows  the desktop .exe — which packages the web build, so a school
+#                  desktop serves the app to phones and laptops on its own Wi-Fi
+#                  with no internet at all
+#   build-android  the .apk teachers and parents install on a phone
+#
+# A v* tag attaches all three to the GitHub release.
+name: Build & Release
 
 on:
   push:
@@ -41,11 +52,20 @@ jobs:
       - name: Desktop regression tests
         run: node test/regressions.js
 
+      - name: Web app serving (desktop host)
+        run: node test/webapp.js
+
       - name: Cloud sync end-to-end (Node cloud + real desktop client)
         run: node cloud/test/e2e.js
 
       - name: Parent portal (Node cloud)
         run: node cloud/test/portal.js
+
+      # The teacher-off-LAN round trip: the desktop projects itself, a teacher
+      # signs into the cloud with the desktop offline, marks a register, and
+      # the desktop applies it when it comes back — exactly once.
+      - name: Staff over the internet (Node cloud + real desktop client)
+        run: node cloud/test/staff.js
 
       - name: Install Python cloud dependencies
         run: pip install -r cloud-python/requirements.txt httpx
@@ -54,13 +74,222 @@ jobs:
         run: python3 tests/test_portal.py
         working-directory: cloud-python
 
+      - name: Staff surface (Python cloud + cross-language bcrypt)
+        run: python3 tests/test_staff.py
+        working-directory: cloud-python
+
       - name: Cross-language end-to-end (Node client → Python cloud)
         run: bash tests/cross_lang.sh
         working-directory: cloud-python
 
+  web:
+    name: Web app
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install mobile dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: mobile
+
+      # EXPO_PUBLIC_PORTAL_URL is baked into the bundle. Set it as a repository
+      # variable (Settings → Secrets and variables → Actions → Variables) to the
+      # public API address, so a build hosted apart from its API — the Vercel
+      # deploy talking to Render — knows where to look. Left unset, the app asks
+      # its own origin, which is what the desktop-served copy needs.
+      - name: Build the web app
+        run: node scripts/build-web.mjs --only-build
+        env:
+          EXPO_PUBLIC_PORTAL_URL: ${{ vars.EXPO_PUBLIC_PORTAL_URL }}
+
+      - name: Upload the web app
+        uses: actions/upload-artifact@v4
+        with:
+          name: nickland-edusoft-web
+          path: mobile/dist-web
+          retention-days: 7
+          if-no-files-found: error
+
+      # A single file is what a school actually downloads and unzips onto a
+      # server; the artifact above is what the Windows job consumes.
+      - name: Zip the web app for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cd mobile/dist-web && zip -qr ../../nickland-edusoft-web.zip .
+
+      - name: Attach the web app to the release (only on tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nickland-edusoft-web.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-android:
+    name: Android APK
+    needs: [test, web]
+    # Same gate as the Windows installer: release branches and version tags.
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # React Native 0.74 / Gradle 8 want JDK 17. The runner already has the
+      # Android SDK; there is nothing to install for it.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('mobile/package-lock.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # expo-modules-core compiles native code, so the NDK and CMake are not
+      # optional. The versions are the ones React Native 0.74 pins in
+      # android/build.gradle; installing them explicitly gives a clear failure
+      # if that ever drifts, rather than a CMake error thirty tasks deep.
+      - name: Install the NDK and CMake
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;26.1.10909125" "cmake;3.22.1" "build-tools;34.0.0" "platforms;android-34" > /dev/null
+
+      - name: Install mobile dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: mobile
+
+      # android/ is generated from app.json and git-ignored, so it has to be
+      # regenerated here — that is what keeps app.json the single source of
+      # truth for icon, splash, permissions, package name, version and the ABI
+      # filter. It also means the JS bundling task can never be considered
+      # up to date, which matters: EXPO_PUBLIC_PORTAL_URL is compiled into the
+      # bundle and Gradle does not treat an environment variable as an input.
+      - name: Generate the native project
+        run: npx expo prebuild --platform android --clean
+        working-directory: mobile
+
+      # EXPO_PUBLIC_PORTAL_URL is compiled into the JS bundle, so it must be set
+      # here too: it is the address the app falls back to when it is not on the
+      # school Wi-Fi, and without it a parent has to type the portal address by
+      # hand. Set it as a repository variable (Settings → Secrets and variables
+      # → Actions → Variables).
+      - name: Build the APK
+        run: ./gradlew assembleRelease --no-daemon
+        working-directory: mobile/android
+        env:
+          EXPO_PUBLIC_PORTAL_URL: ${{ vars.EXPO_PUBLIC_PORTAL_URL }}
+
+      # Is there a real signing key configured? Decided once, in one place —
+      # a secret must never be interpolated into a shell script, and this keeps
+      # the later steps reading cleanly.
+      - name: Check for a release keystore
+        id: keystore
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
+          else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+      # Gradle signs a release build with the template's debug key, whose
+      # private key is public knowledge — fine for trying the app, not for one
+      # a school runs. With a real keystore in secrets we re-sign here rather
+      # than patch the generated Gradle files, which the next prebuild would
+      # throw away. apksigner replaces the existing signature and preserves
+      # the alignment Gradle already applied.
+      #
+      # To set it up, once and once only:
+      #   keytool -genkeypair -v -keystore release.keystore -alias edusoft \
+      #           -keyalg RSA -keysize 2048 -validity 10000
+      #   base64 -w0 release.keystore     → secret ANDROID_KEYSTORE_BASE64
+      # plus ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
+      # Then keep that keystore with the school's other irreplaceable files:
+      # lose it and no future update can install over the copies already on
+      # people's phones — every one has to be uninstalled first.
+      - name: Sign the APK with the release key
+        if: steps.keystore.outputs.present == 'true'
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          APK=mobile/android/app/build/outputs/apk/release/app-release.apk
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-pass "pass:$STORE_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass "pass:$KEY_PASSWORD" \
+            "$APK"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
+          rm -f "$RUNNER_TEMP/release.keystore"
+
+      # The version people see, so the download is not called app-release.apk.
+      # A build signed with the public debug key says so in its filename —
+      # nobody should hand that one to a school by accident.
+      - name: Name the APK
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./mobile/app.json').expo.version")
+          if [ "${{ steps.keystore.outputs.present }}" = "true" ]; then SUFFIX=""
+          else SUFFIX="-testing-key"; fi
+          mkdir -p dist-apk
+          cp mobile/android/app/build/outputs/apk/release/app-release.apk \
+             "dist-apk/Nickland-Edusoft-${VERSION}${SUFFIX}.apk"
+          ls -lh dist-apk
+
+      - name: Upload the APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nickland-edusoft-android
+          path: dist-apk/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attach the APK to the release (only on tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-apk/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build-windows:
     name: Windows installer
-    needs: test
+    needs: [test, web]
     # Only build the installer for the release branches and version tags.
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: windows-latest
@@ -83,6 +312,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # Packaged into the installer, so the desktop can serve the app to phones
+      # and laptops on the school Wi-Fi. electron-builder ships everything under
+      # resources/, and the host looks for resources/webapp.
+      - name: Fetch the web app build
+        uses: actions/download-artifact@v4
+        with:
+          name: nickland-edusoft-web
+          path: resources/webapp
 
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3

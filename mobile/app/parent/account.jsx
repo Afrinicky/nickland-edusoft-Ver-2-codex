@@ -6,7 +6,7 @@ import { useAuth } from '../../src/auth';
 import { Screen, Card, H2, Muted, Button } from '../../src/ui';
 
 export default function Account() {
-  const { profile, host, mode, signOut } = useAuth();
+  const { profile, host, mode, signOut, forgetConnection } = useAuth();
   const p = profile?.parent || {};
   const where = mode === 'cloud'
     ? `${profile?.school?.name || 'School portal'} (internet)`
@@ -22,6 +22,7 @@ export default function Account() {
         <Muted>Update your contact details or documents from the school's student portal on the web, or ask the school office.</Muted>
       </Card>
       <Button title="Sign out" variant="danger" onPress={async () => { await signOut(); router.replace('/login'); }} />
+      <Button title="Change school" variant="ghost" onPress={async () => { await forgetConnection(); router.replace('/connect'); }} />
     </Screen>
   );
 }

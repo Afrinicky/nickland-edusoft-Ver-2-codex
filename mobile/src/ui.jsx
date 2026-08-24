@@ -1,11 +1,23 @@
 // Small shared UI primitives so screens stay short and consistent.
 import React from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView, Platform } from 'react-native';
 import { colors, spacing, radius } from './theme';
+
+// These screens are laid out for a phone. Left alone in a desktop browser they
+// stretch a fee row across 1900 pixels, with the amount somewhere near Accra
+// and the label near Kumasi. Capping the column keeps a teacher's laptop
+// reading like the phone it was designed for.
+const WEB_MAX_WIDTH = 640;
+const webColumn = Platform.OS === 'web'
+  ? { maxWidth: WEB_MAX_WIDTH, width: '100%', marginHorizontal: 'auto' }
+  : null;
 
 export function Screen({ children, scroll = true, refreshControl }) {
   const Body = scroll ? ScrollView : View;
-  const props = scroll ? { contentContainerStyle: styles.screenContent, refreshControl } : { style: styles.screenContent };
+  const content = [styles.screenContent, webColumn];
+  const props = scroll
+    ? { contentContainerStyle: content, refreshControl }
+    : { style: content };
   return <Body style={styles.screen} {...props}>{children}</Body>;
 }
 

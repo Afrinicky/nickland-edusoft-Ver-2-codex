@@ -41,13 +41,17 @@
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
       ]
     },
     "web": {
       "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/favicon.png"
+      "output": "single",
+      "favicon": "./assets/favicon.png",
+      "lang": "en",
+      "themeColor": "#1B3A6B",
+      "description": "Fees, results, attendance and school notices for parents, teachers and staff — Nickland Edusoft."
     },
     "plugins": [
       "expo-router",
@@ -59,7 +63,8 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "./plugins/with-abi-filters"
     ],
     "experiments": {
       "typedRoutes": false

@@ -98,26 +98,99 @@ Every response is `{ ok: boolean, ... }`. Errors use HTTP status codes
 ## Connection modes (the client speaks two APIs, one build)
 
 The Expo client connects one of two ways, chosen on the **Connect** screen and
-persisted in secure storage (`mode` = `host` | `cloud`):
+persisted (`mode` = `host` | `cloud`) — in the device keychain on a phone, in
+`localStorage` in a browser, since there is no keychain there.
 
 | Mode | Reaches | Base + routes | Audience | Writes |
 |------|---------|---------------|----------|--------|
-| **host** (School Wi-Fi / tunnel) | the desktop host | `http://<ip>:4747/api/v1` — `/auth/*`, `/parent/*`, staff routes | parents **and** staff | full: attendance, scores, canteen, payments |
-| **cloud** (Over the internet) | the hosted portal | `https://<portal>/api/v1` — `/portal/*` | parents only | read + profile/notices (thin cloud) |
+| **host** (the school itself — its Wi-Fi address or a tunnel) | the desktop | `http(s)://<address>/api/v1` — `/auth/*`, `/parent/*`, staff routes | parents **and** staff | everything, immediately: attendance, scores, canteen, homework marking, fee payments |
+| **cloud** (Online) | the hosted service | `https://<portal>/api/v1` — `/portal/*` for parents, `/staff/*` for teachers | parents **and** staff | parents read; teachers queue attendance, scores, canteen and homework for the desktop to apply |
 
-In cloud mode the client picks a school from `GET /portal/schools`, signs in via
-`POST /portal/login` (`{ school_id, identifier, password }`), and reads
-`GET /portal/children|receipts|announcements|me`. The API client
-(`mobile/src/api.js`) **normalises** the cloud `student_snapshot` (which already
-carries fees, canteen, attendance and the academic report) into the same shapes
-the host's `/parent/*` replies use, so the parent screens are identical across
-modes. Staff and payments are intentionally host-only — the cloud is a read
-model, so those controls are hidden when connected over the internet.
+In cloud mode the client picks a school from `GET /portal/schools` (or from
+`GET /info`), then signs in as a parent via `POST /portal/login`
+(`{ school_id, identifier, password }`) or as a teacher via
+`POST /staff/login` (`{ school_id, username, password }`).
+
+The API client (`mobile/src/api.js`) **normalises** cloud replies into the same
+shapes the host's routes return, so no screen knows which mode it is in. A
+staff route that is `/attendance` on the desktop is `/staff/attendance` on the
+cloud, and one helper picks between them.
+
+Host-only, and they say so rather than failing: **taking a fee payment** (it
+writes a receipt against the school's own numbering) and **marking homework**
+(it needs an assignment id that only exists once the desktop has created the
+assignment).
+
+### Discovery: one request, not a guess
+
+The **web build** is served by the very thing it talks to — the desktop host at
+`http://<ip>:4747`, or the portal — so it does not ask for an address. It calls
+`GET /api/v1/info` on its own origin and reads the answer:
+
+| Reply | Meaning |
+|---|---|
+| `{ ok, school: {…}, parent_self_register, … }` | a desktop host → **host** mode |
+| `{ ok, mode: 'cloud', portal: true, schools: […] }` | the cloud portal → **cloud** mode |
+| anything else, or unreachable | no API here → fall back to `EXPO_PUBLIC_PORTAL_URL`, then the Connect screen |
+
+The portal answers `/info` publicly for exactly this reason: one question
+instead of probing endpoint by endpoint. A portal hosting one school is adopted
+silently; several are offered as a picker.
+
+A build hosted **apart** from its API (the Vercel deploy talking to Render) has
+no API on its own origin, so `EXPO_PUBLIC_PORTAL_URL` is compiled in at build
+time and used instead. See [`WEB_APP.md`](WEB_APP.md).
+
+### Staff over the internet
+
+`/api/v1/staff/*` is what lets a teacher work with the school's desktop
+switched off. Reads come from projections the desktop pushes; writes are queued
+for it to apply.
+
+| | Endpoint | Notes |
+|---|---|---|
+| Sign in | `POST /staff/login` | `{ school_id, username, password }` → `{ token, user }`. Verifies the **bcrypt** hash the desktop projects — the same one it stores, so no teacher is re-enrolled |
+| Profile | `GET /staff/me` | user, designation, `is_admin`, the resolved permission map |
+| Dashboard | `GET /staff/dashboard` | the four numbers; fee figures blanked for a teacher without `fees.view` |
+| Roster | `GET /staff/students[?classId=]` | |
+| Debtors | `GET /staff/debtors` | needs `fees.view` |
+| Classes | `GET /staff/classes` | |
+| Register | `GET /staff/attendance?classId=&date=` · `POST /staff/attendance` | |
+| Scores | `GET /staff/scores/subjects?classId=` · `GET /staff/scores?classId=&subjectId=` · `POST /staff/scores` | |
+| Canteen | `GET /staff/canteen/student/:id` · `POST /staff/canteen/collect` | |
+| Timetable | `GET /staff/timetable/mine` | |
+| Homework | `GET /staff/homework?classId=` · `POST /staff/homework` | setting only; marking is host-only |
+| Still waiting | `GET /staff/pending` | how much of this teacher's work the school has not taken yet |
+
+Every write replies `{ ok: true, queued: true }`. Nothing is invented in the
+reply — a canteen collection returns `receipt_number: null`, because the
+desktop issues receipt numbers and putting a made-up one on a parent's phone
+would not match the school's books.
+
+**A `GET` after a write shows the write.** Queued-but-unapplied changes are
+merged over the projected register or score sheet and flagged `pending: true`
+per student. Without that, marking a register and reloading would show a blank
+sheet and the teacher would mark it twice.
+
+Permissions are enforced twice: here, from the projection, and again on the
+desktop against the live account before anything is written. Tokens do not
+cross roles — a staff token carries `role: 'staff'` and is refused by
+`/portal/*`; a parent token has no role and is refused by `/staff/*`.
+
+### The host serves the app as well as the API
+
+Anything that is not `/api/*` on the desktop host is the **web app**: the
+browser build of these same screens, on the same origin as the API. That is
+deliberate — a browser on an HTTPS page cannot call a plain-HTTP LAN address at
+all (mixed content), so a portal-hosted copy could never reach a desktop on the
+school Wi-Fi, and a host-served one has no CORS or mixed-content problem to
+solve. GET and HEAD only; the API keeps priority on every path.
 
 ## Building the React Native (Expo) client
 1. **Connect screen:** choose **School Wi-Fi** (enter/scan the host URL, then
    `GET /info` to confirm and brand) or **Over the internet** (enter the portal
-   URL, then `GET /portal/schools` to pick the school).
+   URL, then `GET /portal/schools` to pick the school). Skipped entirely on the
+   web, where the connection is discovered from the serving origin (above).
 2. **Auth:** parent vs staff login; store the token in secure storage.
 3. **Parent tabs:** Children → per-child fees/canteen/attendance/reports,
    Notifications, Pay (initiates a payment the host records + receipts).

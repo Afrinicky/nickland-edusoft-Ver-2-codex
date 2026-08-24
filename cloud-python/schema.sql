@@ -9,6 +9,14 @@ CREATE TABLE IF NOT EXISTS schools (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_schools_key ON schools(key_hash);
 
+-- How far this school's desktop has consumed the change queue. Set on every
+-- pull, and the only way the service can tell a teacher's write that is still
+-- waiting from one the school has already applied — which is what lets a
+-- teacher who marked a register last night see their marks this morning
+-- rather than a blank sheet. Added after the first release, so it is an
+-- ALTER for existing databases rather than part of the CREATE above.
+ALTER TABLE schools ADD COLUMN IF NOT EXISTS applied_cursor BIGINT NOT NULL DEFAULT 0;
+
 -- Thin read model: the latest projection per entity, overwrite-on-sync.
 CREATE TABLE IF NOT EXISTS snapshots (
   school_id   TEXT NOT NULL REFERENCES schools(school_id) ON DELETE CASCADE,
@@ -32,6 +40,8 @@ CREATE TABLE IF NOT EXISTS cloud_changes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_changes_school ON cloud_changes(school_id, id);
+-- Serving a teacher their own pending work filters the queue by kind.
+CREATE INDEX IF NOT EXISTS idx_changes_pending ON cloud_changes(school_id, type, id);
 
 -- Row-level security is recommended in production so a leaked query can't cross
 -- tenants; the app also always scopes by school_id.

@@ -63,6 +63,7 @@ export default function MobileApp() {
   const running = !!status?.running;
   const port = status?.port || 4747;
   const urls = (status?.addresses || []).map(a => `http://${a}:${port}`);
+  const webApp = !!status?.web_app;
 
   return (
     <div className="mobile-app-settings">
@@ -101,10 +102,20 @@ export default function MobileApp() {
 
         {running && urls.length > 0 && (
           <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: 'var(--surface-2)' }}>
-            <div className="text-sm text-muted">Point the mobile app at one of these addresses:</div>
+            <div className="text-sm text-muted">
+              {webApp
+                ? 'Point the mobile app at one of these addresses — or open it in any browser on the school Wi-Fi, no install needed:'
+                : 'Point the mobile app at one of these addresses:'}
+            </div>
             {urls.map(u => (
               <div key={u} style={{ fontFamily: 'monospace', fontWeight: 600, marginTop: 4 }}>{u}</div>
             ))}
+            {webApp && (
+              <div className="text-sm text-muted" style={{ marginTop: 8 }}>
+                Staff and parents on the school Wi-Fi can use it straight from a browser. It works
+                with the internet down; the desktop serves it.
+              </div>
+            )}
           </div>
         )}
 

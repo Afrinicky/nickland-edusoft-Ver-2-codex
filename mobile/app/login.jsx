@@ -3,11 +3,13 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '../src/auth';
-import { api } from '../src/api';
+import { api, setRole } from '../src/api';
 import { Screen, Card, H1, Muted, Field, Button, ErrorNote } from '../src/ui';
 import { colors } from '../src/theme';
 
-const DEVICE = Platform.OS + ' app';
+// Shown in the desktop's paired-devices list, so it should read like the
+// thing the person is actually holding.
+const DEVICE = Platform.OS === 'web' ? 'web browser' : Platform.OS + ' app';
 
 export default function Login() {
   const { host, mode: conn, signIn } = useAuth();
@@ -30,6 +32,11 @@ export default function Login() {
       } else {
         res = await api.parentLogin(form.identifier, form.password, DEVICE);
       }
+      // Over the internet, staff and parents have separate `me` endpoints and
+      // the token does not say which it is. Set the role from the sign-in we
+      // just did, before asking — otherwise a teacher's token is presented to
+      // the parent endpoint and comes back 401, which reads as a bad password.
+      setRole(mode === 'staff' ? 'staff' : 'parent');
       const me = await api.me(res.token);
       await signIn(res.token, me);
       router.replace(me.role === 'parent' ? '/parent' : '/staff');
@@ -45,13 +52,18 @@ export default function Login() {
         <Muted>{host}</Muted>
       </View>
 
-      {/* Staff features run on the school desktop, not the hosted portal, so
-          cloud connections are parent-only. */}
-      {!isCloud && (
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Tab label="Parent" active={mode === 'parent'} onPress={() => { setMode('parent'); setError(null); }} />
-          <Tab label="Staff / Teacher" active={mode === 'staff'} onPress={() => { setMode('staff'); setError(null); }} />
-        </View>
+      {/* Both roles sign in either way now. Over the internet a teacher gets
+          the school's read model and their writes are queued for the desktop,
+          so the tabs are the same whichever connection this is. */}
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Tab label="Parent" active={mode === 'parent'} onPress={() => { setMode('parent'); setError(null); }} />
+        <Tab label="Staff / Teacher" active={mode === 'staff'} onPress={() => { setMode('staff'); setError(null); }} />
+      </View>
+      {isCloud && mode === 'staff' && (
+        <Muted style={{ textAlign: 'center', marginTop: 4 }}>
+          Signing in over the internet. Registers, scores, canteen and homework all work;
+          they reach the school when its computer next syncs.
+        </Muted>
       )}
 
       <Card>
@@ -85,7 +97,7 @@ export default function Login() {
         )}
         {mode === 'parent' && isCloud && (
           <Muted style={{ marginTop: 12, textAlign: 'center' }}>
-            First time? Register in the school's mobile app on the school Wi-Fi, then sign in here.
+            First time? Register once against your school's own address, then sign in here.
           </Muted>
         )}
       </Card>

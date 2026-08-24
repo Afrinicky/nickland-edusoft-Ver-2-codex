@@ -1,32 +1,21 @@
 // Auth + host context. Persists the connection (host URL + mode + school) and
-// bearer token in secure storage and exposes the signed-in profile
-// (role: parent | staff).
+// bearer token, and exposes the signed-in profile (role: parent | staff).
 //
 // Two connection modes:
 //   • host  — a school desktop over LAN/tunnel (full features).
 //   • cloud — the hosted portal over the internet (parent-only, read + notices).
+//
+// If nothing is saved yet the connection is discovered rather than asked for:
+// a web build is usually served by the very thing it talks to, and a phone
+// build can carry a default portal baked in (see src/config.js).
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import * as SecureStore from 'expo-secure-store';
-import { setConnection, api } from './api';
+import { setConnection, setRole, api } from './api';
+import { storage as store } from './storage';
+import { discoverConnection } from './origin';
+import { DEFAULT_SCHOOL_ID } from './config';
 
 const AuthCtx = createContext(null);
 export function useAuth() { return useContext(AuthCtx); }
-
-// Secure storage, wrapped so a failure is never fatal. expo-secure-store is a
-// native module: it is absent on the web build, and on a handful of Android
-// devices with a damaged keystore every call throws. Signing in again is a far
-// better outcome than an app that will not start.
-const store = {
-  async get(key) {
-    try { return await SecureStore.getItemAsync(key); } catch (_) { return null; }
-  },
-  async set(key, value) {
-    try { await SecureStore.setItemAsync(key, value); return true; } catch (_) { return false; }
-  },
-  async del(key) {
-    try { await SecureStore.deleteItemAsync(key); } catch (_) {}
-  },
-};
 
 export function AuthProvider({ children }) {
   const [ready, setReady] = useState(false);
@@ -35,18 +24,53 @@ export function AuthProvider({ children }) {
   const [schoolId, setSchoolId] = useState(null);
   const [token, setToken] = useState(null);
   const [profile, setProfile] = useState(null);  // { role, ... } from /me
+  // Set on the web when the serving origin is a cloud portal hosting more than
+  // one school: the connection is known, the school still has to be picked.
+  const [detectedSchools, setDetectedSchools] = useState(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const h = await store.get('host');
-        const m = (await store.get('mode')) || 'host';
-        const sid = await store.get('schoolId');
-        const t = await store.get('token');
+        let h = await store.get('host');
+        let m = (await store.get('mode')) || 'host';
+        let sid = await store.get('schoolId');
+
+        // Nothing saved: work out where we are before asking anyone to type an
+        // address. In a browser that is the serving origin; on the phone it is
+        // the portal baked in at build time. A desktop host means full features
+        // on the school Wi-Fi; a portal means parent mode, and a single school
+        // can be adopted without a prompt.
+        if (!h) {
+          const found = await discoverConnection();
+          if (found && found.mode === 'host') {
+            h = found.baseUrl; m = 'host'; sid = null;
+            await persistConnection(h, m, sid);
+          } else if (found && found.mode === 'cloud') {
+            const pinned = DEFAULT_SCHOOL_ID
+              ? found.schools.find(s => String(s.school_id) === DEFAULT_SCHOOL_ID)
+              : null;
+            const only = pinned || (found.schools.length === 1 ? found.schools[0] : null);
+            if (only) {
+              h = found.baseUrl; m = 'cloud'; sid = String(only.school_id);
+              await persistConnection(h, m, sid);
+            } else {
+              // Keep the address for the Connect screen's picker, but do not
+              // treat it as connected — no school has been chosen yet.
+              setDetectedSchools({ baseUrl: found.baseUrl, schools: found.schools });
+            }
+          }
+        }
+
+        // The role belongs to the saved session, not the connection: over the
+        // internet a teacher and a parent use different endpoints, and the
+        // bearer token does not say which.
+        const savedRole = h ? await store.get('role') : null;
         if (h) {
           setHost(h); setMode(m); setSchoolId(sid);
-          setConnection({ baseUrl: h, mode: m, schoolId: sid });
+          setConnection({ baseUrl: h, mode: m, schoolId: sid, role: savedRole });
         }
+
+        const t = h ? await store.get('token') : null;
         if (h && t) {
           try {
             const me = await api.me(t);
@@ -56,43 +80,62 @@ export function AuthProvider({ children }) {
           }
         }
       } catch (_) {
-        // Secure storage can fail outright — a damaged Android keystore, or a
-        // platform where it does not exist at all. Losing the saved connection
-        // is recoverable (the user re-enters the school address); throwing here
-        // is not: `ready` would never be set and the app would hang on the
-        // splash screen forever.
+        // Storage can fail outright — a damaged Android keystore, or a browser
+        // with site data blocked. Losing the saved connection is recoverable
+        // (the user re-enters the school address); throwing here is not:
+        // `ready` would never be set and the app would hang on the splash
+        // screen forever.
       } finally { setReady(true); }
     })();
   }, []);
 
+  async function persistConnection(url, m, sid) {
+    await store.set('host', url);
+    await store.set('mode', m);
+    if (sid) await store.set('schoolId', String(sid)); else await store.del('schoolId');
+  }
+
   // Connect to a school desktop over LAN/tunnel.
   async function saveHost(url) {
     setConnection({ baseUrl: url, mode: 'host' });
-    setHost(url); setMode('host'); setSchoolId(null);
-    await store.set('host', url);
-    await store.set('mode', 'host');
-    await store.del('schoolId');
+    await store.del('role');
+    setHost(url); setMode('host'); setSchoolId(null); setDetectedSchools(null);
+    await persistConnection(url, 'host', null);
   }
   // Connect to the hosted portal over the internet for a chosen school.
   async function saveCloud(url, sid) {
     setConnection({ baseUrl: url, mode: 'cloud', schoolId: sid });
-    setHost(url); setMode('cloud'); setSchoolId(sid);
-    await store.set('host', url);
-    await store.set('mode', 'cloud');
-    await store.set('schoolId', String(sid));
+    await store.del('role');
+    setHost(url); setMode('cloud'); setSchoolId(sid); setDetectedSchools(null);
+    await persistConnection(url, 'cloud', sid);
+  }
+  // Drop the saved connection and start over at the Connect screen.
+  async function forgetConnection() {
+    setConnection({ baseUrl: null, mode: 'host', schoolId: null });
+    setHost(null); setMode('host'); setSchoolId(null);
+    setToken(null); setProfile(null); setRole(null);
+    await store.del('host'); await store.del('mode');
+    await store.del('schoolId'); await store.del('token'); await store.del('role');
   }
   async function signIn(t, prof) {
     setToken(t); setProfile(prof);
+    setRole(prof && prof.role === 'staff' ? 'staff' : 'parent');
     await store.set('token', t);
+    await store.set('role', prof && prof.role === 'staff' ? 'staff' : 'parent');
   }
   async function signOut() {
     try { if (token) await api.logout(token); } catch (_) {}
     setToken(null); setProfile(null);
+    setRole(null);
     await store.del('token');
+    await store.del('role');
   }
 
   return (
-    <AuthCtx.Provider value={{ ready, host, mode, schoolId, token, profile, saveHost, saveCloud, signIn, signOut }}>
+    <AuthCtx.Provider value={{
+      ready, host, mode, schoolId, token, profile, detectedSchools,
+      saveHost, saveCloud, forgetConnection, signIn, signOut,
+    }}>
       {children}
     </AuthCtx.Provider>
   );

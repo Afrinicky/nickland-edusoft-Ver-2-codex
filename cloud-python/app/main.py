@@ -9,10 +9,13 @@ source of truth.
 """
 import os
 from fastapi import FastAPI, Request, Header, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import portal_auth as pauth
+from . import ratelimit
+from . import staff as staff_api
+from . import webapp
 from .store import create_store
 
 _SITE_PATH = os.path.join(os.path.dirname(__file__), "..", "public", "index.html")
@@ -45,7 +48,10 @@ def create_app(store=None) -> FastAPI:
     def require_parent(authorization):
         token = authorization[7:] if authorization and authorization.startswith("Bearer ") else None
         claims = pauth.verify_token(token) if token else None
-        if not claims:
+        # A staff token must never open a parent endpoint. Without the explicit
+        # check it would fall through to a lookup for a missing parent_id,
+        # which is the kind of thing that matches one day by accident.
+        if not claims or claims.get("role") == "staff" or not claims.get("parent_id"):
             raise HTTPException(status_code=401, detail={"ok": False, "error": "Please sign in."})
         rec = next((s["payload"] for s in S().list_snapshots(claims["school_id"], "parent_auth")
                     if s["payload"] and s["payload"].get("parent_id") == claims["parent_id"]), None)
@@ -54,18 +60,35 @@ def create_app(store=None) -> FastAPI:
         return claims, rec
 
     # ── Website ──
+    # The legacy hand-written parent page, kept reachable by name so a school
+    # can be pointed back at it if the new app misbehaves.
+    @app.get("/legacy", response_class=HTMLResponse)
+    def legacy_site():
+        return HTMLResponse(SITE)
+
     @app.get("/", response_class=HTMLResponse)
     @app.get("/portal", response_class=HTMLResponse)
     @app.get("/app", response_class=HTMLResponse)
     def site():
+        shell = webapp.shell()
+        if shell:
+            return FileResponse(shell, media_type="text/html; charset=utf-8",
+                                headers={"Cache-Control": "no-cache"})
         return HTMLResponse(SITE)
 
     @app.get("/health")
     @app.get("/api/v1/health")
     def health():
-        return {"ok": True, "store": S().kind}
+        return {"ok": True, "store": S().kind, "web_app": webapp.is_available()}
 
     # ── Public portal ──
+    # The same path a desktop host answers, so a client can ask one question —
+    # "what are you?" — instead of probing endpoint by endpoint. A host returns
+    # a `school`; this returns the tenant list.
+    @app.get("/api/v1/info")
+    def info():
+        return {"ok": True, "mode": "cloud", "portal": True, "staff": True, "schools": S().list_schools()}
+
     @app.get("/api/v1/portal/schools")
     def schools():
         return {"ok": True, "schools": S().list_schools()}
@@ -75,6 +98,8 @@ def create_app(store=None) -> FastAPI:
         body = await _json(request)
         if not body.get("school_id") or not body.get("identifier") or not body.get("password"):
             return _err(400, "school, identifier and password are required")
+        if ratelimit.limited(request, "parent", body.get("identifier")):
+            return _err(429, "Too many attempts. Try again shortly.")
         auths = S().list_snapshots(body["school_id"], "parent_auth")
         np = pauth.norm_phone(body["identifier"])
         em = str(body["identifier"]).strip().lower()
@@ -148,6 +173,167 @@ def create_app(store=None) -> FastAPI:
         return {"ok": True}
 
     # ── School-key: sync ──
+    # ── Staff: what lets a teacher work with the school's desktop switched off ──
+    # The account, its password hash and its permissions are all projected up
+    # by that desktop; the cloud only verifies, serves the read model, and
+    # queues writes for the desktop to apply.
+    def require_staff(authorization):
+        token = authorization[7:] if authorization and authorization.startswith("Bearer ") else None
+        claims = staff_api.staff_claims(token)
+        if not claims:
+            raise HTTPException(status_code=401, detail={"ok": False, "error": "Please sign in."})
+        rec = staff_api.load_staff(S(), claims["school_id"], claims["user_id"])
+        # Deactivated on the desktop and re-projected: the session dies with the
+        # next request rather than lasting until the token expires.
+        if not rec:
+            raise HTTPException(status_code=401, detail={"ok": False, "error": "Account unavailable."})
+        return claims, rec
+
+    def _deny():
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Access denied."})
+
+    def _send(result):
+        if result.get("ok"):
+            return result
+        return JSONResponse(status_code=result.get("status", 400),
+                            content={"ok": False, "error": result.get("error", "Bad request.")})
+
+    @app.post("/api/v1/staff/login")
+    async def staff_login(request: Request):
+        body = await _json(request)
+        if not body.get("school_id") or not body.get("username") or not body.get("password"):
+            return _err(400, "school, username and password are required")
+        if ratelimit.limited(request, "staff", body.get("username")):
+            return _err(429, "Too many attempts. Try again shortly.")
+        rec = staff_api.find_staff_by_username(S(), body["school_id"], body["username"])
+        if not rec or not staff_api.verify_staff_password(body["password"], rec.get("password_hash")):
+            return _err(401, "Invalid username or password.")
+        return {
+            "ok": True,
+            "token": staff_api.sign_staff_token(body["school_id"], rec["user_id"]),
+            "user": {"id": rec["user_id"], "full_name": rec.get("full_name"), "username": rec.get("username")},
+        }
+
+    @app.get("/api/v1/staff/me")
+    def staff_me(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return {
+            "ok": True, "role": "staff", "mode": "cloud",
+            "user": {"id": rec["user_id"], "full_name": rec.get("full_name"),
+                     "username": rec.get("username"), "staff_id": rec.get("staff_id")},
+            "designation": rec.get("designation"), "is_admin": bool(rec.get("is_admin")),
+            "permissions": rec.get("permissions") or {}, "school": S().get_school(claims["school_id"]),
+        }
+
+    @app.get("/api/v1/staff/dashboard")
+    def staff_dashboard(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "dashboard", "view"):
+            return _deny()
+        return _send(staff_api.dashboard(S(), claims["school_id"], rec))
+
+    @app.get("/api/v1/staff/students")
+    def staff_students(classId: str = None, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "students", "view"):
+            return _deny()
+        return _send(staff_api.students(S(), claims["school_id"], classId))
+
+    @app.get("/api/v1/staff/debtors")
+    def staff_debtors(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "fees", "view"):
+            return _deny()
+        return _send(staff_api.debtors(S(), claims["school_id"]))
+
+    @app.get("/api/v1/staff/classes")
+    def staff_classes(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can_any(rec, [("students", "view"), ("academics", "view"), ("canteen", "view")]):
+            return _deny()
+        return _send(staff_api.classes(S(), claims["school_id"]))
+
+    @app.get("/api/v1/staff/attendance")
+    def staff_attendance(classId: str = None, date: str = None, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can_any(rec, [("students", "view"), ("academics", "view")]):
+            return _deny()
+        if not classId or not date:
+            return _err(400, "classId and date are required.")
+        return _send(staff_api.attendance_sheet(S(), claims["school_id"], classId, date))
+
+    @app.post("/api/v1/staff/attendance")
+    async def staff_attendance_post(request: Request, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can_any(rec, [("students", "edit"), ("academics", "edit")]):
+            return _deny()
+        return _send(staff_api.submit_attendance(S(), claims["school_id"], rec, await _json(request)))
+
+    @app.get("/api/v1/staff/scores/subjects")
+    def staff_score_subjects(classId: str = None, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "academics", "view"):
+            return _deny()
+        if not classId:
+            return _err(400, "classId is required.")
+        return _send(staff_api.score_subjects(S(), claims["school_id"], classId))
+
+    @app.get("/api/v1/staff/scores")
+    def staff_scores(classId: str = None, subjectId: str = None, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "academics", "view"):
+            return _deny()
+        if not classId or not subjectId:
+            return _err(400, "classId and subjectId are required.")
+        return _send(staff_api.score_sheet(S(), claims["school_id"], classId, subjectId))
+
+    @app.post("/api/v1/staff/scores")
+    async def staff_scores_post(request: Request, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "academics", "edit"):
+            return _deny()
+        return _send(staff_api.submit_scores(S(), claims["school_id"], rec, await _json(request)))
+
+    @app.get("/api/v1/staff/canteen/student/{student_id}")
+    def staff_canteen_student(student_id: str, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "canteen", "view"):
+            return _deny()
+        return _send(staff_api.canteen_student(S(), claims["school_id"], student_id))
+
+    @app.post("/api/v1/staff/canteen/collect")
+    async def staff_canteen_collect(request: Request, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "canteen", "create"):
+            return _deny()
+        return _send(staff_api.submit_canteen(S(), claims["school_id"], rec, await _json(request)))
+
+    @app.get("/api/v1/staff/timetable/mine")
+    def staff_timetable(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return _send(staff_api.timetable_mine(S(), claims["school_id"], rec))
+
+    @app.get("/api/v1/staff/homework")
+    def staff_homework(classId: str = None, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "academics", "view"):
+            return _deny()
+        if not classId:
+            return _err(400, "classId is required.")
+        return _send(staff_api.homework_for_class(S(), claims["school_id"], classId))
+
+    @app.post("/api/v1/staff/homework")
+    async def staff_homework_post(request: Request, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        if not staff_api.can(rec, "academics", "edit"):
+            return _deny()
+        return _send(staff_api.submit_homework(S(), claims["school_id"], rec, await _json(request)))
+
+    @app.get("/api/v1/staff/pending")
+    def staff_pending(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return _send(staff_api.pending_summary(S(), claims["school_id"], rec))
+
     @app.get("/api/v1/sync/ping")
     def ping(x_school_key: str = Header(None)):
         school = require_school(x_school_key)
@@ -186,6 +372,31 @@ def create_app(store=None) -> FastAPI:
             return _err(400, "type required")
         cid = S().enqueue_change(school["school_id"], {"type": body["type"], "payload": body.get("payload", {})})
         return {"ok": True, "id": cid}
+
+    # ── Web app static files (registered last, so it can never shadow the API) ──
+    @app.get("/{full_path:path}")
+    def web_app(full_path: str):
+        if not webapp.is_available():
+            raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
+        url_path = "/" + full_path
+        if url_path.startswith("/api/"):
+            raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
+
+        found = webapp.resolve(url_path)
+        if found:
+            return FileResponse(found, media_type=webapp.content_type(found), headers={
+                "Cache-Control": webapp.cache_header(url_path),
+                "X-Content-Type-Options": "nosniff",
+            })
+
+        # Single-page output: /parent/child/7 and every other client-side route
+        # has no file of its own, so unmatched paths get the shell and the
+        # router takes it from there. A path that plainly wants a file gets a
+        # 404 rather than HTML pretending to be a script.
+        if not os.path.splitext(url_path)[1]:
+            return FileResponse(webapp.shell(), media_type="text/html; charset=utf-8",
+                                headers={"Cache-Control": "no-cache"})
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
 
     return app
 

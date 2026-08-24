@@ -3,7 +3,7 @@
 const auth = require('../auth');
 
 function createMemoryStore() {
-  const schools = new Map();   // school_id -> { name, key_hash }
+  const schools = new Map();   // school_id -> { name, key_hash, applied_cursor }
   const snapshots = new Map(); // school_id -> Map(entity_key -> record)
   const changes = new Map();   // school_id -> { seq, items:[{id,type,payload}] }
   let sidSeq = 1;
@@ -19,7 +19,7 @@ function createMemoryStore() {
     async createSchool({ name, school_id }) {
       const id = school_id || `sch_${sidSeq++}`;
       const key = auth.genKey();
-      schools.set(id, { name: name || id, key_hash: auth.hashKey(key) });
+      schools.set(id, { name: name || id, key_hash: auth.hashKey(key), applied_cursor: 0 });
       ensure(id);
       return { school_id: id, api_key: key };
     },
@@ -72,7 +72,37 @@ function createMemoryStore() {
       const cur = parseInt(cursor || '0', 10) || 0;
       const items = c.items.filter(i => i.id > cur);
       const next = items.length ? items[items.length - 1].id : cur;
+      // The desktop asking for everything after `cur` is its receipt for
+      // everything up to it — see setAppliedCursor.
+      const s = schools.get(school_id);
+      if (s && cur > (s.applied_cursor || 0)) s.applied_cursor = cur;
       return { changes: items.map(({ id, ...rest }) => rest), cursor: next };
+    },
+
+    // How far the desktop has consumed. Recorded on every pull, and the only
+    // way the cloud can tell a write that is still waiting from one the school
+    // has already applied — which is what lets a teacher who marked a register
+    // last night see their marks this morning instead of a blank sheet.
+    async setAppliedCursor(school_id, cursor) {
+      const s = schools.get(school_id);
+      const n = parseInt(cursor || '0', 10) || 0;
+      if (s && n > (s.applied_cursor || 0)) s.applied_cursor = n;
+      return true;
+    },
+
+    async appliedCursor(school_id) {
+      return (schools.get(school_id) || {}).applied_cursor || 0;
+    },
+
+    // Changes the desktop has not taken yet, newest last. `types` filters to
+    // the kinds a caller can make sense of.
+    async pendingChanges(school_id, { types = null, limit = 500 } = {}) {
+      const c = changes.get(school_id) || { items: [] };
+      const cur = (schools.get(school_id) || {}).applied_cursor || 0;
+      return c.items
+        .filter(i => i.id > cur && (!types || types.includes(i.type)))
+        .slice(-limit)
+        .map(i => ({ id: i.id, type: i.type, payload: i.payload }));
     },
   };
 }

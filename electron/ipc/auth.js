@@ -190,6 +190,8 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       INSERT INTO users (username, password_hash, full_name, designation_id, staff_id, is_active, must_change_password)
       VALUES (?, ?, ?, ?, ?, 1, 1)
     `).run(username, hash, fullName, designationId || null, staffId || null);
+    const created = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+    if (created) projectStaff(db, created.id);
     return { ok: true };
   });
 
@@ -208,6 +210,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     }
     db.prepare('UPDATE users SET full_name = ?, designation_id = ?, is_active = ? WHERE id = ?')
       .run(fullName, designationId, isActive ? 1 : 0, id);
+    projectStaff(db, id);
     return { ok: true };
   });
 
@@ -248,6 +251,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       `).run(targetUserId, actorUserId, `Password reset for ${target.username} by user #${actorUserId}`);
     } catch (e) {}
 
+    projectStaff(db, targetUserId);
     return { ok: true, username: target.username };
   });
 
@@ -264,6 +268,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
         can_view = excluded.can_view, can_create = excluded.can_create,
         can_edit = excluded.can_edit, can_delete = excluded.can_delete
     `).run(userId, module, canView ? 1 : 0, canCreate ? 1 : 0, canEdit ? 1 : 0, canDelete ? 1 : 0);
+    projectStaff(db, userId);
     return { ok: true };
   });
 
@@ -288,6 +293,15 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
         can_view = excluded.can_view, can_create = excluded.can_create,
         can_edit = excluded.can_edit, can_delete = excluded.can_delete
     `).run(designationId, module, canView ? 1 : 0, canCreate ? 1 : 0, canEdit ? 1 : 0, canDelete ? 1 : 0);
+    // A designation change moves every account that holds it, so all of them
+    // have to be re-projected — otherwise a teacher whose access was just
+    // widened or withdrawn keeps the old rights until something else touches
+    // their account.
+    try {
+      for (const u of db.prepare('SELECT id FROM users WHERE designation_id = ?').all(designationId)) {
+        projectStaff(db, u.id);
+      }
+    } catch (_) {}
     return { ok: true };
   });
 
@@ -313,6 +327,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     }
     const hash = bcrypt().hashSync(newPassword, 10);
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, userId);
+    projectStaff(db, userId);
     return { ok: true };
   });
 
@@ -376,6 +391,18 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 // ─── Permission resolution ──────────────────────────────
 // Combines designation defaults with per-user overrides.
 // Override row supersedes designation default for that module.
+// Any change to who may sign in, or to what they may do, has to reach the cloud
+// or a teacher working off-LAN keeps the access they had last night. Cheap and
+// safe to call on every user mutation: the outbox collapses repeats onto one
+// queued row per account.
+function projectStaff(db, userId) {
+  try {
+    const sp = require('../server/sync/staff_projection');
+    sp.enqueueStaffAuth(db, userId);
+    sp.enqueueStaffTimetable(db, userId);
+  } catch (_) {}
+}
+
 function resolveEffectivePermissions(db, userId) {
   // Single source of truth for the module list (electron/ipc/_access.js), so the
   // resolver, the access-control UI and the seeds can never drift apart.
