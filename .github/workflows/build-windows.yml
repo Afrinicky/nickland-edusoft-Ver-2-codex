@@ -47,8 +47,16 @@ jobs:
         with:
           python-version: '3.11'
 
-      # These suites deliberately use node:sqlite and Node built-ins so they
-      # run without installing or compiling anything.
+      # The desktop/web suites use only node:sqlite and Node built-ins, but the
+      # cloud staff suite verifies a real bcrypt hash — the same library the
+      # desktop ships — so `bcryptjs` has to be present. `--ignore-scripts`
+      # skips the native better-sqlite3 build and the Electron download, neither
+      # of which any test needs (the fixtures run on node:sqlite). cloud/ needs
+      # no separate install: `bcryptjs` resolves up to the root, and `pg` is
+      # only required when DATABASE_URL is set, which the tests never do.
+      - name: Install JS dependencies (no native build)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Desktop regression tests
         run: node test/regressions.js
 
