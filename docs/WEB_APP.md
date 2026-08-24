@@ -14,33 +14,50 @@ speaks, [`MOBILE_API.md`](MOBILE_API.md).
 
 ---
 
-## Two ways in, both supported
+## Three ways in, one build
 
-| | School Wi-Fi (LAN) | Over the internet |
-|---|---|---|
-| Served by | the school's **desktop**, at `http://<desktop-ip>:4747` | the **portal** (Vercel), at `https://…` |
-| Needs internet | **No** — router only | Yes |
-| Parents | Everything, including recording a payment | Fees, results, attendance, receipts, notices, messages (read) |
-| Teachers / staff | Everything their designation allows — register, scores, canteen, homework | Not yet — see [Teachers over the internet](#teachers-over-the-internet) |
-| Installable to home screen | No (plain HTTP is not a secure origin) | Yes |
+The important split is not "on the school Wi-Fi" versus "off it". It is **the
+school's own system** versus **the hosted portal** — because that is what
+decides whether you can do your job or only read about it.
 
-Nobody has to choose. Both are the same build, and the app works out which one
-it is talking to on its own (below), so a school can run the desktop for
-teachers on the Wi-Fi and the portal for parents at home, at the same time.
+| | School Wi-Fi | The school, over the internet | The hosted portal |
+|---|---|---|---|
+| Reaches | the desktop, at `http://<desktop-ip>:4747` | the same desktop, through a tunnel at `https://…` | the cloud API (Render) |
+| Served by | the desktop itself | the desktop, through the tunnel | Vercel |
+| Needs internet | **No** — router only | Yes, at both ends | Yes |
+| Needs the desktop switched on | Yes | Yes | No |
+| **Teachers** | Everything their designation allows — register, scores, canteen, homework | **The same, in full** | Cannot sign in |
+| **Parents** | Everything, including recording a payment | The same | Fees, results, attendance, receipts, notices, messages (read) |
+| Installable to home screen | No (plain HTTP is not a secure origin) | Yes | Yes |
+
+The first two columns are the same thing reached two ways, which is the point:
+**a teacher marking a register at home is doing exactly what they do in the
+staff room**, against the same database, with no second implementation to keep
+in step. See [Reaching the school over the internet](#tunnel) for the setup.
+
+The third column exists because the desktop is not always on, and a parent
+checking a fee balance at 9pm should not depend on it being on. The cloud
+carries a read model each desktop pushes up, so it answers whether or not the
+school's machine is awake.
+
+Nobody has to choose between them, and no build is specific to one. The app
+works out which it is talking to on its own (below), and a school can run all
+three at once.
 
 ### How it knows where it is
 
 The app asks its own origin one question — `GET /api/v1/info` — and reads the
 answer:
 
-- a reply naming a **school** is a desktop host → **host mode**, full features;
+- a reply naming a **school** is the school's own system → **host mode**, full
+  features. It does not matter whether that came over the Wi-Fi or a tunnel;
 - a reply saying **`portal: true`** with a list of schools is the cloud → **cloud
   mode**, parents, read-only. One school is adopted silently; several are
   offered as a picker.
 
-So a teacher who types `192.168.1.20:4747` into Chrome lands on the sign-in
-screen, not on a screen asking for the address they just typed. Nothing is
-configured per deployment.
+So a teacher who types `192.168.1.20:4747` into Chrome — or opens the school's
+tunnel address from home — lands on the sign-in screen, not on a screen asking
+for the address they just typed. Nothing is configured per deployment.
 
 When the app is hosted **apart** from its API — the Vercel build talking to
 Render — there is no API on its own origin to ask, so the address is baked in
@@ -201,9 +218,10 @@ bookmark the address, or use the APK.
 **A browser on HTTPS cannot reach a plain-HTTP LAN address.** That is a browser
 rule (mixed content), not something the app can work around: the portal copy
 can never talk to a desktop on the school Wi-Fi. It is precisely why the
-desktop serves its own copy over HTTP on the same origin as its API. The
-Connect screen says so rather than letting the request fail with a bare network
-error.
+desktop serves its own copy over HTTP on the same origin as its API, and why a
+[tunnel](#tunnel) — which makes the school's own address HTTPS — sidesteps the
+rule rather than fighting it. The Connect screen warns about the combination
+instead of letting the request fail with a bare network error.
 
 **The session lives in `localStorage`.** The phone app uses the device keychain
 via `expo-secure-store`, which does not exist in a browser; before this it
@@ -217,17 +235,73 @@ here answers an unknown path with the app shell so the router can take over.
 
 **Sign-ins show up as devices.** A browser sign-in appears in **Settings →
 Mobile App → Devices** as `web browser`, and can be revoked there like any
-phone.
+phone. That list is how you cut off a lost phone or a teacher who has left,
+and it matters more once the school is reachable over the internet.
 
-<a name="teachers-over-the-internet"></a>
-**Teachers over the internet need a tunnel.** The cloud API is a parent-facing
-read model: it has no staff sign-in, and cannot take an attendance register.
-A teacher working from home needs a route to the desktop itself — a Cloudflare
-Tunnel or similar in front of `http://<desktop-ip>:4747`, entered on the
-Connect screen as the school address. Everything then works exactly as it does
-on the Wi-Fi, over HTTPS. A native staff surface in the cloud (staff auth,
-permissions, a write-back queue for registers and scores) is the next backend
-piece, not part of this rollout.
+---
+
+<a name="tunnel"></a>
+## Reaching the school over the internet
+
+A tunnel gives the school desktop an HTTPS address on the public internet.
+Point the app at it and everything works exactly as it does in the staff room:
+same database, same permissions, teachers marking registers and entering
+scores, parents recording payments. One tunnel covers both apps at once — the
+web app and the API are on the same origin, so the browser gets the app and the
+phone app gets its API from the same address.
+
+This is the answer for **teachers off-site**. The hosted portal cannot be: it
+holds a parent-facing read model with no staff sign-in, so a teacher cannot log
+into it at all, let alone take a register.
+
+### Cloudflare Tunnel (free, no fixed IP, no router changes)
+
+On the school desktop, once:
+
+```bash
+# 1. Install cloudflared (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+# 2. Log in — opens a browser to pick the domain you own
+cloudflared tunnel login
+
+# 3. Create the tunnel and give it a name
+cloudflared tunnel create nickland-edusoft
+
+# 4. Route a hostname to it
+cloudflared tunnel route dns nickland-edusoft school.yourdomain.com
+
+# 5. Run it, pointed at the mobile server
+cloudflared tunnel run --url http://localhost:4747 nickland-edusoft
+```
+
+Install it as a Windows service so it starts with the machine
+(`cloudflared service install`), and make sure **Settings → Mobile App → Start
+server** is on and set to start automatically too.
+
+Teachers and parents then use `https://school.yourdomain.com` — in a browser,
+or typed into the phone app's Connect screen under **My school**.
+
+### What it costs you
+
+- **The desktop must be switched on.** A tunnel is a route to that machine, not
+  a copy of it. If the office PC is off, the tunnel is dead. Schools that shut
+  the office down at 4pm should keep the portal running for parents, which is
+  exactly the split in the table above.
+- **It is a real door onto the school's data.** The API rate-limits sign-ins and
+  scopes every request to the account's permissions, but the tunnel removes
+  "you have to be on our Wi-Fi" as a layer. Use strong staff passwords, revoke
+  devices in **Settings → Mobile App → Devices** when a teacher leaves, and
+  restrict the tunnel with Cloudflare Access if you want a second gate.
+- **It is one more thing to keep running.** Worth it for a school where
+  teachers work from home; unnecessary for one where they do not.
+
+### The alternative, when the desktop cannot stay on
+
+A staff surface in the cloud — staff auth pushed up like `parent_auth` already
+is, a staff read model, and registers and scores queued through the existing
+change queue for the desktop to apply when it next syncs. That is a backend
+project rather than a setting, and it is not built. The tunnel is what works
+today, and for a school with a desktop that stays on it is strictly better:
+full features, no read-model lag, nothing new to keep in step.
 
 ---
 

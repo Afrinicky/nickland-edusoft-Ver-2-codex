@@ -47,8 +47,9 @@ export default function Login() {
         <Muted>{host}</Muted>
       </View>
 
-      {/* Staff features run on the school desktop, not the hosted portal, so
-          cloud connections are parent-only. */}
+      {/* Staff features run on the school's own system, not the hosted portal,
+          so a portal connection is parent-only. Teachers connect to the school
+          instead — on its Wi-Fi or through its internet address. */}
       {!isCloud && (
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <Tab label="Parent" active={mode === 'parent'} onPress={() => { setMode('parent'); setError(null); }} />
@@ -57,8 +58,8 @@ export default function Login() {
       )}
       {isCloud && (
         <Muted style={{ textAlign: 'center', marginBottom: 4 }}>
-          Parent sign-in. Teachers: open the school address on the school Wi-Fi to mark
-          registers and enter scores.
+          Parent sign-in. Teachers: connect to your school instead — Account → Change
+          school, then "My school" — to mark registers and enter scores.
         </Muted>
       )}
 
@@ -93,7 +94,7 @@ export default function Login() {
         )}
         {mode === 'parent' && isCloud && (
           <Muted style={{ marginTop: 12, textAlign: 'center' }}>
-            First time? Register in the school's mobile app on the school Wi-Fi, then sign in here.
+            First time? Register once against your school's own address, then sign in here.
           </Muted>
         )}
       </Card>

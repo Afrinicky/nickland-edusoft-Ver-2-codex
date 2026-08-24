@@ -1,11 +1,20 @@
-// Connect screen — two ways in:
-//   • School Wi-Fi (LAN): enter the desktop host address (Settings → Mobile App).
-//   • Over the internet: enter the school's portal address, then pick the school.
+// Connect screen — two ways in, and the split is NOT "on Wi-Fi" vs "off it":
 //
-// In a browser most people never see this: the app is served by the host or
-// the portal, so the connection is adopted from the page's own origin (see
-// src/origin.js). It still appears when a portal hosts several schools, when
-// someone signs out of the connection, and always on the phone app.
+//   • My school — the school's own system, whether that is its address on the
+//     school Wi-Fi (http://192.168.1.20:4747) or an internet address that
+//     reaches the same desktop through a tunnel (https://…). Everything works
+//     either way: teachers mark registers and enter scores, parents pay.
+//   • Parent portal — the hosted portal. Parents only, read-only, because the
+//     cloud holds a thin read model rather than the school's database.
+//
+// Framing these as "Wi-Fi" and "internet" was wrong, and it hid the path
+// teachers actually need: a teacher working from home enters the school's
+// internet address here, in the first tab, and has their full job.
+//
+// In a browser most people never see this screen at all — the app is served by
+// the host or the portal, so the connection is adopted from the page's own
+// origin (see src/origin.js). It appears when a portal hosts several schools,
+// when someone changes school, and always on the phone app.
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
@@ -18,10 +27,10 @@ import { webOrigin, isSecureOrigin } from '../src/origin';
 
 export default function Connect() {
   const { saveHost, saveCloud, detectedSchools } = useAuth();
-  const [tab, setTab] = useState(detectedSchools ? 'cloud' : 'lan');
+  const [tab, setTab] = useState(detectedSchools ? 'cloud' : 'school');
 
-  // LAN state — in a browser already sitting on a plain-HTTP address, that
-  // address is almost certainly the school host, so start from it.
+  // School-address state. In a browser already sitting on a plain-HTTP
+  // address, that address is almost certainly the school host, so start there.
   const originGuess = isWeb && !isSecureOrigin() ? webOrigin() : null;
   const [url, setUrl] = useState(originGuess || 'http://192.168.');
   const [school, setSchool] = useState(null);
@@ -48,6 +57,11 @@ export default function Connect() {
   }, [detectedSchools]);
 
   function switchTab(t) { setTab(t); setError(null); setSchool(null); setPicked(null); if (!detectedSchools) setSchools(null); }
+
+  // A page on HTTPS cannot reach a plain-HTTP address on the local network —
+  // the browser blocks it as mixed content. An https:// school address (a
+  // tunnel to the desktop) is fine, so this is a warning, not a locked door.
+  const lanBlocked = httpsBlocksLan && /^http:\/\//i.test(url.trim());
 
   async function verifyLan() {
     setBusy(true); setError(null); setSchool(null);
@@ -93,39 +107,38 @@ export default function Connect() {
       </View>
 
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Tab label="School Wi-Fi" active={tab === 'lan'} onPress={() => switchTab('lan')} />
-        <Tab label="Over the internet" active={tab === 'cloud'} onPress={() => switchTab('cloud')} />
+        <Tab label="My school" active={tab === 'school'} onPress={() => switchTab('school')} />
+        <Tab label="Parent portal" active={tab === 'cloud'} onPress={() => switchTab('cloud')} />
       </View>
 
-      {tab === 'lan' ? (
+      {tab === 'school' ? (
         <Card>
-          {httpsBlocksLan ? (
-            <>
-              <H2>Open the school address directly</H2>
-              <Muted>
+          <Field label="School address" value={url} onChangeText={setUrl}
+            placeholder="http://192.168.1.20:4747" keyboardType="url" autoCorrect={false} autoCapitalize="none" />
+          <Muted>
+            On the school Wi-Fi, the address the desktop shows under Settings → Mobile App.
+            Away from school, the school's internet address if it has one. Teachers need this
+            one — marking registers, entering scores and collecting canteen money all run on
+            the school's own system.
+          </Muted>
+          {lanBlocked && (
+            <View style={{ marginTop: 12, padding: 12, backgroundColor: '#FFFBEB', borderRadius: 8 }}>
+              <Text style={{ color: colors.text, fontSize: 13 }}>
                 This page is on a secure (https) address, and browsers block secure pages from
-                reaching a plain school address on the local network. To use the school Wi-Fi
-                connection, type the address the desktop shows under Settings → Mobile App
-                (for example http://192.168.1.20:4747) straight into your browser, or install
-                the phone app.
-              </Muted>
-            </>
-          ) : (
-            <>
-              <Field label="School address" value={url} onChangeText={setUrl}
-                placeholder="http://192.168.1.20:4747" keyboardType="url" autoCorrect={false} autoCapitalize="none" />
-              <Muted>Ask the school for this address. It's shown on the desktop under Settings → Mobile App when the server is running.</Muted>
-              <ErrorNote message={error} />
-              {school && (
-                <View style={{ marginTop: 12, padding: 12, backgroundColor: '#ECFDF5', borderRadius: 8 }}>
-                  <Text style={{ fontWeight: '700', color: colors.success }}>✓ Connected to {school.name}</Text>
-                </View>
-              )}
-              {school
-                ? <Button title="Continue" onPress={() => router.replace('/login')} />
-                : <Button title={busy ? 'Checking…' : 'Connect'} onPress={verifyLan} disabled={busy} />}
-            </>
+                reaching a plain http address on the local network. Either open the school's
+                address directly in your browser, or use the school's https address.
+              </Text>
+            </View>
           )}
+          <ErrorNote message={error} />
+          {school && (
+            <View style={{ marginTop: 12, padding: 12, backgroundColor: '#ECFDF5', borderRadius: 8 }}>
+              <Text style={{ fontWeight: '700', color: colors.success }}>✓ Connected to {school.name}</Text>
+            </View>
+          )}
+          {school
+            ? <Button title="Continue" onPress={() => router.replace('/login')} />
+            : <Button title={busy ? 'Checking…' : 'Connect'} onPress={verifyLan} disabled={busy} />}
         </Card>
       ) : (
         <Card>
@@ -138,7 +151,10 @@ export default function Connect() {
             <>
               <Field label="Portal address" value={cloudUrl} onChangeText={setCloudUrl}
                 placeholder="https://portal.yourschool.com" keyboardType="url" autoCorrect={false} autoCapitalize="none" />
-              <Muted>The school's internet portal address. Parents can view fees, results, attendance and receipts from anywhere.</Muted>
+              <Muted>
+                The school's hosted portal. Parents can view fees, results, attendance and
+                receipts from anywhere. Staff sign-in is not here — teachers use "My school".
+              </Muted>
             </>
           )}
           <ErrorNote message={error} />

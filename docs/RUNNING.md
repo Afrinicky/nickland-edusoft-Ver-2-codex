@@ -301,10 +301,12 @@ Be aware of these before going live:
 - **Push notifications** (phone alerts) and an **offline write queue** for the
   mobile app are not built. The web build caches its own shell so it opens
   offline, but never caches school data.
-- **Teachers cannot work over the internet through the cloud portal.** It is a
-  parent-facing read model with no staff sign-in. A teacher off-site needs a
-  tunnel to the school desktop; a native staff surface in the cloud is a
-  planned backend piece.
+- **Teachers reach the school over the internet through a tunnel, not the
+  cloud portal.** The portal is a parent-facing read model with no staff
+  sign-in. A tunnel to the school desktop gives teachers their full job from
+  anywhere over HTTPS, and [`WEB_APP.md`](WEB_APP.md) has the Cloudflare setup;
+  the catch is that the desktop has to be switched on. A staff surface in the
+  cloud, which would not need that, is a planned backend piece.
 - **Multi-school SaaS control plane** (self-service onboarding, billing) isn't
   built — you provision each school with the `create-school` script.
 - Modules a mature SMS might add later: **library circulation, transport, online

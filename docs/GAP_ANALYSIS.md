@@ -75,7 +75,7 @@ The hosted portal (`cloud/` Node service, and a Python twin in `cloud-python/`) 
 Remaining gaps (not "the data is missing" — it's there):
 
 - ~~**Contract mismatch**~~ — **closed on this branch.** The mobile app now speaks `/portal/*` in its internet mode and `/parent/*` in its LAN/tunnel mode, from one build (see §5 P0 #3).
-- **No staff surface in the cloud.** The portal has parent auth and a parent read model only, so a teacher off-site cannot sign in at all — they need a tunnel to the school desktop. Staff auth, permissions and a write-back queue for registers/scores in the cloud is the next backend piece.
+- **No staff surface in the cloud.** The portal has parent auth and a parent read model only, so a teacher cannot sign into it at all. Off-site teachers reach the school through a tunnel to the desktop instead, which gives them their full job over HTTPS ([`WEB_APP.md`](WEB_APP.md)) — at the cost of the desktop having to be switched on. Staff auth, permissions and a write-back queue for registers/scores in the cloud would remove that condition, and is the next backend piece.
 - **Read-model depth:** the snapshot is current-term and summary-level (per-subject totals + grade, average, rank, remarks) — no historical terms and no per-assessment breakdown. Consistent with the "thin cloud" philosophy, but worth noting as a ceiling.
 - **No SaaS control plane:** per-school onboarding and subscription billing aren't built, so this is infrastructure rather than a product yet.
 

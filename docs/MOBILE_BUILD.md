@@ -13,8 +13,9 @@ the API it talks to, [`MOBILE_API.md`](MOBILE_API.md).
 | You want | Use | Needs |
 |---|---|---|
 | **No install at all — just an address** | `npm run build:web` (repo root) | Nothing; see [`WEB_APP.md`](WEB_APP.md) |
+| **An APK, built and published for you** | push to `main`, or tag `v*` | Nothing — GitHub Actions builds it |
 | An APK to sideload / share on WhatsApp | `npm run build:apk` | Free Expo account |
-| An APK built on your own machine, no account | `npm run apk:gradle` | Android SDK + JDK 17+ |
+| An APK built on your own machine, no account | `npm run apk:gradle` | Android SDK + JDK 17 |
 | To put it on Google Play | `npm run build:play` | Play Console account ($25 once) |
 | To test while developing | `npm start` | Expo Go on the phone |
 
@@ -31,7 +32,60 @@ using the system.
 
 ---
 
-## Path A — Cloud build (recommended)
+## Path A — GitHub builds it (recommended)
+
+Nothing to install, no Expo account, no Android SDK. The **Android APK** job in
+`.github/workflows/build-windows.yml` builds it on every push to `main` and on
+every `v*` tag, alongside the Windows installer and the web app.
+
+- **Push to `main`** → the APK appears under **Actions → the run → Artifacts →
+  `nickland-edusoft-android`** (kept 30 days).
+- **Tag `v2.0.1` and push the tag** → the APK is attached to the GitHub release
+  permanently, next to the `.exe` and the web app zip. That is the link to send
+  a school.
+
+The build takes roughly 15 minutes.
+
+### Set the signing key first — once, before you hand the APK to anyone
+
+Without a key configured the job signs with the React Native template's debug
+key, whose private key is published on the internet. The APK works, and the
+filename says `-testing-key` so you cannot hand it out by accident, but anyone
+could sign a malicious "update" for it.
+
+Generate a real one and keep it forever:
+
+```bash
+keytool -genkeypair -v -keystore release.keystore -alias edusoft \
+        -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 release.keystore        # macOS: base64 -i release.keystore
+```
+
+Then add four repository secrets (**Settings → Secrets and variables → Actions
+→ Secrets**):
+
+| Secret | Value |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | the base64 output above |
+| `ANDROID_KEYSTORE_PASSWORD` | the store password you chose |
+| `ANDROID_KEY_ALIAS` | `edusoft` |
+| `ANDROID_KEY_PASSWORD` | the key password you chose |
+
+> **Keep `release.keystore` with the school's irreplaceable files.** Lose it and
+> no future update can install over the copies already on people's phones —
+> every one has to be uninstalled first, and everybody signs in again.
+
+### Set the portal address
+
+Add a repository **variable** (same page, Variables tab) named
+`EXPO_PUBLIC_PORTAL_URL`, pointing at the hosted API — e.g.
+`https://nickland-edusoft-cloud.onrender.com`. It is compiled into the app and
+is the address it falls back to when it is not on the school Wi-Fi. Without it,
+a parent has to type the portal address by hand on the Connect screen.
+
+---
+
+## Path B — Cloud build with EAS
 
 Expo builds it on their servers; you download an APK. Nothing to install on your
 computer beyond Node.
@@ -68,13 +122,29 @@ it however you like.
 
 ---
 
-## Path B — Local build (no Expo account)
+## Path C — Local build (no Expo account)
 
 Everything happens on your machine. Useful if the school has poor internet or
 you would rather not depend on a cloud service.
 
-**Needs:** JDK 17+, the Android SDK (Android Studio installs both), and
-`ANDROID_HOME` set.
+**Needs:** JDK 17, and an Android SDK with these components — `expo-modules-core`
+compiles native code, so the NDK and CMake are not optional:
+
+| Component | Version |
+|---|---|
+| Platform | `android-34` |
+| Build tools | `34.0.0` |
+| NDK | `26.1.10909125` (pinned by React Native 0.74) |
+| CMake | `3.22.1` |
+
+Android Studio installs all of them; from the command line:
+
+```bash
+sdkmanager "platforms;android-34" "build-tools;34.0.0" \
+           "ndk;26.1.10909125" "cmake;3.22.1"
+```
+
+With `ANDROID_HOME` set:
 
 ```bash
 cd mobile
@@ -89,12 +159,24 @@ lands at:
 mobile/android/app/build/outputs/apk/release/app-release.apk
 ```
 
-By default Gradle signs a release build with the local debug key. To sign with a
-real key, put a keystore in `mobile/android/app/` and set
-`MYAPP_RELEASE_STORE_FILE`, `MYAPP_RELEASE_KEY_ALIAS`,
-`MYAPP_RELEASE_STORE_PASSWORD` and `MYAPP_RELEASE_KEY_PASSWORD` in
-`mobile/android/gradle.properties`. **Use the same keystore for every future
-release.**
+By default Gradle signs a release build with the template's debug key — fine
+for trying it, not for one a school runs. Sign it properly with the same
+keystore you use in CI:
+
+```bash
+$ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+  --ks release.keystore --ks-key-alias edusoft \
+  android/app/build/outputs/apk/release/app-release.apk
+```
+
+**Use the same keystore for every future release**, or updates will not install
+over the copies already out there.
+
+> `apk:gradle` runs `expo prebuild --clean` first, which matters for more than
+> the icon: it wipes `android/`, so the JS bundling step cannot be skipped as
+> up to date. Gradle does not treat an environment variable as an input, so a
+> changed `EXPO_PUBLIC_PORTAL_URL` would otherwise rebuild happily and ship the
+> old address.
 
 ---
 
@@ -166,11 +248,33 @@ behaves on a real device.
 
 ---
 
+## Size and permissions
+
+The APK is about **33 MB**. It would be 62 MB by default: Expo packages native
+libraries for all four Android ABIs, and two of them — `x86` and `x86_64` — are
+emulators and a handful of Chromebooks, not phones. `plugins/with-abi-filters.js`
+drops them. That is a config plugin rather than an edit to `app/build.gradle`
+because `prebuild` regenerates that file; plugins are re-applied every time.
+
+The permissions it asks for are only these:
+
+| Permission | Why |
+|---|---|
+| `INTERNET`, `ACCESS_NETWORK_STATE` | reaching the school or the portal |
+| `USE_BIOMETRIC`, `USE_FINGERPRINT` | `expo-secure-store` keeping the session in the keychain |
+| `VIBRATE` | React Native |
+
+`SYSTEM_ALERT_WINDOW` ("display over other apps") is blocked in `app.json`.
+React Native asks for it to draw its developer overlay, which a release build
+never shows — and a school management app requesting permission to draw over
+other apps is exactly the kind of thing that gets an APK distrusted.
+
 ## What is generated vs what is source
 
 `mobile/android/` and `mobile/ios/` are **generated from `app.json`** and are
 git-ignored. Never hand-edit them — the next `prebuild` throws the changes away.
-Icon, splash, package name, permissions and version all live in `app.json`, and
+Icon, splash, package name, permissions and version all live in `app.json`,
+`plugins/` holds config plugins that adjust the generated Gradle files, and
 `assets/` holds the images:
 
 | File | Used for |
@@ -195,5 +299,7 @@ To rebrand for another school, replace those images and change `name`, `slug`,
 | "App not installed" | `versionCode` not raised, or a different signing key than the installed copy. Uninstall the old one, or fix the key. |
 | "Cannot reach the school" | Phone is on mobile data, not the school Wi-Fi; or the desktop's mobile server is not running; or the IP changed. |
 | Build fails at "Resolving dependencies" | Usually a `package.json` version outside Expo SDK 51's range. `npx expo-doctor` names the offending package. |
+| `[CXX1210] No compatible library found` | The NDK or CMake is missing, or a different NDK than the pinned `26.1.10909125`. Install the components listed under Path C. (It also appears when anything writes to the prefab helper's stderr — `JAVA_TOOL_OPTIONS` being set is enough.) |
+| The app points at the wrong portal address | `EXPO_PUBLIC_PORTAL_URL` is compiled in, and Gradle does not treat an environment variable as an input. Run `expo prebuild --clean` first, which is what `apk:gradle` and CI both do. |
 | App opens to a blank screen | Almost always a JS error. `npm run bundle:check` first, then `npx expo start` and read the terminal. |
 | Icon looks cropped on Android | Art in `adaptive-icon.png` is outside the safe middle 66%. |

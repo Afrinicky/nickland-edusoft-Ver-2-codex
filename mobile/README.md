@@ -109,9 +109,11 @@ The host enforces access; the app renders what it is allowed:
   student's guardian contact on file.
 - **Staff / Teacher** — exactly the modules their designation permits, read from
   `/me` after login. Teachers mark attendance, enter scores, collect canteen
-  money and set homework. Staff features are a **host** capability: the cloud
-  portal is a parent-facing read model, so a teacher connects to the desktop —
-  on the school Wi-Fi, or through a tunnel to it.
+  money and set homework. Staff features belong to the school's own system, not
+  the hosted portal (a parent-facing read model with no staff sign-in), so a
+  teacher connects to the desktop — on the school Wi-Fi, or through a tunnel to
+  it from anywhere. Both give the same full access; see
+  [`../docs/WEB_APP.md`](../docs/WEB_APP.md).
 
 Access levels come from the same model as the desktop — see
 [`../docs/ACCESS_CONTROL.md`](../docs/ACCESS_CONTROL.md).
