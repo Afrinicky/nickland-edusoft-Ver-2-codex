@@ -23,7 +23,7 @@ const AUTO_GLOB = /^nickland-edusoft-backup-auto-.*\.zip$/i;
 
 // Schedule modes offered to the operator. 'daily' is kept as an alias of
 // 'nightly' so a config written by an older build still means the same thing.
-const MODES = ['manual', 'nightly', 'twice', 'hourly', 'weekly'];
+const MODES = ['manual', 'hourly', 'nightly', 'twice', 'weekly', 'monthly', 'custom'];
 const DEFAULT_TIME = '02:00';
 const DEFAULT_TIME2 = '14:00';
 
@@ -59,27 +59,37 @@ function loadDestinations(db) {
     if (legacyFolder) list.push({ id: newId(), label: 'Network or shared folder', kind: 'network', path: legacyFolder, paused: false });
     if (legacyCloud) list.push({ id: newId(), label: 'Cloud-sync folder', kind: 'local', path: legacyCloud, paused: false });
   }
-  return list.map(d => ({
+  return list.map(normalizeDest).filter(d => d.type ? true : !!d.path);
+}
+
+// A destination is either a folder (type local|network, with a path) or a
+// remote service (type s3|webdav|gdrive, with a config object whose secrets are
+// stored encrypted). `kind` is the old field; map it to `type` for old configs.
+function normalizeDest(d) {
+  let type = d.type;
+  if (!type) type = d.kind === 'network' ? 'network' : 'local';
+  const REMOTE = ['s3', 'webdav', 'gdrive'];
+  return {
     id: d.id || newId(),
     label: d.label || 'Backup destination',
-    kind: d.kind === 'network' ? 'network' : 'local',
+    type,
+    kind: type === 'network' ? 'network' : 'local',   // back-compat
     path: String(d.path || ''),
+    config: d.config && typeof d.config === 'object' ? d.config : {},
+    remote: REMOTE.includes(type),
     paused: !!d.paused,
     lastCopiedAt: d.lastCopiedAt || null,
     lastError: d.lastError || null,
-  })).filter(d => d.path);
+  };
 }
 
 function saveDestinations(db, list, setSetting) {
-  const clean = (list || []).map(d => ({
-    id: d.id || newId(),
-    label: d.label || 'Backup destination',
-    kind: d.kind === 'network' ? 'network' : 'local',
-    path: String(d.path || ''),
-    paused: !!d.paused,
-    lastCopiedAt: d.lastCopiedAt || null,
-    lastError: d.lastError || null,
-  })).filter(d => d.path);
+  const clean = (list || []).map(d => {
+    const n = normalizeDest(d);
+    // Persist only what belongs on disk (drop the derived `remote` flag).
+    return { id: n.id, label: n.label, type: n.type, path: n.path, config: n.config,
+      paused: n.paused, lastCopiedAt: n.lastCopiedAt, lastError: n.lastError };
+  }).filter(d => (['s3', 'webdav', 'gdrive'].includes(d.type)) ? true : !!d.path);
   setSetting(db, 'backup_destinations', JSON.stringify(clean), 'backup');
   return clean;
 }
@@ -107,6 +117,9 @@ function getConfig(db) {
     time: getSetting(db, 'backup_time', DEFAULT_TIME) || DEFAULT_TIME,
     time2: getSetting(db, 'backup_time2', DEFAULT_TIME2) || DEFAULT_TIME2,
     dayOfWeek: parseInt(getSetting(db, 'backup_day_of_week', '0'), 10) || 0, // 0=Sun (weekly)
+    dayOfMonth: Math.min(28, Math.max(1, parseInt(getSetting(db, 'backup_day_of_month', '1'), 10) || 1)), // 1-28 (monthly)
+    everyN: Math.max(1, parseInt(getSetting(db, 'backup_every_n', '3'), 10) || 3),          // custom: every N…
+    everyUnit: (getSetting(db, 'backup_every_unit', 'days') === 'hours') ? 'hours' : 'days', // …days | hours
     retention: Math.max(1, parseInt(getSetting(db, 'backup_retention', '10'), 10) || 10),
     destinations: loadDestinations(db),
     lastAutoAt: getSetting(db, 'backup_last_auto_at', '') || null,
@@ -115,12 +128,20 @@ function getConfig(db) {
 
 // The daily clock times a schedule fires at (sorted, unique). Empty for manual.
 function scheduleTimes(cfg) {
-  if (cfg.mode === 'nightly' || cfg.mode === 'weekly') return [cfg.time];
+  if (cfg.mode === 'nightly' || cfg.mode === 'weekly' || cfg.mode === 'monthly' || cfg.mode === 'custom') return [cfg.time];
   if (cfg.mode === 'twice') {
     const set = [cfg.time, cfg.time2].filter(Boolean);
     return [...new Set(set)].sort();
   }
   return [];
+}
+
+// How many days back a mode's most recent slot could sit — so a machine that
+// was switched off still catches the slot it missed once it returns.
+function lookbackDays(cfg) {
+  if (cfg.mode === 'weekly') return 8;
+  if (cfg.mode === 'monthly') return 32;
+  return 1;
 }
 
 // The most recent scheduled slot at or before `now` (a Date), or null. Looks
@@ -129,14 +150,16 @@ function scheduleTimes(cfg) {
 function lastSlotBefore(cfg, now) {
   const times = scheduleTimes(cfg);
   if (!times.length) return null;
+  const back = lookbackDays(cfg);
   let best = null;
-  for (const dayOffset of [0, -1]) {
+  for (let dayOffset = 0; dayOffset >= -back; dayOffset--) {
     for (const t of times) {
       const { h, m } = parseTime(t, 2, 0);
       const slot = new Date(now);
       slot.setDate(slot.getDate() + dayOffset);
       slot.setHours(h, m, 0, 0);
       if (cfg.mode === 'weekly' && slot.getDay() !== cfg.dayOfWeek) continue;
+      if (cfg.mode === 'monthly' && slot.getDate() !== cfg.dayOfMonth) continue;
       if (slot.getTime() <= now.getTime() && (!best || slot.getTime() > best.getTime())) best = slot;
     }
   }
@@ -150,15 +173,30 @@ function nextRunAt(cfg, now = new Date()) {
     const last = cfg.lastAutoAt ? new Date(cfg.lastAutoAt) : now;
     return new Date(Math.max(now.getTime(), last.getTime() + 60 * 60 * 1000));
   }
+  if (cfg.mode === 'custom') {
+    const last = cfg.lastAutoAt ? new Date(cfg.lastAutoAt) : null;
+    if (cfg.everyUnit === 'hours') {
+      const base = last ? last.getTime() : now.getTime();
+      return new Date(Math.max(now.getTime(), base + cfg.everyN * 3600e3));
+    }
+    // every N days at the chosen time
+    const { h, m } = parseTime(cfg.time, 2, 0);
+    let slot;
+    if (last) { slot = new Date(last.getTime() + cfg.everyN * 86400e3); slot.setHours(h, m, 0, 0); }
+    else { slot = new Date(now); slot.setHours(h, m, 0, 0); if (slot.getTime() <= now.getTime()) slot.setDate(slot.getDate() + 1); }
+    return slot;
+  }
   const times = scheduleTimes(cfg);
   let best = null;
-  for (let dayOffset = 0; dayOffset <= 7; dayOffset++) {
+  const horizon = cfg.mode === 'monthly' ? 62 : 8;
+  for (let dayOffset = 0; dayOffset <= horizon; dayOffset++) {
     for (const t of times) {
       const { h, m } = parseTime(t, 2, 0);
       const slot = new Date(now);
       slot.setDate(slot.getDate() + dayOffset);
       slot.setHours(h, m, 0, 0);
       if (cfg.mode === 'weekly' && slot.getDay() !== cfg.dayOfWeek) continue;
+      if (cfg.mode === 'monthly' && slot.getDate() !== cfg.dayOfMonth) continue;
       if (slot.getTime() > now.getTime() && (!best || slot.getTime() < best.getTime())) best = slot;
     }
     if (best) break;
@@ -176,6 +214,20 @@ function isBackupDue(cfg, now = new Date(), last = null) {
     return (now.getTime() - lastMs) >= 55 * 60 * 1000;
   }
 
+  if (cfg.mode === 'custom') {
+    if (cfg.everyUnit === 'hours') {
+      const tol = Math.min(5 * 60 * 1000, cfg.everyN * 3600e3 * 0.05);
+      return (now.getTime() - lastMs) >= cfg.everyN * 3600e3 - tol;
+    }
+    // Every N days, fired at the chosen time. Computed straight from `last`
+    // (the argument), never from cfg.lastAutoAt — the caller owns "last".
+    if (!last) return isBackupDue({ ...cfg, mode: 'nightly' }, now, last); // first run: today's time
+    const { h, m } = parseTime(cfg.time, 2, 0);
+    const next = new Date(lastMs + cfg.everyN * 86400e3);
+    next.setHours(h, m, 0, 0);
+    return now.getTime() >= next.getTime();
+  }
+
   const slot = lastSlotBefore(cfg, now);
   if (!slot) return false;
   return lastMs < slot.getTime();
@@ -186,7 +238,15 @@ function ensureDir(dir) { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive
 
 // Back-compat: the plain list of non-paused destination folder paths.
 function destinationFolders(cfg) {
-  return (cfg.destinations || []).filter(d => !d.paused).map(d => d.path);
+  return (cfg.destinations || []).filter(d => !d.paused && !d.remote && d.path).map(d => d.path);
+}
+
+// Split destinations into the folder ones (copied with fs) and the remote ones
+// (uploaded over the network), so the fan-out can handle each in its own way.
+function splitDestinations(destinations) {
+  const local = [], remote = [];
+  for (const d of destinations || []) (d.remote ? remote : local).push(d);
+  return { local, remote };
 }
 
 // Copy one backup file into a set of folders (legacy helper; kept for tests and
@@ -339,8 +399,8 @@ function computeStatus(cfg, facts, now = new Date()) {
 
 module.exports = {
   AUTO_LABEL, FILE_GLOB, AUTO_GLOB, MODES, DEFAULT_TIME, DEFAULT_TIME2,
-  getConfig, isBackupDue, nextRunAt, scheduleTimes, lastSlotBefore,
-  loadDestinations, saveDestinations, newId,
+  getConfig, isBackupDue, nextRunAt, scheduleTimes, lastSlotBefore, lookbackDays,
+  loadDestinations, saveDestinations, normalizeDest, splitDestinations, newId,
   destinationFolders, copyToFolders, copyToDestinations,
   loadPending, savePending, retryPending, waitingByDest,
   testDestination, pruneRetention, ensureDir, computeStatus,
