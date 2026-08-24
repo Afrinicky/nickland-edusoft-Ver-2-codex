@@ -112,7 +112,10 @@ async function pull(db) {
 
 // Apply one cloud-origin change locally. Whitelisted + authority-aware: parent
 // profile is cloud-authoritative; school operational data is never overwritten
-// from the cloud here.
+// wholesale from the cloud. Staff writes made off-LAN are the exception, and a
+// deliberate one — a register marked from home is the teacher's own work, not
+// the cloud's opinion — so they are applied through ./apply_staff, which
+// re-checks the teacher's permissions against the desktop before writing.
 function applyChange(db, change) {
   try {
     if (!change || !change.type) return false;
@@ -139,6 +142,12 @@ function applyChange(db, change) {
       db.prepare(`UPDATE students SET ${fields.join(', ')} WHERE id = ?`).run(...vals);
       return true;
     }
+    // A teacher's off-LAN work — registers, scores, canteen, homework. Kept in
+    // its own module: those writes re-check permissions and go through the same
+    // functions the LAN API uses, which is more than a field update needs.
+    const staffResult = require('./apply_staff').applyStaffChange(db, change);
+    if (staffResult !== null) return staffResult;
+
     return false; // unknown types ignored (forward-compatible)
   } catch (_) { return false; }
 }
@@ -146,6 +155,18 @@ function applyChange(db, change) {
 function safeParse(s) { try { return JSON.parse(s); } catch (_) { return null; } }
 
 async function syncOnce(db) {
+  // The dashboard numbers and the debtor list are derived from tables that
+  // change constantly (every payment, every new pupil), so hooking every write
+  // site would be a scatter of easily-forgotten calls. They are two cheap
+  // queries, and the outbox collapses repeats onto one row per key, so
+  // rebuilding them once per sync keeps a teacher's off-LAN dashboard no more
+  // than one cycle behind with a single call.
+  try {
+    const sp = require('./staff_projection');
+    sp.enqueueSchoolMetrics(db);
+    sp.enqueueDebtors(db);
+  } catch (_) {}
+
   const p = await push(db).catch(() => ({ ok: false }));
   const q = await pull(db).catch(() => ({ ok: false }));
   return { push: p, pull: q };

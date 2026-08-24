@@ -95,8 +95,11 @@ npm run serve:web        # preview it at http://localhost:4748
 - **On the school Wi-Fi** the desktop serves it at `http://<desktop-ip>:4747`
   (Settings → Mobile App → Start server). Full features for teachers and
   parents, and it works with the school's internet down.
-- **Over the internet** the hosted portal serves it on HTTPS for parents, and
-  can be added to a phone's home screen like an installed app.
+- **Over the internet** the hosted service serves it on HTTPS, for teachers as
+  well as parents — a teacher can mark a register, enter scores, collect
+  canteen money and set homework **with the school's computer switched off**,
+  and the work reaches the school when it next syncs. It can be added to a
+  phone's home screen like an installed app.
 
 The installer packages the web build automatically, so any desktop running the
 mobile server is already serving it. Full guide:

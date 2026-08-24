@@ -2,14 +2,16 @@
 //
 //   • My school — the school's own system, whether that is its address on the
 //     school Wi-Fi (http://192.168.1.20:4747) or an internet address that
-//     reaches the same desktop through a tunnel (https://…). Everything works
-//     either way: teachers mark registers and enter scores, parents pay.
-//   • Parent portal — the hosted portal. Parents only, read-only, because the
-//     cloud holds a thin read model rather than the school's database.
+//     reaches the same desktop through a tunnel (https://…). Everything works,
+//     immediately, but the school's computer has to be switched on.
+//   • Nickland Edusoft online — the hosted service. Teachers and parents both
+//     sign in, and it answers whether or not the school's computer is on.
+//     Teachers' registers, scores, canteen collections and homework are queued
+//     and reach the school when it next syncs; taking a fee payment still
+//     needs the school itself, because receipts are numbered there.
 //
 // Framing these as "Wi-Fi" and "internet" was wrong, and it hid the path
-// teachers actually need: a teacher working from home enters the school's
-// internet address here, in the first tab, and has their full job.
+// teachers need most: neither tab is parents-only.
 //
 // In a browser most people never see this screen at all — the app is served by
 // the host or the portal, so the connection is adopted from the page's own
@@ -108,7 +110,7 @@ export default function Connect() {
 
       <View style={{ flexDirection: 'row', gap: 8 }}>
         <Tab label="My school" active={tab === 'school'} onPress={() => switchTab('school')} />
-        <Tab label="Parent portal" active={tab === 'cloud'} onPress={() => switchTab('cloud')} />
+        <Tab label="Online" active={tab === 'cloud'} onPress={() => switchTab('cloud')} />
       </View>
 
       {tab === 'school' ? (
@@ -117,9 +119,9 @@ export default function Connect() {
             placeholder="http://192.168.1.20:4747" keyboardType="url" autoCorrect={false} autoCapitalize="none" />
           <Muted>
             On the school Wi-Fi, the address the desktop shows under Settings → Mobile App.
-            Away from school, the school's internet address if it has one. Teachers need this
-            one — marking registers, entering scores and collecting canteen money all run on
-            the school's own system.
+            Away from school, the school's internet address if it has one. Everything works
+            straight away here — but only while the school's computer is switched on. If it
+            is off, use Online.
           </Muted>
           {lanBlocked && (
             <View style={{ marginTop: 12, padding: 12, backgroundColor: '#FFFBEB', borderRadius: 8 }}>
@@ -145,15 +147,17 @@ export default function Connect() {
           {detectedSchools ? (
             <>
               <H2>Choose your school</H2>
-              <Muted>You are on {shortHost(detectedSchools.baseUrl)}. Pick the school your child attends.</Muted>
+              <Muted>You are on {shortHost(detectedSchools.baseUrl)}. Pick your school.</Muted>
             </>
           ) : (
             <>
               <Field label="Portal address" value={cloudUrl} onChangeText={setCloudUrl}
                 placeholder="https://portal.yourschool.com" keyboardType="url" autoCorrect={false} autoCapitalize="none" />
               <Muted>
-                The school's hosted portal. Parents can view fees, results, attendance and
-                receipts from anywhere. Staff sign-in is not here — teachers use "My school".
+                Works whether or not the school's computer is on. Parents see fees, results,
+                attendance and receipts; teachers mark registers, enter scores, collect
+                canteen money and set homework, and the work reaches the school when it next
+                syncs.
               </Muted>
             </>
           )}

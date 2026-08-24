@@ -14,7 +14,7 @@ class MemoryStore:
     kind = "memory"
 
     def __init__(self):
-        self._schools = {}    # school_id -> {name, key_hash}
+        self._schools = {}    # school_id -> {name, key_hash, applied_cursor}
         self._snaps = {}      # school_id -> {entity_key: record}
         self._changes = {}    # school_id -> {"seq": int, "items": [ {id,type,payload} ]}
         self._sid = 1
@@ -27,13 +27,13 @@ class MemoryStore:
         sid = school_id or f"sch_{self._sid}"
         self._sid += 1
         key = auth.gen_key()
-        self._schools[sid] = {"name": name or sid, "key_hash": auth.hash_key(key)}
+        self._schools[sid] = {"name": name or sid, "key_hash": auth.hash_key(key), "applied_cursor": 0}
         self._ensure(sid)
         return {"school_id": sid, "api_key": key}
 
     def add_school(self, school_id, name, api_key):
         """Register a school with a caller-supplied key (seeding / migration)."""
-        self._schools[school_id] = {"name": name or school_id, "key_hash": auth.hash_key(api_key)}
+        self._schools[school_id] = {"name": name or school_id, "key_hash": auth.hash_key(api_key), "applied_cursor": 0}
         self._ensure(school_id)
         return {"school_id": school_id, "name": name or school_id}
 
@@ -80,7 +80,34 @@ class MemoryStore:
         cur = int(cursor or 0)
         items = [i for i in c["items"] if i["id"] > cur]
         nxt = items[-1]["id"] if items else cur
+        # The desktop asking for everything after `cur` is its receipt for
+        # everything up to it — see set_applied_cursor.
+        self.set_applied_cursor(sid, cur)
         return {"changes": [{"type": i["type"], "payload": i["payload"]} for i in items], "cursor": nxt}
+
+    def set_applied_cursor(self, sid, cursor):
+        """How far the desktop has consumed the change queue.
+
+        Recorded on every pull, and the only way the service can tell a
+        teacher's write that is still waiting from one the school has already
+        applied — which is what lets a teacher who marked a register last night
+        see their marks this morning rather than a blank sheet.
+        """
+        s = self._schools.get(sid)
+        n = int(cursor or 0)
+        if s and n > s.get("applied_cursor", 0):
+            s["applied_cursor"] = n
+        return True
+
+    def applied_cursor(self, sid):
+        return self._schools.get(sid, {}).get("applied_cursor", 0)
+
+    def pending_changes(self, sid, types=None, limit=500):
+        """Changes the desktop has not taken yet, oldest first."""
+        c = self._changes.get(sid, {"items": []})
+        cur = self.applied_cursor(sid)
+        out = [i for i in c["items"] if i["id"] > cur and (not types or i["type"] in types)]
+        return [{"id": i["id"], "type": i["type"], "payload": i["payload"]} for i in out[-limit:]]
 
 
 class PgStore:
@@ -153,7 +180,32 @@ class PgStore:
         cur = int(cursor or 0)
         rows = self._q("SELECT id, type, payload FROM cloud_changes WHERE school_id=%s AND id > %s ORDER BY id ASC LIMIT 500", (sid, cur), "all") or []
         nxt = rows[-1][0] if rows else cur
+        # The desktop asking for everything after `cur` is its receipt for
+        # everything up to it — see set_applied_cursor.
+        if cur > 0:
+            self.set_applied_cursor(sid, cur)
         return {"changes": [{"type": r[1], "payload": r[2]} for r in rows], "cursor": nxt}
+
+    def set_applied_cursor(self, sid, cursor):
+        """How far the desktop has consumed the change queue. GREATEST so an
+        out-of-order or replayed pull cannot wind it backwards."""
+        self._q("UPDATE schools SET applied_cursor = GREATEST(COALESCE(applied_cursor, 0), %s) WHERE school_id = %s",
+                (int(cursor or 0), sid))
+        return True
+
+    def applied_cursor(self, sid):
+        row = self._q("SELECT COALESCE(applied_cursor, 0) FROM schools WHERE school_id=%s", (sid,), "one")
+        return int(row[0]) if row else 0
+
+    def pending_changes(self, sid, types=None, limit=500):
+        cur = self.applied_cursor(sid)
+        if types:
+            rows = self._q("SELECT id, type, payload FROM cloud_changes WHERE school_id=%s AND id > %s AND type = ANY(%s) ORDER BY id ASC LIMIT %s",
+                           (sid, cur, list(types), limit), "all") or []
+        else:
+            rows = self._q("SELECT id, type, payload FROM cloud_changes WHERE school_id=%s AND id > %s ORDER BY id ASC LIMIT %s",
+                           (sid, cur, limit), "all") or []
+        return [{"id": int(r[0]), "type": r[1], "payload": r[2]} for r in rows]
 
 
 def create_store():

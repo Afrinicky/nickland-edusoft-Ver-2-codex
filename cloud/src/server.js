@@ -14,6 +14,8 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const pauth = require('./portal_auth');
+const staffApi = require('./staff');
+const ratelimit = require('./ratelimit');
 const webapp = require('./webapp');
 
 const SITE = (() => {
@@ -66,7 +68,7 @@ function createServer(store) {
       // endpoint. A host returns a `school`; this returns the tenant list.
       if (p === '/api/v1/info' && req.method === 'GET') {
         const schools = await store.listSchools();
-        return json(res, 200, { ok: true, mode: 'cloud', portal: true, schools });
+        return json(res, 200, { ok: true, mode: 'cloud', portal: true, staff: true, schools });
       }
 
       if (p === '/api/v1/portal/schools' && req.method === 'GET') {
@@ -76,6 +78,9 @@ function createServer(store) {
       if (p === '/api/v1/portal/login' && req.method === 'POST') {
         const body = await readBody(req);
         if (!body.school_id || !body.identifier || !body.password) return json(res, 400, { ok: false, error: 'school, identifier and password are required' });
+        if (ratelimit.limited(req, 'parent', body.identifier)) {
+          return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+        }
         const auths = await store.listSnapshots(body.school_id, 'parent_auth');
         const np = pauth.normPhone(body.identifier);
         const em = String(body.identifier).trim().toLowerCase();
@@ -86,10 +91,136 @@ function createServer(store) {
         return json(res, 200, { ok: true, token, parent: { full_name: rec.full_name, phone: rec.phone, email: rec.email } });
       }
 
+      // ── Staff sign-in (public) ──
+      // What lets a teacher work with the school's desktop switched off. The
+      // account, its password hash and its permissions are all projected up by
+      // that desktop; the cloud only verifies and issues a session.
+      if (p === '/api/v1/staff/login' && req.method === 'POST') {
+        const body = await readBody(req);
+        if (!body.school_id || !body.username || !body.password) {
+          return json(res, 400, { ok: false, error: 'school, username and password are required' });
+        }
+        if (ratelimit.limited(req, 'staff', body.username)) {
+          return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+        }
+        const rec = await staffApi.findStaffByUsername(store, body.school_id, body.username);
+        if (!rec || !staffApi.verifyStaffPassword(body.password, rec.password_hash)) {
+          return json(res, 401, { ok: false, error: 'Invalid username or password.' });
+        }
+        return json(res, 200, {
+          ok: true,
+          token: staffApi.signStaffToken(body.school_id, rec.user_id),
+          user: { id: rec.user_id, full_name: rec.full_name, username: rec.username },
+        });
+      }
+
+      // ── Staff-token endpoints ──
+      if (p.startsWith('/api/v1/staff/')) {
+        const claims = staffApi.staffClaims(bearer(req));
+        if (!claims) return json(res, 401, { ok: false, error: 'Please sign in.' });
+        const rec = await staffApi.loadStaff(store, claims.school_id, claims.user_id);
+        // Deactivated on the desktop and re-projected: the session dies with
+        // the next request rather than lasting until the token expires.
+        if (!rec) return json(res, 401, { ok: false, error: 'Account unavailable.' });
+
+        const sid = claims.school_id;
+        const deny = () => json(res, 403, { ok: false, error: 'Access denied.' });
+        const send = (r) => json(res, r.ok ? 200 : (r.status || 400), r.status ? { ok: false, error: r.error } : r);
+
+        if (p === '/api/v1/staff/me' && req.method === 'GET') {
+          const school = await store.getSchool(sid);
+          return json(res, 200, {
+            ok: true, role: 'staff', mode: 'cloud',
+            user: { id: rec.user_id, full_name: rec.full_name, username: rec.username, staff_id: rec.staff_id },
+            designation: rec.designation, is_admin: !!rec.is_admin,
+            permissions: rec.permissions || {}, school,
+          });
+        }
+
+        if (p === '/api/v1/staff/dashboard' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'dashboard', 'view')) return deny();
+          return send(await staffApi.dashboard(store, sid, rec));
+        }
+
+        if (p === '/api/v1/staff/students' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'students', 'view')) return deny();
+          return send(await staffApi.students(store, sid, q.classId));
+        }
+
+        if (p === '/api/v1/staff/debtors' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'fees', 'view')) return deny();
+          return send(await staffApi.debtors(store, sid));
+        }
+
+        if (p === '/api/v1/staff/classes' && req.method === 'GET') {
+          if (!staffApi.canAny(rec, [['students', 'view'], ['academics', 'view'], ['canteen', 'view']])) return deny();
+          return send(await staffApi.classes(store, sid));
+        }
+
+        if (p === '/api/v1/staff/attendance' && req.method === 'GET') {
+          if (!staffApi.canAny(rec, [['students', 'view'], ['academics', 'view']])) return deny();
+          if (!q.classId || !q.date) return json(res, 400, { ok: false, error: 'classId and date are required.' });
+          return send(await staffApi.attendanceSheet(store, sid, q.classId, q.date));
+        }
+        if (p === '/api/v1/staff/attendance' && req.method === 'POST') {
+          if (!staffApi.canAny(rec, [['students', 'edit'], ['academics', 'edit']])) return deny();
+          return send(await staffApi.submitAttendance(store, sid, rec, await readBody(req)));
+        }
+
+        if (p === '/api/v1/staff/scores/subjects' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'academics', 'view')) return deny();
+          if (!q.classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+          return send(await staffApi.scoreSubjects(store, sid, q.classId));
+        }
+        if (p === '/api/v1/staff/scores' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'academics', 'view')) return deny();
+          if (!q.classId || !q.subjectId) return json(res, 400, { ok: false, error: 'classId and subjectId are required.' });
+          return send(await staffApi.scoreSheet(store, sid, q.classId, q.subjectId));
+        }
+        if (p === '/api/v1/staff/scores' && req.method === 'POST') {
+          if (!staffApi.can(rec, 'academics', 'edit')) return deny();
+          return send(await staffApi.submitScores(store, sid, rec, await readBody(req)));
+        }
+
+        if (p.startsWith('/api/v1/staff/canteen/student/') && req.method === 'GET') {
+          if (!staffApi.can(rec, 'canteen', 'view')) return deny();
+          return send(await staffApi.canteenStudent(store, sid, p.split('/').pop()));
+        }
+        if (p === '/api/v1/staff/canteen/collect' && req.method === 'POST') {
+          if (!staffApi.can(rec, 'canteen', 'create')) return deny();
+          return send(await staffApi.submitCanteen(store, sid, rec, await readBody(req)));
+        }
+
+        if (p === '/api/v1/staff/timetable/mine' && req.method === 'GET') {
+          return send(await staffApi.timetableMine(store, sid, rec));
+        }
+
+        if (p === '/api/v1/staff/homework' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'academics', 'view')) return deny();
+          if (!q.classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+          return send(await staffApi.homeworkForClass(store, sid, q.classId));
+        }
+        if (p === '/api/v1/staff/homework' && req.method === 'POST') {
+          if (!staffApi.can(rec, 'academics', 'edit')) return deny();
+          return send(await staffApi.submitHomework(store, sid, rec, await readBody(req)));
+        }
+
+        if (p === '/api/v1/staff/pending' && req.method === 'GET') {
+          return send(await staffApi.pendingSummary(store, sid, rec));
+        }
+
+        return json(res, 404, { ok: false, error: 'not found' });
+      }
+
       // ── Parent-token portal endpoints ──
       if (p.startsWith('/api/v1/portal/')) {
         const claims = pauth.verifyToken(bearer(req));
-        if (!claims) return json(res, 401, { ok: false, error: 'Please sign in.' });
+        // A staff token must never open a parent endpoint. Without the explicit
+        // check it would fall through to a lookup for `parent_id: undefined`,
+        // which is the kind of thing that matches one day by accident.
+        if (!claims || claims.role === 'staff' || !claims.parent_id) {
+          return json(res, 401, { ok: false, error: 'Please sign in.' });
+        }
         const authRec = (await store.listSnapshots(claims.school_id, 'parent_auth'))
           .map(a => a.payload).find(pl => pl && pl.parent_id === claims.parent_id);
         if (!authRec || !authRec.is_active) return json(res, 401, { ok: false, error: 'Account unavailable.' });

@@ -9,8 +9,11 @@
     "create-school": "node scripts/create-school.js",
     "test": "node test/e2e.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "pg": "^8.12.0"
   }
 }

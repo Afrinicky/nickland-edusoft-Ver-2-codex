@@ -63,7 +63,7 @@ assets/                    icon, adaptive icon, splash, notification, favicon
 app/                       Expo Router screens
   _layout.jsx              root stack + AuthProvider
   index.jsx                gate → connect / login / role area
-  connect.jsx              LAN address or cloud portal + school picker
+  connect.jsx              the school's own address, or online + school picker
   login.jsx                parent (with self-register) or staff sign-in
   parent/                  parent tabs
     index.jsx              children + balances
@@ -109,10 +109,10 @@ The host enforces access; the app renders what it is allowed:
   student's guardian contact on file.
 - **Staff / Teacher** — exactly the modules their designation permits, read from
   `/me` after login. Teachers mark attendance, enter scores, collect canteen
-  money and set homework. Staff features belong to the school's own system, not
-  the hosted portal (a parent-facing read model with no staff sign-in), so a
-  teacher connects to the desktop — on the school Wi-Fi, or through a tunnel to
-  it from anywhere. Both give the same full access; see
+  money and set homework — on the school Wi-Fi, or over the internet **with the
+  school's computer switched off**, in which case the work is saved online and
+  reaches the school when it next syncs. Taking a fee payment and marking
+  homework still need the school's own system. See
   [`../docs/WEB_APP.md`](../docs/WEB_APP.md).
 
 Access levels come from the same model as the desktop — see
@@ -127,5 +127,8 @@ Cloud/multi-school sync design: [`../docs/CLOUD_SYNC.md`](../docs/CLOUD_SYNC.md)
 
 - Online payment initiation from the app (mobile money / bank) — the host
   records and receipts it today, but the app cannot start one.
+- Marking homework, and taking a fee payment, when connected online rather than
+  to the school itself. Both need something only the desktop has: an assignment
+  id, and the school's receipt numbering.
 - Push notifications (Expo push).
 - Offline write queue — a teacher who loses Wi-Fi mid-register has to retry.

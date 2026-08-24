@@ -14,35 +14,59 @@ speaks, [`MOBILE_API.md`](MOBILE_API.md).
 
 ---
 
-## Three ways in, one build
+## Two ways in, one build
 
-The important split is not "on the school Wi-Fi" versus "off it". It is **the
-school's own system** versus **the hosted portal** — because that is what
-decides whether you can do your job or only read about it.
+The split is **the school's own system** versus **Nickland Edusoft online**.
+Both carry teachers and parents; the difference is what happens when the
+school's computer is switched off.
 
-| | School Wi-Fi | The school, over the internet | The hosted portal |
-|---|---|---|---|
-| Reaches | the desktop, at `http://<desktop-ip>:4747` | the same desktop, through a tunnel at `https://…` | the cloud API (Render) |
-| Served by | the desktop itself | the desktop, through the tunnel | Vercel |
-| Needs internet | **No** — router only | Yes, at both ends | Yes |
-| Needs the desktop switched on | Yes | Yes | No |
-| **Teachers** | Everything their designation allows — register, scores, canteen, homework | **The same, in full** | Cannot sign in |
-| **Parents** | Everything, including recording a payment | The same | Fees, results, attendance, receipts, notices, messages (read) |
-| Installable to home screen | No (plain HTTP is not a secure origin) | Yes | Yes |
+| | The school itself | Online |
+|---|---|---|
+| Reaches | the desktop — `http://<ip>:4747` on the school Wi-Fi, or an HTTPS [tunnel](#tunnel) to the same machine | the cloud API (Render) |
+| Served by | the desktop | Vercel |
+| Needs internet | **No** on the Wi-Fi; yes through a tunnel | Yes |
+| **Needs the school's computer on** | **Yes** | **No** |
+| **Teachers** | Everything — register, scores, canteen, homework, marking | Register, scores, canteen, homework. Saved instantly, reach the school when it next syncs |
+| **Parents** | Everything, including paying fees | Fees, results, attendance, receipts, notices, messages (read) |
+| Installable to home screen | Only over a tunnel (plain HTTP is not a secure origin) | Yes |
 
-The first two columns are the same thing reached two ways, which is the point:
-**a teacher marking a register at home is doing exactly what they do in the
-staff room**, against the same database, with no second implementation to keep
-in step. See [Reaching the school over the internet](#tunnel) for the setup.
+**A teacher can do their job from home with the school's computer off.** That
+is the point of the online column, and it is not a read-only consolation
+prize: the register, the score sheet, the canteen collection and setting
+homework all work. What they cannot do online is *take a fee payment* — that
+writes a receipt against the school's own numbering — and *mark* homework,
+which needs an assignment the desktop has actually created.
 
-The third column exists because the desktop is not always on, and a parent
-checking a fee balance at 9pm should not depend on it being on. The cloud
-carries a read model each desktop pushes up, so it answers whether or not the
-school's machine is awake.
+### How that works, and why it is safe
 
-Nobody has to choose between them, and no build is specific to one. The app
-works out which it is talking to on its own (below), and a school can run all
-three at once.
+The school's desktop stays the source of truth. It **projects** what teachers
+need — accounts and their permissions, class rosters with pupils, subjects,
+recent registers and the marks already entered, the dashboard numbers, the
+debtor list, each teacher's timetable — and the cloud serves those. A teacher's
+writes are **queued** on the cloud, and the desktop applies them on its next
+sync through the very same functions its own LAN API uses. There is one
+implementation of "what marking a register means", not two.
+
+Three details make it honest rather than a trick:
+
+- **A teacher sees their own pending work.** Marks that are queued but not yet
+  applied are merged over the projected register before it is served. Without
+  that, marking a register and reloading would show a blank sheet, and the
+  teacher would mark it again. The account screen says how many entries are
+  still waiting.
+- **The desktop has the last word on permissions.** The cloud checks them from
+  the projection; the desktop checks them again, against the live account,
+  before writing anything. A revoked teacher's queued work is refused even if
+  the projection had not caught up. Their session dies on their next request.
+- **Money cannot be taken twice.** Every canteen collection carries a uuid, and
+  the desktop keeps a ledger of the ones it has applied. A redelivered change —
+  which happens if the desktop applies a batch and then fails before saving its
+  cursor — issues no second receipt. Registers and scores are upserts, so
+  replaying them is harmless by construction.
+
+The tunnel is still worth having: it is immediate rather than eventual, and it
+covers the two things the cloud cannot do. But it is no longer the only way a
+teacher works off-site.
 
 ### How it knows where it is
 
@@ -52,7 +76,7 @@ answer:
 - a reply naming a **school** is the school's own system → **host mode**, full
   features. It does not matter whether that came over the Wi-Fi or a tunnel;
 - a reply saying **`portal: true`** with a list of schools is the cloud → **cloud
-  mode**, parents, read-only. One school is adopted silently; several are
+  mode**, teachers and parents. One school is adopted silently; several are
   offered as a picker.
 
 So a teacher who types `192.168.1.20:4747` into Chrome — or opens the school's
@@ -112,21 +136,22 @@ The production shape: **Vercel** serves the app, **Render** runs the API,
 **Neon** holds the data.
 
 ```
-   Parents, anywhere                     Teachers + parents, school Wi-Fi
-          │                                            │
-          ▼                                            ▼
-   Vercel (static)                          Desktop  http://192.168.1.20:4747
-   the web app                              the same web app + the full API
-          │  /api/v1/*                                 │
-          ▼                                            │  sync
-   Render  the cloud API  ──────────────────────────────
-          │
-          ▼
+  Teachers + parents, anywhere            Teachers + parents, school Wi-Fi
+  (works with the school PC off)                        │
+          │                                             ▼
+          ▼                                  Desktop  http://192.168.1.20:4747
+   Vercel (static)                           the same web app + the full API
+   the web app                                          │
+          │  /api/v1/*                                  │
+          ▼                                             │
+   Render  the cloud API  ◀── projections ───────────────┤
+          │               ──── queued writes ───────────▶│
+          ▼                                          (source of truth)
    Neon  Postgres
 ```
 
-The desktop stays the source of truth. The cloud holds a thin read model that
-each desktop pushes to — see [`CLOUD_SYNC.md`](CLOUD_SYNC.md).
+The desktop stays the source of truth. It pushes a thin read model up and pulls
+queued writes back down — see [`CLOUD_SYNC.md`](CLOUD_SYNC.md).
 
 ### 1. Neon — the database
 
@@ -135,6 +160,11 @@ Create a project, then load the schema once:
 ```bash
 psql "$DATABASE_URL" -f cloud-python/schema.sql
 ```
+
+It is safe to re-run against an existing database — every statement is
+`IF NOT EXISTS` or an `ADD COLUMN IF NOT EXISTS` — and you **must** re-run it
+when upgrading a deployment that predates the staff surface, which added a
+column for tracking how far each school's desktop has consumed the queue.
 
 Keep the connection string; it goes into Render as `DATABASE_URL` (include
 `?sslmode=require`).
@@ -167,8 +197,9 @@ add is one environment variable:
 |---|---|
 | `EXPO_PUBLIC_PORTAL_URL` | your Render URL, e.g. `https://nickland-edusoft-cloud.onrender.com` |
 
-Deploy. Parents open the Vercel address, pick their school if the portal hosts
-more than one, and sign in.
+Deploy. Teachers and parents open the Vercel address, pick their school if the
+service hosts more than one, and sign in — parents with their phone or email,
+teachers with the username the school gave them.
 
 > **Same-origin instead.** If you would rather the app and API share an origin —
 > no cross-origin requests at all, and origin detection working without
@@ -233,10 +264,23 @@ on.
 (`/parent/child/7`), so they can be bookmarked and shared, and every server
 here answers an unknown path with the app shell so the router can take over.
 
-**Sign-ins show up as devices.** A browser sign-in appears in **Settings →
-Mobile App → Devices** as `web browser`, and can be revoked there like any
-phone. That list is how you cut off a lost phone or a teacher who has left,
-and it matters more once the school is reachable over the internet.
+**Sign-ins show up as devices — on the school's own system.** A browser
+sign-in there appears in **Settings → Mobile App → Devices** as `web browser`,
+and can be revoked like any phone.
+
+**Sign-in is throttled.** Both login endpoints refuse after 20 attempts a
+minute, keyed by source address and by the account being targeted. It matters
+more than it did: a staff account can read a school's roster and write its
+registers, and it is now reachable from anywhere. The counter is per process,
+so a service running several workers allows that many times more — still far
+below what guessing a password needs.
+
+**Cutting off a teacher who has left is done on the account, not the device.**
+An Online session is a signed token the cloud issues, so there is no device row
+to revoke. Deactivate the account under **Settings → Users & Access**: the
+change is projected up, and their next request — Online or on the Wi-Fi — is
+refused. Anything they had queued and unapplied is refused too, because the
+desktop re-checks the account before writing.
 
 ---
 
@@ -245,14 +289,15 @@ and it matters more once the school is reachable over the internet.
 
 A tunnel gives the school desktop an HTTPS address on the public internet.
 Point the app at it and everything works exactly as it does in the staff room:
-same database, same permissions, teachers marking registers and entering
-scores, parents recording payments. One tunnel covers both apps at once — the
-web app and the API are on the same origin, so the browser gets the app and the
-phone app gets its API from the same address.
+same database, same permissions, writes landing immediately rather than being
+queued, and the two things the cloud cannot do — taking a fee payment and
+marking homework — available. One tunnel covers both apps at once, because the
+web app and the API are on the same origin.
 
-This is the answer for **teachers off-site**. The hosted portal cannot be: it
-holds a parent-facing read model with no staff sign-in, so a teacher cannot log
-into it at all, let alone take a register.
+It is **not** required for teachers to work off-site any more; the online
+service carries them. Set one up when a school wants off-site work to land
+instantly, or wants fee payments taken from outside the building. Its cost is
+that the desktop has to stay switched on.
 
 ### Cloudflare Tunnel (free, no fixed IP, no router changes)
 
@@ -283,9 +328,9 @@ or typed into the phone app's Connect screen under **My school**.
 ### What it costs you
 
 - **The desktop must be switched on.** A tunnel is a route to that machine, not
-  a copy of it. If the office PC is off, the tunnel is dead. Schools that shut
-  the office down at 4pm should keep the portal running for parents, which is
-  exactly the split in the table above.
+  a copy of it. If the office PC is off, the tunnel is dead — and this is
+  exactly the case the online service exists for. A school that shuts the
+  office down at 4pm should point its teachers at Online, not at a tunnel.
 - **It is a real door onto the school's data.** The API rate-limits sign-ins and
   scopes every request to the account's permissions, but the tunnel removes
   "you have to be on our Wi-Fi" as a layer. Use strong staff passwords, revoke
@@ -294,22 +339,30 @@ or typed into the phone app's Connect screen under **My school**.
 - **It is one more thing to keep running.** Worth it for a school where
   teachers work from home; unnecessary for one where they do not.
 
-### The alternative, when the desktop cannot stay on
+### Which to tell a school to use
 
-A staff surface in the cloud — staff auth pushed up like `parent_auth` already
-is, a staff read model, and registers and scores queued through the existing
-change queue for the desktop to apply when it next syncs. That is a backend
-project rather than a setting, and it is not built. The tunnel is what works
-today, and for a school with a desktop that stays on it is strictly better:
-full features, no read-model lag, nothing new to keep in step.
+| The school | Point teachers at |
+|---|---|
+| Office PC runs all day and teachers only work on site | the school's Wi-Fi address; no tunnel, no cloud needed |
+| Teachers work from home, PC stays on | either. A tunnel lands work instantly; Online needs no setup |
+| PC is switched off outside school hours | **Online** |
+| No reliable internet at the school at all | the Wi-Fi address on site, and Online from teachers' own data |
+
+Parents are simpler: **Online**, always. It answers whether or not the school's
+computer is on, and it is the only one that installs to a phone's home screen
+without a tunnel.
 
 ---
 
 ## Checks
 
 ```bash
-npm test                 # includes test/webapp.js — serving, routing, traversal
+npm test                 # includes cloud/test/staff.js — the whole teacher-off-LAN
+                         # round trip against the real cloud and a real desktop
+                         # database, and test/webapp.js for serving and routing
 npm run build:web        # the build itself; a screen that will not bundle fails here
+
+cd cloud-python && python3 tests/test_staff.py   # the same surface on the Python service
 ```
 
 CI builds the web app on every branch, so a broken screen is caught on the pull

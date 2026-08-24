@@ -17,12 +17,14 @@ app/
   store.py       MemoryStore (dev/tests) + PgStore (Neon/Postgres, psycopg)
   auth.py        per-school API key hashing
   portal_auth.py scrypt verify (matches the desktop hash) + phone norm + tokens
+  staff.py       the staff surface — teachers working with the school PC off
   webapp.py      serves the browser build of the mobile app, when one is installed
 public/index.html   the legacy parent page (SPA), shared with the Node version
 webapp/             optional: the web app build (see ../docs/WEB_APP.md) — git-ignored
 scripts/create_school.py   provision a tenant
 schema.sql                 Neon/Postgres DDL
-tests/         test_portal.py (FastAPI TestClient) + cross_lang.sh (Node↔Python)
+tests/         test_portal.py + test_staff.py (FastAPI TestClient),
+               cross_lang.sh (Node↔Python)
 ```
 
 ## Auth & API
@@ -33,8 +35,17 @@ public). Parents authenticate against a `parent_auth` projection the desktop
 pushes up (scrypt hash + linked student keys).
 
 `GET /api/v1/info` is public and answers the same question a desktop host does
-(`{ ok, mode:'cloud', portal:true, schools }`), so a client discovers what it is
-talking to in one request rather than probing endpoint by endpoint.
+(`{ ok, mode:'cloud', portal:true, staff:true, schools }`), so a client
+discovers what it is talking to in one request rather than probing endpoint by
+endpoint.
+
+`/api/v1/staff/*` carries **teachers**, and is what lets one work with the
+school's desktop switched off: reads come from the projections that desktop
+pushes, writes are queued for it to apply. Teachers authenticate against a
+`staff_auth` projection using the **bcrypt** hash the desktop already stores,
+so nobody is re-enrolled — hence the `bcrypt` dependency. Endpoints are listed
+in [`../cloud/README.md`](../cloud/README.md); this service implements them
+identically. See [`../docs/WEB_APP.md`](../docs/WEB_APP.md).
 
 ## The web app
 `/` serves the browser build of the mobile app when one is installed under

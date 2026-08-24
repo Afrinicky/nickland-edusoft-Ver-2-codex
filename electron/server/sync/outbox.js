@@ -261,7 +261,10 @@ function enqueueStudentSnapshot(db, studentId) {
 // Safe to run repeatedly: each entity collapses onto its queued row, and the
 // version counter keeps moving forward.
 function backfillAll(db, { receiptLimit = 200 } = {}) {
-  const counts = { students: 0, parents: 0, announcements: 0, receipts: 0 };
+  const counts = {
+    students: 0, parents: 0, announcements: 0, receipts: 0,
+    staff: 0, timetables: 0, classes: 0, metrics: 0, debtors: 0,
+  };
   if (!syncEnabled(db)) return { ok: false, error: 'Cloud sync is switched off.' };
 
   const { enqueueParentAuth } = require('../parents');
@@ -312,6 +315,16 @@ function backfillAll(db, { receiptLimit = 200 } = {}) {
       if (posted) counts.receipts++;
     }
   } catch (_) {}
+
+  // The staff read model — accounts, class rosters, dashboard numbers, debtors.
+  // Without this a teacher cannot sign in off-LAN at all, for exactly the
+  // reason parents could not before backfill existed: their record is only
+  // projected when something happens to change it.
+  // Every kind has to be counted, not just the interesting two: `total` is
+  // meant to equal the number of rows now sitting in the outbox, and the
+  // "Push now" dialog shows it. An undercount reads as records having been
+  // dropped.
+  try { Object.assign(counts, require('./staff_projection').enqueueAllStaff(db)); } catch (_) {}
 
   return { ok: true, counts, total: Object.values(counts).reduce((a, b) => a + b, 0) };
 }

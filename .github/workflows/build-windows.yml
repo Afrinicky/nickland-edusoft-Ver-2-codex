@@ -61,11 +61,21 @@ jobs:
       - name: Parent portal (Node cloud)
         run: node cloud/test/portal.js
 
+      # The teacher-off-LAN round trip: the desktop projects itself, a teacher
+      # signs into the cloud with the desktop offline, marks a register, and
+      # the desktop applies it when it comes back — exactly once.
+      - name: Staff over the internet (Node cloud + real desktop client)
+        run: node cloud/test/staff.js
+
       - name: Install Python cloud dependencies
         run: pip install -r cloud-python/requirements.txt httpx
 
       - name: Python cloud + cross-language scrypt
         run: python3 tests/test_portal.py
+        working-directory: cloud-python
+
+      - name: Staff surface (Python cloud + cross-language bcrypt)
+        run: python3 tests/test_staff.py
         working-directory: cloud-python
 
       - name: Cross-language end-to-end (Node client → Python cloud)

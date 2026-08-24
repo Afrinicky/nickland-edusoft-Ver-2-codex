@@ -9,7 +9,7 @@
 // a web build is usually served by the very thing it talks to, and a phone
 // build can carry a default portal baked in (see src/config.js).
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { setConnection, api } from './api';
+import { setConnection, setRole, api } from './api';
 import { storage as store } from './storage';
 import { discoverConnection } from './origin';
 import { DEFAULT_SCHOOL_ID } from './config';
@@ -61,9 +61,13 @@ export function AuthProvider({ children }) {
           }
         }
 
+        // The role belongs to the saved session, not the connection: over the
+        // internet a teacher and a parent use different endpoints, and the
+        // bearer token does not say which.
+        const savedRole = h ? await store.get('role') : null;
         if (h) {
           setHost(h); setMode(m); setSchoolId(sid);
-          setConnection({ baseUrl: h, mode: m, schoolId: sid });
+          setConnection({ baseUrl: h, mode: m, schoolId: sid, role: savedRole });
         }
 
         const t = h ? await store.get('token') : null;
@@ -94,12 +98,14 @@ export function AuthProvider({ children }) {
   // Connect to a school desktop over LAN/tunnel.
   async function saveHost(url) {
     setConnection({ baseUrl: url, mode: 'host' });
+    await store.del('role');
     setHost(url); setMode('host'); setSchoolId(null); setDetectedSchools(null);
     await persistConnection(url, 'host', null);
   }
   // Connect to the hosted portal over the internet for a chosen school.
   async function saveCloud(url, sid) {
     setConnection({ baseUrl: url, mode: 'cloud', schoolId: sid });
+    await store.del('role');
     setHost(url); setMode('cloud'); setSchoolId(sid); setDetectedSchools(null);
     await persistConnection(url, 'cloud', sid);
   }
@@ -107,18 +113,22 @@ export function AuthProvider({ children }) {
   async function forgetConnection() {
     setConnection({ baseUrl: null, mode: 'host', schoolId: null });
     setHost(null); setMode('host'); setSchoolId(null);
-    setToken(null); setProfile(null);
+    setToken(null); setProfile(null); setRole(null);
     await store.del('host'); await store.del('mode');
-    await store.del('schoolId'); await store.del('token');
+    await store.del('schoolId'); await store.del('token'); await store.del('role');
   }
   async function signIn(t, prof) {
     setToken(t); setProfile(prof);
+    setRole(prof && prof.role === 'staff' ? 'staff' : 'parent');
     await store.set('token', t);
+    await store.set('role', prof && prof.role === 'staff' ? 'staff' : 'parent');
   }
   async function signOut() {
     try { if (token) await api.logout(token); } catch (_) {}
     setToken(null); setProfile(null);
+    setRole(null);
     await store.del('token');
+    await store.del('role');
   }
 
   return (

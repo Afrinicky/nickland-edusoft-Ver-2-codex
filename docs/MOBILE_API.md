@@ -103,17 +103,23 @@ persisted (`mode` = `host` | `cloud`) — in the device keychain on a phone, in
 
 | Mode | Reaches | Base + routes | Audience | Writes |
 |------|---------|---------------|----------|--------|
-| **host** (School Wi-Fi / tunnel) | the desktop host | `http://<ip>:4747/api/v1` — `/auth/*`, `/parent/*`, staff routes | parents **and** staff | full: attendance, scores, canteen, payments |
-| **cloud** (Over the internet) | the hosted portal | `https://<portal>/api/v1` — `/portal/*` | parents only | read + profile/notices (thin cloud) |
+| **host** (the school itself — its Wi-Fi address or a tunnel) | the desktop | `http(s)://<address>/api/v1` — `/auth/*`, `/parent/*`, staff routes | parents **and** staff | everything, immediately: attendance, scores, canteen, homework marking, fee payments |
+| **cloud** (Online) | the hosted service | `https://<portal>/api/v1` — `/portal/*` for parents, `/staff/*` for teachers | parents **and** staff | parents read; teachers queue attendance, scores, canteen and homework for the desktop to apply |
 
-In cloud mode the client picks a school from `GET /portal/schools`, signs in via
-`POST /portal/login` (`{ school_id, identifier, password }`), and reads
-`GET /portal/children|receipts|announcements|me`. The API client
-(`mobile/src/api.js`) **normalises** the cloud `student_snapshot` (which already
-carries fees, canteen, attendance and the academic report) into the same shapes
-the host's `/parent/*` replies use, so the parent screens are identical across
-modes. Staff and payments are intentionally host-only — the cloud is a read
-model, so those controls are hidden when connected over the internet.
+In cloud mode the client picks a school from `GET /portal/schools` (or from
+`GET /info`), then signs in as a parent via `POST /portal/login`
+(`{ school_id, identifier, password }`) or as a teacher via
+`POST /staff/login` (`{ school_id, username, password }`).
+
+The API client (`mobile/src/api.js`) **normalises** cloud replies into the same
+shapes the host's routes return, so no screen knows which mode it is in. A
+staff route that is `/attendance` on the desktop is `/staff/attendance` on the
+cloud, and one helper picks between them.
+
+Host-only, and they say so rather than failing: **taking a fee payment** (it
+writes a receipt against the school's own numbering) and **marking homework**
+(it needs an assignment id that only exists once the desktop has created the
+assignment).
 
 ### Discovery: one request, not a guess
 
@@ -134,6 +140,42 @@ silently; several are offered as a picker.
 A build hosted **apart** from its API (the Vercel deploy talking to Render) has
 no API on its own origin, so `EXPO_PUBLIC_PORTAL_URL` is compiled in at build
 time and used instead. See [`WEB_APP.md`](WEB_APP.md).
+
+### Staff over the internet
+
+`/api/v1/staff/*` is what lets a teacher work with the school's desktop
+switched off. Reads come from projections the desktop pushes; writes are queued
+for it to apply.
+
+| | Endpoint | Notes |
+|---|---|---|
+| Sign in | `POST /staff/login` | `{ school_id, username, password }` → `{ token, user }`. Verifies the **bcrypt** hash the desktop projects — the same one it stores, so no teacher is re-enrolled |
+| Profile | `GET /staff/me` | user, designation, `is_admin`, the resolved permission map |
+| Dashboard | `GET /staff/dashboard` | the four numbers; fee figures blanked for a teacher without `fees.view` |
+| Roster | `GET /staff/students[?classId=]` | |
+| Debtors | `GET /staff/debtors` | needs `fees.view` |
+| Classes | `GET /staff/classes` | |
+| Register | `GET /staff/attendance?classId=&date=` · `POST /staff/attendance` | |
+| Scores | `GET /staff/scores/subjects?classId=` · `GET /staff/scores?classId=&subjectId=` · `POST /staff/scores` | |
+| Canteen | `GET /staff/canteen/student/:id` · `POST /staff/canteen/collect` | |
+| Timetable | `GET /staff/timetable/mine` | |
+| Homework | `GET /staff/homework?classId=` · `POST /staff/homework` | setting only; marking is host-only |
+| Still waiting | `GET /staff/pending` | how much of this teacher's work the school has not taken yet |
+
+Every write replies `{ ok: true, queued: true }`. Nothing is invented in the
+reply — a canteen collection returns `receipt_number: null`, because the
+desktop issues receipt numbers and putting a made-up one on a parent's phone
+would not match the school's books.
+
+**A `GET` after a write shows the write.** Queued-but-unapplied changes are
+merged over the projected register or score sheet and flagged `pending: true`
+per student. Without that, marking a register and reloading would show a blank
+sheet and the teacher would mark it twice.
+
+Permissions are enforced twice: here, from the projection, and again on the
+desktop against the live account before anything is written. Tokens do not
+cross roles — a staff token carries `role: 'staff'` and is refused by
+`/portal/*`; a parent token has no role and is refused by `/staff/*`.
 
 ### The host serves the app as well as the API
 

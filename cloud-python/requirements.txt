@@ -2,3 +2,6 @@ fastapi>=0.111
 uvicorn[standard]>=0.30
 psycopg[binary]>=3.2
 psycopg_pool>=3.2
+# Staff sign-in: teacher passwords are bcrypt on the desktop, and are verified
+# here as-is so nobody has to be re-enrolled to work off-LAN.
+bcrypt>=4.1

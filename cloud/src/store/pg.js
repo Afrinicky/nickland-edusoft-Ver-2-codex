@@ -72,7 +72,42 @@ function createPgStore(connectionString) {
         [school_id, cur]
       );
       const next = rows.length ? rows[rows.length - 1].id : cur;
+      // The desktop asking for everything after `cur` is its receipt for
+      // everything up to it — see setAppliedCursor.
+      if (cur > 0) { try { await this.setAppliedCursor(school_id, cur); } catch (_) {} }
       return { changes: rows.map(r => ({ type: r.type, payload: r.payload })), cursor: next };
+    },
+
+    // How far the desktop has consumed. Recorded on every pull, and the only
+    // way the cloud can tell a write that is still waiting from one the school
+    // has already applied — which is what lets a teacher who marked a register
+    // last night see their marks this morning instead of a blank sheet.
+    // GREATEST so an out-of-order or replayed pull cannot wind it backwards.
+    async setAppliedCursor(school_id, cursor) {
+      const n = parseInt(cursor || '0', 10) || 0;
+      await pool.query(
+        'UPDATE schools SET applied_cursor = GREATEST(COALESCE(applied_cursor, 0), $2) WHERE school_id = $1',
+        [school_id, n]
+      );
+      return true;
+    },
+
+    async appliedCursor(school_id) {
+      const { rows } = await pool.query('SELECT COALESCE(applied_cursor, 0) AS c FROM schools WHERE school_id = $1', [school_id]);
+      return rows[0] ? Number(rows[0].c) : 0;
+    },
+
+    // Changes the desktop has not taken yet, newest last.
+    async pendingChanges(school_id, { types = null, limit = 500 } = {}) {
+      const cur = await this.appliedCursor(school_id);
+      const { rows } = types && types.length
+        ? await pool.query(
+            'SELECT id, type, payload FROM cloud_changes WHERE school_id = $1 AND id > $2 AND type = ANY($3) ORDER BY id ASC LIMIT $4',
+            [school_id, cur, types, limit])
+        : await pool.query(
+            'SELECT id, type, payload FROM cloud_changes WHERE school_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3',
+            [school_id, cur, limit]);
+      return rows.map(r => ({ id: Number(r.id), type: r.type, payload: r.payload }));
     },
   };
 }

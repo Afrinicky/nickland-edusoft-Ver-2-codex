@@ -442,7 +442,13 @@ function createApiServer(db, opts = {}) {
       }
     });
     try { tx(); } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
-    try { const { enqueueStudentSnapshot } = require('./sync/outbox'); for (const m of marks) enqueueStudentSnapshot(db, m.student_id); } catch (_) {}
+    try {
+      const { enqueueStudentSnapshot } = require('./sync/outbox');
+      for (const m of marks) enqueueStudentSnapshot(db, m.student_id);
+      // …and the class roster, so a teacher who marks in the staff room and
+      // then checks from home sees the register they just took.
+      require('./sync/staff_projection').enqueueRostersForStudents(db, marks.map(m => m.student_id));
+    } catch (_) {}
     return json(res, 200, { ok: true, saved: n });
   });
 
@@ -510,6 +516,7 @@ function createApiServer(db, opts = {}) {
       });
       tx();
     } catch (e) { return json(res, 400, { ok: false, error: e.message }); }
+    try { require('./sync/staff_projection').enqueueRostersForStudents(db, marks.map(m => m.student_id)); } catch (_) {}
     return json(res, 200, { ok: true, saved: n });
   });
 
@@ -555,6 +562,7 @@ function createApiServer(db, opts = {}) {
       });
     } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
     if (!result.ok) return json(res, 400, result);
+    try { require('./sync/staff_projection').enqueueRostersForStudents(db, [sid]); } catch (_) {}
     return json(res, 200, result);
   });
 
@@ -611,6 +619,7 @@ function createApiServer(db, opts = {}) {
       maxMarks: body.maxMarks,
     });
     if (!r.ok) return json(res, 400, r);
+    try { require('./sync/staff_projection').enqueueClassRoster(db, parseInt(body.classId, 10)); } catch (_) {}
     return json(res, 200, r);
   });
 

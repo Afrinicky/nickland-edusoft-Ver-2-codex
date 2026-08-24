@@ -96,18 +96,58 @@ POST /api/v1/sync/push                        → { ok, accepted:[uuid…] }
 GET  /api/v1/sync/pull?since=<cursor>         → { ok, cursor, changes:[{ type, payload }] }
      returns cloud-origin changes (parent_update, student_contact_update, …).
 ```
-`entity_type` values today: `student_snapshot`, `receipt`, `announcement`,
-`message_thread`, and `parent_auth`. The `student_snapshot` read model is **not
-just balances** — its payload carries fees, canteen, the current-term
-**attendance summary** (present/absent/total), the current-term **academic
-report** (per-subject totals + grade, average, class rank, number on roll,
-teacher's remarks), the child's **class timetable** (bell schedule + weekly
-grid), and **upcoming homework**, so the web/mobile portal can show a child's
-results, attendance, timetable and homework while the desktop is offline.
-`message_thread` snapshots carry parent↔school conversations so parents can read
-them off-LAN. Pull `type` values handled: `parent_update`,
-`student_contact_update` (both field-whitelisted). Unknown types are ignored, so
-the contract is forward-compatible.
+#### Parent-facing projections
+`student_snapshot`, `receipt`, `announcement`, `message_thread`, `parent_auth`.
+The `student_snapshot` read model is **not just balances** — its payload carries
+fees, canteen, the current-term **attendance summary** (present/absent/total),
+the current-term **academic report** (per-subject totals + grade, average,
+class rank, number on roll, teacher's remarks), the child's **class timetable**
+(bell schedule + weekly grid), and **upcoming homework**, so the web/mobile
+portal can show a child's results, attendance, timetable and homework while the
+desktop is offline. `message_thread` snapshots carry parent↔school
+conversations so parents can read them off-LAN.
+
+#### Staff-facing projections
+Added so a **teacher can work with the school's desktop switched off** — see
+[`WEB_APP.md`](WEB_APP.md). Built in
+`electron/server/sync/staff_projection.js`:
+
+| `entity_type` | key | carries |
+|---|---|---|
+| `staff_auth` | `user:<id>` | username, full name, designation, `is_admin`, the **resolved** permission map, and the **bcrypt** hash the desktop already stores. Permissions are resolved on the desktop and the answer projected, so designation defaults and per-user overrides have one implementation |
+| `class_roster` | `class:<id>` | the class, its pupils, its subjects, the marks already entered this term, the **last 14 days** of registers, current homework, the class timetable |
+| `school_metrics` | `metrics:school` | the staff dashboard's four numbers |
+| `debtor_list` | `debtors:school` | outstanding fees, top 300 |
+| `staff_timetable` | `timetable:user:<id>` | one teacher's week |
+
+Still a thin cloud: current term only, no ledger, no payroll, no history beyond
+what a register is realistically corrected within.
+
+#### Pull `type` values handled
+`parent_update` and `student_contact_update` (both field-whitelisted), plus a
+teacher's off-LAN work: `attendance_mark`, `score_entry`, `canteen_collect`,
+`homework_create`. Unknown types are ignored, so the contract stays
+forward-compatible.
+
+Staff writes are applied by `electron/server/sync/apply_staff.js` under three
+rules:
+
+1. **Re-check the permission** against the live account. The cloud checked a
+   projection, and a projection can be stale — an account revoked this morning
+   may still look valid in a snapshot pushed last night.
+2. **Be idempotent.** A batch can be delivered twice if the desktop applies it
+   and then fails before saving its cursor. Registers and scores are upserts.
+   Canteen collections and homework are not, so each carries a uuid and the
+   desktop keeps a `cloud_applied_changes` ledger — a replay issues no second
+   receipt and creates no duplicate assignment.
+3. **Never invent authority.** Each change names the user the cloud
+   authenticated; the write is attributed to that teacher, and dropped if the
+   account no longer exists or is inactive.
+
+The cloud records how far each desktop has pulled (`schools.applied_cursor`,
+set when the desktop asks for the batch *after* one it has taken). That is what
+lets it tell a write still in flight from one already applied — and so show a
+teacher their own pending marks instead of a blank register.
 
 ### Cloud service — IMPLEMENTED (`cloud/`)
 A runnable multi-tenant service implements the contract above: Node `http`, a

@@ -274,8 +274,11 @@ Configure these in **Settings** on the desktop when you want them:
 3. [ ] (If teachers/parents want phone access on-site) start the **Mobile App**
        server; provision parents; then either point a browser at the address it
        shows — nothing to install — or run the mobile app and connect over Wi‑Fi.
-4. [ ] (If parents need internet access) deploy the **cloud portal**, register
-       the school, and enable **Cloud Sync** on the desktop.
+4. [ ] (If anyone needs access off-site — parents at home, teachers in the
+       evening) deploy the **cloud service**, register the school, and enable
+       **Cloud Sync** on the desktop. Run **Push now / Re-send everything** once
+       so staff accounts and class rosters are projected; until you do, nobody
+       can sign in online.
 5. [ ] (Optional) turn on **payments**, **SMS/email**, and **backups**.
 6. [ ] Build a real mobile app with **EAS** and distribute it.
 
@@ -293,20 +296,19 @@ Be aware of these before going live:
   and a reload landing back on the same screen — but not yet on a real Android
   device.
 - **Parent replies over the internet** aren't wired yet. Messaging is fully
-  two-way on the LAN; over the cloud portal parents can *read* school messages
-  (and are reachable by the SMS mirror), but replying from the web/cloud is a
-  planned follow-up.
+  two-way on the LAN; over the cloud parents can *read* school messages (and are
+  reachable by the SMS mirror), but replying online is a planned follow-up.
 - **Online payments run through the LAN/host or a tunnel**, not the hosted cloud
   portal directly.
 - **Push notifications** (phone alerts) and an **offline write queue** for the
   mobile app are not built. The web build caches its own shell so it opens
   offline, but never caches school data.
-- **Teachers reach the school over the internet through a tunnel, not the
-  cloud portal.** The portal is a parent-facing read model with no staff
-  sign-in. A tunnel to the school desktop gives teachers their full job from
-  anywhere over HTTPS, and [`WEB_APP.md`](WEB_APP.md) has the Cloudflare setup;
-  the catch is that the desktop has to be switched on. A staff surface in the
-  cloud, which would not need that, is a planned backend piece.
+- **Teachers can work over the internet with the school's computer off** —
+  register, scores, canteen, homework. Their work is saved online at once and
+  reaches the school when it next syncs. Two things still need the school's own
+  system, and say so: **taking a fee payment** (receipts are numbered there) and
+  **marking homework**. A tunnel to the desktop covers those from anywhere, at
+  the cost of the machine having to stay on. See [`WEB_APP.md`](WEB_APP.md).
 - **Multi-school SaaS control plane** (self-service onboarding, billing) isn't
   built — you provision each school with the `create-school` script.
 - Modules a mature SMS might add later: **library circulation, transport, online
