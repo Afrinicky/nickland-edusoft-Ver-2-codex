@@ -1,16 +1,18 @@
-// Nickland Edusoft — Backup scheduling & destination helpers
+// Nickland Edusoft — Backup scheduling, destinations & status helpers
 // Copyright © 2026 Nickland Sales. All rights reserved.
 //
-// Pure, testable helpers for automated backups:
-//   • isBackupDue()  — decide whether a scheduled backup should run now
-//   • copyToFolders()— fan a backup file out to local / LAN / cloud folders
-//   • pruneRetention()— keep only the newest N automatic backups per folder
+// Pure, testable helpers behind the Backup & Restore screen. No Electron, no
+// database driver of its own — everything takes a db handle (anything with
+// `.prepare`) or plain data, so the whole scheduling brain runs under the test
+// suite on node:sqlite.
 //
-// "Cloud" backup is any folder your machine syncs to a drive of choice
-// (Google Drive Desktop, OneDrive, Dropbox, …). Pointing a destination at that
-// folder gives real cloud backups with no credentials to manage — and it works
-// for ANY provider. A direct Drive-API adapter can be added later without
-// changing this contract.
+// The model, in the operator's words:
+//   • WHEN backups happen — Manual only, Every night, or Twice a day.
+//   • WHERE the first copy is kept — the default folder on this PC.
+//   • WHERE copies go after that — a list of destinations (a shared folder on
+//     the network, a second disk, a USB drive, or any folder a cloud client
+//     syncs). Each can be tested, paused, edited or removed, and a copy that
+//     could not be delivered is remembered and retried, not lost.
 
 const fs = require('fs');
 const path = require('path');
@@ -19,71 +21,268 @@ const AUTO_LABEL = 'auto';
 const FILE_GLOB = /^nickland-edusoft-backup-.*\.zip$/i;
 const AUTO_GLOB = /^nickland-edusoft-backup-auto-.*\.zip$/i;
 
+// Schedule modes offered to the operator. 'daily' is kept as an alias of
+// 'nightly' so a config written by an older build still means the same thing.
+const MODES = ['manual', 'nightly', 'twice', 'hourly', 'weekly'];
+const DEFAULT_TIME = '02:00';
+const DEFAULT_TIME2 = '14:00';
+
 function getSetting(db, key, fallback) {
   try { const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(key); return r ? r.value : fallback; }
   catch (_) { return fallback; }
 }
 
-// Read the automated-backup configuration from settings.
+function parseTime(t, dh, dm) {
+  const [hh, mm] = String(t || '').split(':').map(n => parseInt(n, 10));
+  return { h: Number.isFinite(hh) ? hh : dh, m: Number.isFinite(mm) ? mm : dm };
+}
+
+// ── Destinations ────────────────────────────────────────────────────────────
+// Stored as one JSON array in `backup_destinations`. Shape per entry:
+//   { id, label, kind: 'network'|'local', path, paused, lastCopiedAt, lastError }
+function newId() {
+  return 'dest_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function loadDestinations(db) {
+  let list = [];
+  try {
+    const raw = getSetting(db, 'backup_destinations', '');
+    if (raw) list = JSON.parse(raw);
+  } catch (_) { list = []; }
+  if (!Array.isArray(list)) list = [];
+
+  // Migrate the two legacy fixed slots the first time we run without a list.
+  if (!list.length) {
+    const legacyFolder = (getSetting(db, 'backup_folder_path', '') || '').trim();
+    const legacyCloud = (getSetting(db, 'backup_cloud_path', '') || '').trim();
+    if (legacyFolder) list.push({ id: newId(), label: 'Network or shared folder', kind: 'network', path: legacyFolder, paused: false });
+    if (legacyCloud) list.push({ id: newId(), label: 'Cloud-sync folder', kind: 'local', path: legacyCloud, paused: false });
+  }
+  return list.map(d => ({
+    id: d.id || newId(),
+    label: d.label || 'Backup destination',
+    kind: d.kind === 'network' ? 'network' : 'local',
+    path: String(d.path || ''),
+    paused: !!d.paused,
+    lastCopiedAt: d.lastCopiedAt || null,
+    lastError: d.lastError || null,
+  })).filter(d => d.path);
+}
+
+function saveDestinations(db, list, setSetting) {
+  const clean = (list || []).map(d => ({
+    id: d.id || newId(),
+    label: d.label || 'Backup destination',
+    kind: d.kind === 'network' ? 'network' : 'local',
+    path: String(d.path || ''),
+    paused: !!d.paused,
+    lastCopiedAt: d.lastCopiedAt || null,
+    lastError: d.lastError || null,
+  })).filter(d => d.path);
+  setSetting(db, 'backup_destinations', JSON.stringify(clean), 'backup');
+  return clean;
+}
+
+// ── Config ──────────────────────────────────────────────────────────────────
 function getConfig(db) {
+  const rawMode = getSetting(db, 'backup_schedule_mode', '');
+  const legacyEnabled = getSetting(db, 'backup_auto_enabled', 'false') === 'true';
+  const legacyFreq = getSetting(db, 'backup_frequency', 'daily');
+
+  let mode = rawMode;
+  if (!mode) {
+    // Derive a mode from an older config so nothing changes under the operator.
+    if (!legacyEnabled) mode = 'manual';
+    else if (legacyFreq === 'daily') mode = 'nightly';
+    else if (MODES.includes(legacyFreq)) mode = legacyFreq;
+    else mode = 'nightly';
+  }
+  if (mode === 'daily') mode = 'nightly';
+  if (!MODES.includes(mode)) mode = 'manual';
+
   return {
-    enabled: getSetting(db, 'backup_auto_enabled', 'false') === 'true',
-    frequency: getSetting(db, 'backup_frequency', 'daily'),   // hourly | daily | weekly
-    time: getSetting(db, 'backup_time', '20:00'),             // HH:MM (daily/weekly)
-    dayOfWeek: parseInt(getSetting(db, 'backup_day_of_week', '0'), 10) || 0, // 0=Sun
+    mode,
+    scheduled: mode !== 'manual',
+    time: getSetting(db, 'backup_time', DEFAULT_TIME) || DEFAULT_TIME,
+    time2: getSetting(db, 'backup_time2', DEFAULT_TIME2) || DEFAULT_TIME2,
+    dayOfWeek: parseInt(getSetting(db, 'backup_day_of_week', '0'), 10) || 0, // 0=Sun (weekly)
     retention: Math.max(1, parseInt(getSetting(db, 'backup_retention', '10'), 10) || 10),
-    folderPath: (getSetting(db, 'backup_folder_path', '') || '').trim(),   // custom local / LAN / network
-    cloudPath: (getSetting(db, 'backup_cloud_path', '') || '').trim(),     // cloud-sync folder
+    destinations: loadDestinations(db),
     lastAutoAt: getSetting(db, 'backup_last_auto_at', '') || null,
   };
 }
 
+// The daily clock times a schedule fires at (sorted, unique). Empty for manual.
+function scheduleTimes(cfg) {
+  if (cfg.mode === 'nightly' || cfg.mode === 'weekly') return [cfg.time];
+  if (cfg.mode === 'twice') {
+    const set = [cfg.time, cfg.time2].filter(Boolean);
+    return [...new Set(set)].sort();
+  }
+  return [];
+}
+
+// The most recent scheduled slot at or before `now` (a Date), or null. Looks
+// back over today's and yesterday's times so an overnight slot is caught the
+// next morning.
+function lastSlotBefore(cfg, now) {
+  const times = scheduleTimes(cfg);
+  if (!times.length) return null;
+  let best = null;
+  for (const dayOffset of [0, -1]) {
+    for (const t of times) {
+      const { h, m } = parseTime(t, 2, 0);
+      const slot = new Date(now);
+      slot.setDate(slot.getDate() + dayOffset);
+      slot.setHours(h, m, 0, 0);
+      if (cfg.mode === 'weekly' && slot.getDay() !== cfg.dayOfWeek) continue;
+      if (slot.getTime() <= now.getTime() && (!best || slot.getTime() > best.getTime())) best = slot;
+    }
+  }
+  return best;
+}
+
+// The next scheduled slot strictly after `now`, or null (for the status card).
+function nextRunAt(cfg, now = new Date()) {
+  if (cfg.mode === 'manual') return null;
+  if (cfg.mode === 'hourly') {
+    const last = cfg.lastAutoAt ? new Date(cfg.lastAutoAt) : now;
+    return new Date(Math.max(now.getTime(), last.getTime() + 60 * 60 * 1000));
+  }
+  const times = scheduleTimes(cfg);
+  let best = null;
+  for (let dayOffset = 0; dayOffset <= 7; dayOffset++) {
+    for (const t of times) {
+      const { h, m } = parseTime(t, 2, 0);
+      const slot = new Date(now);
+      slot.setDate(slot.getDate() + dayOffset);
+      slot.setHours(h, m, 0, 0);
+      if (cfg.mode === 'weekly' && slot.getDay() !== cfg.dayOfWeek) continue;
+      if (slot.getTime() > now.getTime() && (!best || slot.getTime() < best.getTime())) best = slot;
+    }
+    if (best) break;
+  }
+  return best;
+}
+
 // Decide whether a scheduled backup is due. `now` and `last` are Date | null.
 function isBackupDue(cfg, now = new Date(), last = null) {
-  if (!cfg.enabled) return false;
+  if (!cfg.scheduled) return false;
   const lastMs = last ? last.getTime() : 0;
 
-  if (cfg.frequency === 'hourly') {
+  if (cfg.mode === 'hourly') {
     // Due if it's been ~an hour (55-min tolerance so a 60s tick never skips).
     return (now.getTime() - lastMs) >= 55 * 60 * 1000;
   }
 
-  const [hh, mm] = String(cfg.time || '20:00').split(':').map(n => parseInt(n, 10));
-  const scheduled = new Date(now);
-  scheduled.setHours(isNaN(hh) ? 20 : hh, isNaN(mm) ? 0 : mm, 0, 0);
-
-  if (cfg.frequency === 'weekly') {
-    if (now.getDay() !== cfg.dayOfWeek) return false;
-  }
-  // Daily & weekly: the scheduled time today has passed, and we haven't backed
-  // up since that moment.
-  return now.getTime() >= scheduled.getTime() && lastMs < scheduled.getTime();
+  const slot = lastSlotBefore(cfg, now);
+  if (!slot) return false;
+  return lastMs < slot.getTime();
 }
 
-// The set of destination folders for a backup (excluding the default folder,
-// which the backup routine writes to directly).
-function destinationFolders(cfg) {
-  return [cfg.folderPath, cfg.cloudPath].filter(Boolean);
-}
-
+// ── Copy fan-out & retry ────────────────────────────────────────────────────
 function ensureDir(dir) { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); }
 
-// Copy one backup file into each destination folder. Never throws; returns a
-// per-folder result so the UI can show which destinations succeeded.
+// Back-compat: the plain list of non-paused destination folder paths.
+function destinationFolders(cfg) {
+  return (cfg.destinations || []).filter(d => !d.paused).map(d => d.path);
+}
+
+// Copy one backup file into a set of folders (legacy helper; kept for tests and
+// any caller that only has paths). Never throws.
 function copyToFolders(srcPath, folders) {
   const results = [];
   const name = path.basename(srcPath);
   for (const folder of folders) {
     try {
       ensureDir(folder);
-      const dest = path.join(folder, name);
-      fs.copyFileSync(srcPath, dest);
-      results.push({ folder, ok: true, path: dest });
+      fs.copyFileSync(srcPath, path.join(folder, name));
+      results.push({ folder, ok: true, path: path.join(folder, name) });
     } catch (e) {
       results.push({ folder, ok: false, error: e.message });
     }
   }
   return results;
+}
+
+// Copy one backup file to every non-paused destination, by id. Returns a
+// per-destination result AND the failures, so the caller can update each
+// destination's status and queue the failures for retry.
+function copyToDestinations(srcPath, destinations, fsMod) {
+  const fsm = fsMod || fs;
+  const name = path.basename(srcPath);
+  const results = [];
+  for (const d of destinations || []) {
+    if (d.paused) { results.push({ id: d.id, skipped: true }); continue; }
+    try {
+      if (!fsm.existsSync(d.path)) fsm.mkdirSync(d.path, { recursive: true });
+      fsm.copyFileSync(srcPath, path.join(d.path, name));
+      results.push({ id: d.id, ok: true, path: path.join(d.path, name) });
+    } catch (e) {
+      results.push({ id: d.id, ok: false, error: (e && e.message) || String(e) });
+    }
+  }
+  return results;
+}
+
+// The retry queue — copies that could not be delivered, kept so a destination
+// coming back online later is filled in rather than silently missing a backup.
+function loadPending(db) {
+  try { const raw = getSetting(db, 'backup_pending_copies', ''); const a = raw ? JSON.parse(raw) : []; return Array.isArray(a) ? a : []; }
+  catch (_) { return []; }
+}
+function savePending(db, list, setSetting) {
+  setSetting(db, 'backup_pending_copies', JSON.stringify(list || []), 'backup');
+}
+
+// Attempt every queued copy whose source file still exists. A copy whose source
+// is gone (pruned away) is dropped — it can no longer be delivered, and the
+// newer backup that replaced it will be. Returns { delivered, remaining }.
+function retryPending(db, destinations, setSetting, fsMod) {
+  const fsm = fsMod || fs;
+  const pending = loadPending(db);
+  if (!pending.length) return { delivered: 0, remaining: 0 };
+  const byId = new Map((destinations || []).map(d => [d.id, d]));
+  const stillPending = [];
+  let delivered = 0;
+  for (const item of pending) {
+    const d = byId.get(item.destId);
+    if (!d || d.paused) { stillPending.push(item); continue; }
+    if (!fsm.existsSync(item.srcPath)) continue;   // source pruned — drop it
+    try {
+      if (!fsm.existsSync(d.path)) fsm.mkdirSync(d.path, { recursive: true });
+      fsm.copyFileSync(item.srcPath, path.join(d.path, path.basename(item.srcPath)));
+      delivered++;
+    } catch (_) {
+      stillPending.push(item);
+    }
+  }
+  savePending(db, stillPending, setSetting);
+  return { delivered, remaining: stillPending.length };
+}
+
+// How many copies are waiting for each destination id.
+function waitingByDest(db) {
+  const counts = {};
+  for (const item of loadPending(db)) counts[item.destId] = (counts[item.destId] || 0) + 1;
+  return counts;
+}
+
+// Is a destination folder reachable and writable? Writes a probe file and
+// removes it — the only honest test of "will a backup land here".
+function testDestination(folder, fsMod) {
+  const fsm = fsMod || fs;
+  if (!folder || !String(folder).trim()) return { ok: false, error: 'No folder given.' };
+  try {
+    if (!fsm.existsSync(folder)) fsm.mkdirSync(folder, { recursive: true });
+    const probe = path.join(folder, `.nickland-write-test-${Date.now()}`);
+    fsm.writeFileSync(probe, 'ok');
+    fsm.unlinkSync(probe);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
 }
 
 // Keep only the newest `keep` automatic backups in a folder; delete older ones.
@@ -103,7 +302,46 @@ function pruneRetention(folder, keep) {
   return removed;
 }
 
+// ── Status ──────────────────────────────────────────────────────────────────
+// The three indicators on the hero card, plus an overall verdict.
+//   recent   — has a backup been taken recently?
+//   scheduled— is one set to run on its own, and when next?
+//   offsite  — are copies reaching at least one destination?
+function computeStatus(cfg, facts, now = new Date()) {
+  const f = facts || {};
+  const lastAt = f.lastBackupAt ? new Date(f.lastBackupAt) : null;
+  const ageMs = lastAt ? (now.getTime() - lastAt.getTime()) : Infinity;
+  // "Recent" tolerance follows the schedule: a nightly school is fine a day
+  // later; a manual one is judged against a week.
+  const window = cfg.mode === 'twice' ? 18 * 3600e3
+    : cfg.mode === 'hourly' ? 3 * 3600e3
+    : cfg.mode === 'manual' ? 8 * 24 * 3600e3
+    : 30 * 3600e3;
+  const recent = { ok: lastAt != null && ageMs <= window, at: f.lastBackupAt || null };
+
+  const scheduled = { ok: cfg.mode !== 'manual', mode: cfg.mode, nextAt: cfg.mode !== 'manual' ? (nextRunAt(cfg, now) || null) : null };
+
+  const active = (cfg.destinations || []).filter(d => !d.paused);
+  const failing = active.filter(d => d.lastError).length;
+  const offsite = {
+    ok: active.length > 0 && failing === 0,
+    configured: (cfg.destinations || []).length,
+    active: active.length,
+    failing,
+    waiting: (f.waitingTotal || 0),
+  };
+
+  let verdict = 'good';
+  if (!recent.ok || (!scheduled.ok && !recent.ok)) verdict = 'at-risk';
+  else if (!scheduled.ok || !offsite.ok) verdict = 'gap';
+  return { verdict, recent, scheduled, offsite };
+}
+
 module.exports = {
-  AUTO_LABEL, FILE_GLOB, AUTO_GLOB,
-  getConfig, isBackupDue, destinationFolders, copyToFolders, pruneRetention, ensureDir,
+  AUTO_LABEL, FILE_GLOB, AUTO_GLOB, MODES, DEFAULT_TIME, DEFAULT_TIME2,
+  getConfig, isBackupDue, nextRunAt, scheduleTimes, lastSlotBefore,
+  loadDestinations, saveDestinations, newId,
+  destinationFolders, copyToFolders, copyToDestinations,
+  loadPending, savePending, retryPending, waitingByDest,
+  testDestination, pruneRetention, ensureDir, computeStatus,
 };

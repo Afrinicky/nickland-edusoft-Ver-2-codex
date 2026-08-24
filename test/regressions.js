@@ -280,6 +280,106 @@ console.log('\n── Backup restore: database validation ──');
   fs.unlinkSync(junk);
 }
 
+console.log('\n── Backup engine: schedule, destinations, retry ──');
+{
+  const engine = require(path.join(ROOT, 'electron/ipc/backup_engine.js'));
+  const db = makeDb();
+  const set = (k, v) => setSetting(db, k, v, 'backup');
+
+  // Nightly at 02:00.
+  set('backup_schedule_mode', 'nightly'); set('backup_time', '02:00');
+  let cfg = engine.getConfig(db);
+  ck('nightly is a scheduled mode', cfg.scheduled === true && cfg.mode === 'nightly');
+  ck('nightly due at 03:00 when never run',
+    engine.isBackupDue(cfg, new Date('2026-08-25T03:00:00'), null) === true);
+  ck('nightly not due once run past the slot',
+    engine.isBackupDue(cfg, new Date('2026-08-25T03:00:00'), new Date('2026-08-25T02:30:00')) === false);
+  ck('nightly due again after a missed night',
+    engine.isBackupDue(cfg, new Date('2026-08-25T01:00:00'), new Date('2026-08-23T02:30:00')) === true);
+  const next = engine.nextRunAt(cfg, new Date('2026-08-25T10:00:00'));
+  ck('nightly next run is the following 02:00', next && next.getHours() === 2 && next.getDate() === 26);
+
+  // Twice a day 02:00 & 14:00.
+  set('backup_schedule_mode', 'twice'); set('backup_time2', '14:00');
+  cfg = engine.getConfig(db);
+  ck('twice due in the afternoon when only morning ran',
+    engine.isBackupDue(cfg, new Date('2026-08-25T15:00:00'), new Date('2026-08-25T02:30:00')) === true);
+  ck('twice not due once the afternoon ran',
+    engine.isBackupDue(cfg, new Date('2026-08-25T15:00:00'), new Date('2026-08-25T14:30:00')) === false);
+
+  // Manual.
+  set('backup_schedule_mode', 'manual');
+  cfg = engine.getConfig(db);
+  ck('manual is never due and has no next run',
+    engine.isBackupDue(cfg, new Date(), null) === false && engine.nextRunAt(cfg) === null);
+
+  // Legacy config still means the same thing.
+  const db2 = makeDb();
+  setSetting(db2, 'backup_auto_enabled', 'true', 'backup');
+  setSetting(db2, 'backup_frequency', 'daily', 'backup');
+  ck('legacy daily config derives to nightly', engine.getConfig(db2).mode === 'nightly');
+
+  // Two legacy folder slots migrate into the destinations list.
+  const db3 = makeDb();
+  setSetting(db3, 'backup_folder_path', '\\\\server\\backups', 'backup');
+  setSetting(db3, 'backup_cloud_path', 'C:\\Users\\me\\GDrive', 'backup');
+  const migrated = engine.getConfig(db3).destinations;
+  ck('legacy folders migrate to destinations', migrated.length === 2);
+  ck('a UNC path is tagged as a network destination',
+    migrated.find(d => d.path.includes('server')).kind === 'network');
+
+  // Retry queue: a failed copy is remembered and later delivered.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ne-bk-'));
+  const src = path.join(tmp, 'nickland-edusoft-backup-auto-x.zip');
+  fs.writeFileSync(src, 'zip');
+  const dest = path.join(tmp, 'dest');
+  setSetting(db, 'backup_pending_copies', JSON.stringify([{ destId: 'd1', srcPath: src }]), 'backup');
+  const r = engine.retryPending(db, [{ id: 'd1', path: dest, paused: false }], (d, k, val) => setSetting(d, k, val, 'backup'));
+  ck('a queued copy is delivered once the destination is reachable', r.delivered === 1 && r.remaining === 0);
+  ck('and the file actually lands there', fs.existsSync(path.join(dest, path.basename(src))));
+
+  // Status verdicts.
+  const good = engine.computeStatus(
+    { mode: 'nightly', destinations: [{ id: 'd', path: '/x', paused: false, lastError: null }] },
+    { lastBackupAt: new Date().toISOString(), waitingTotal: 0 }, new Date());
+  ck('a scheduled, recently-backed-up, off-site school reads as good', good.verdict === 'good');
+  const risk = engine.computeStatus({ mode: 'manual', destinations: [] }, { lastBackupAt: null }, new Date());
+  ck('a manual school that never backed up reads as at-risk', risk.verdict === 'at-risk');
+
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+}
+
+console.log('\n── Backup restore: upload paths survive a data-folder move (the logo fix) ──');
+{
+  const { repairUploadPaths } = require(path.join(ROOT, 'electron/ipc/backup_archive.js'));
+  const db = makeDb();
+  // A fresh userData whose uploads hold the files the backup restored.
+  const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'ne-ud-'));
+  fs.mkdirSync(path.join(ud, 'uploads', 'signatures'), { recursive: true });
+  fs.writeFileSync(path.join(ud, 'uploads', 'school_logo.png'), 'x');
+  fs.writeFileSync(path.join(ud, 'uploads', 'signatures', 'proprietor_signature_1.png'), 'x');
+
+  // The database (restored from another PC) still names the OLD absolute paths.
+  setSetting(db, 'school_logo_path', 'D:\\OldPC\\AppData\\nickland-edusoft\\uploads\\school_logo.png', 'branding');
+  setSetting(db, 'proprietor_signature_path', 'D:\\OldPC\\uploads\\signatures\\proprietor_signature_1.png', 'branding');
+  setSetting(db, 'school_name', 'Ave Maria', 'branding');
+  try { db.prepare("UPDATE students SET photo_path = 'D:\\OldPC\\uploads\\photos\\students\\1.jpg' WHERE id = 1").run(); } catch (_) {}
+
+  const res = repairUploadPaths(db, ud);
+  const logo = getSetting(db, 'school_logo_path');
+  const sig = getSetting(db, 'proprietor_signature_path');
+  ck('the logo path is healed to the current uploads folder',
+    logo === path.join(ud, 'uploads', 'school_logo.png') && fs.existsSync(logo));
+  ck('the signature path is healed too',
+    sig === path.join(ud, 'uploads', 'signatures', 'proprietor_signature_1.png'));
+  ck('a non-path setting is left untouched', getSetting(db, 'school_name') === 'Ave Maria');
+  ck('a path whose file is missing is NOT rewritten to a dead location',
+    String(getSetting(db, 'school_logo_path')).indexOf('OldPC') === -1);
+  ck('at least the logo and signature were repaired', res.repaired >= 2);
+
+  try { fs.rmSync(ud, { recursive: true, force: true }); } catch (_) {}
+}
+
 console.log('\n── Parent accounts ──');
 {
   const db = makeDb();

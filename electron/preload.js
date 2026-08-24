@@ -527,6 +527,17 @@ const api = {
     setConfig:         (patch)               => ipcRenderer.invoke('backup:set-config', patch),
     runAuto:           ()                    => ipcRenderer.invoke('backup:run-auto'),
     pickFolder:        ()                    => ipcRenderer.invoke('backup:pick-folder'),
+    // Advanced: health status, destinations, retry, save-a-copy, restore-from-file.
+    status:            ()                    => ipcRenderer.invoke('backup:status'),
+    listDestinations:  ()                    => ipcRenderer.invoke('backup:list-destinations'),
+    addDestination:    (data)                => ipcRenderer.invoke('backup:add-destination', data),
+    updateDestination: (data)                => ipcRenderer.invoke('backup:update-destination', data),
+    removeDestination: (id)                  => ipcRenderer.invoke('backup:remove-destination', id),
+    testDestination:   (data)                => ipcRenderer.invoke('backup:test-destination', data),
+    retry:             ()                    => ipcRenderer.invoke('backup:retry'),
+    saveCopy:          (backupPath)          => ipcRenderer.invoke('backup:save-copy', backupPath),
+    pickFile:          ()                    => ipcRenderer.invoke('backup:pick-file'),
+    setPrimaryFolder:  (folder)              => ipcRenderer.invoke('backup:set-primary-folder', folder),
   },
 
   // ── App-level ─────────────────────────────────────────

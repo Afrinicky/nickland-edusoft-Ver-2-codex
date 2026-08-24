@@ -46,4 +46,67 @@ function verifyDatabaseFile(filePath) {
   }
 }
 
-module.exports = { safeExtractPath, verifyDatabaseFile };
+
+// After a restore — or after an app update that moved the data folder — the
+// absolute upload paths baked into the database (the school logo, the two
+// signatures, every student/staff/user photo) point at where those files USED
+// to live. The files themselves are restored into the CURRENT uploads folder,
+// but the stored path still names the old one, so `file://<oldpath>` resolves
+// to nothing and the image shows broken. The classic symptom: "after an update,
+// the logo disappears when I restore a backup."
+//
+// This re-points every stored upload path at the current uploads folder,
+// keyed by the part of the path AFTER the `uploads/` segment (so
+// `…/uploads/signatures/x.png` heals to `<here>/uploads/signatures/x.png`).
+// It only rewrites when the file actually exists at the new location, so it can
+// never replace a working path with a dead one. Pure and db-agnostic: it works
+// on any handle with `.prepare`, so it is exercised directly in the tests.
+function subPathAfterUploads(stored) {
+  const norm = String(stored || '').replace(/\\/g, '/');
+  const m = norm.match(/(?:^|\/)uploads\/(.+)$/i);
+  return m ? m[1] : null;   // e.g. 'school_logo.png' or 'signatures/x.png'
+}
+
+function repairUploadPaths(db, userDataPath, fsMod) {
+  const fs = fsMod || require('fs');
+  const uploadsRoot = path.join(userDataPath, 'uploads');
+  let repaired = 0;
+  const details = [];
+
+  const heal = (stored) => {
+    const sub = subPathAfterUploads(stored);
+    if (!sub) return null;
+    // Rebuild with OS-correct separators from the archived sub-path.
+    const next = path.join(uploadsRoot, ...sub.split('/'));
+    if (next === stored) return null;                 // already correct
+    try { if (!fs.existsSync(next)) return null; }     // never point at a missing file
+    catch (_) { return null; }
+    return next;
+  };
+
+  // ── settings: *_path keys that point into uploads ──
+  try {
+    const rows = db.prepare("SELECT key, value FROM settings WHERE key LIKE '%\_path' ESCAPE '\\'").all();
+    const upd = db.prepare('UPDATE settings SET value = ? WHERE key = ?');
+    for (const r of rows) {
+      const next = heal(r.value);
+      if (next) { upd.run(next, r.key); repaired++; details.push({ where: `settings.${r.key}`, to: next }); }
+    }
+  } catch (_) { /* older schema — skip */ }
+
+  // ── photo_path columns on the people tables ──
+  for (const table of ['students', 'staff', 'users']) {
+    try {
+      const rows = db.prepare(`SELECT id, photo_path FROM ${table} WHERE photo_path IS NOT NULL AND photo_path <> ''`).all();
+      const upd = db.prepare(`UPDATE ${table} SET photo_path = ? WHERE id = ?`);
+      for (const r of rows) {
+        const next = heal(r.photo_path);
+        if (next) { upd.run(next, r.id); repaired++; details.push({ where: `${table}#${r.id}.photo_path`, to: next }); }
+      }
+    } catch (_) { /* table/column absent — skip */ }
+  }
+
+  return { repaired, details };
+}
+
+module.exports = { safeExtractPath, verifyDatabaseFile, repairUploadPaths, subPathAfterUploads };

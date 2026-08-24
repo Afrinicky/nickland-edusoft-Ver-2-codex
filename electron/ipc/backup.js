@@ -23,8 +23,27 @@ const BACKUP_DIR_NAME = 'Nickland Edusoft Backups';
 const UPLOADS_DIR_NAME = 'uploads';
 
 // ── Helpers ───────────────────────────────────────────────
-function backupDir(userDataPath) {
+function defaultBackupDir(userDataPath) {
   return path.join(userDataPath, BACKUP_DIR_NAME);
+}
+
+// Where the FIRST copy of every backup is kept. Defaults to a folder beside the
+// data on this PC; an operator can point it at a second disk or a network drive
+// ("Where backups are kept · Change folder"). Falls back to the default the
+// moment the chosen folder cannot be reached, so a missing network share can
+// never stop a backup from being written somewhere safe.
+function primaryFolder(db, userDataPath) {
+  let chosen = '';
+  try { const r = db.prepare("SELECT value FROM settings WHERE key = 'backup_primary_folder'").get(); chosen = (r && r.value || '').trim(); }
+  catch (_) {}
+  if (!chosen) return defaultBackupDir(userDataPath);
+  try { ensureDir(chosen); return chosen; } catch (_) { return defaultBackupDir(userDataPath); }
+}
+
+// Back-compat shim: older code in this file called backupDir(userDataPath).
+// It now resolves the configured primary folder when a db handle is in scope.
+function backupDir(userDataPath) {
+  return defaultBackupDir(userDataPath);
 }
 
 function ensureDir(dir) {
@@ -88,7 +107,7 @@ async function createBackup(db, userDataPath, { label } = {}) {
     return { ok: false, error: 'ZIP library (pizzip) is not available.' };
   }
 
-  const dir = backupDir(userDataPath);
+  const dir = primaryFolder(db, userDataPath);
   ensureDir(dir);
 
   const stamp = timestamp();
@@ -145,16 +164,53 @@ async function createBackup(db, userDataPath, { label } = {}) {
   return { ok: true, path: zipPath, fileName, folder: dir, size: stat.size, format: 'zip' };
 }
 
-// Copy a freshly-made backup to the configured extra destinations (custom
-// folder / LAN / cloud-sync folder) and prune old automatic backups everywhere.
+// Copy a freshly-made backup out to every configured destination, remember any
+// that could not be reached so they are retried later, update each
+// destination's status, and prune old automatic backups everywhere.
 function fanOutAndPrune(db, userDataPath, srcPath) {
   const cfg = engine.getConfig(db);
-  const folders = engine.destinationFolders(cfg);
-  const copies = srcPath ? engine.copyToFolders(srcPath, folders) : [];
+  const dests = cfg.destinations || [];
+  const copies = srcPath ? engine.copyToDestinations(srcPath, dests) : [];
+
+  // Record failures for retry, and stamp each destination with its outcome so
+  // the screen can show a red or green dot without re-testing.
+  const pending = engine.loadPending(db);
+  const now = new Date().toISOString();
+  const byId = new Map(dests.map(d => [d.id, d]));
+  for (const r of copies) {
+    const d = byId.get(r.id);
+    if (!d || r.skipped) continue;
+    if (r.ok) { d.lastCopiedAt = now; d.lastError = null; }
+    else {
+      d.lastError = r.error || 'copy failed';
+      if (srcPath) pending.push({ destId: r.id, srcPath, queuedAt: now });
+    }
+  }
+  engine.saveDestinations(db, dests, setSetting);
+  engine.savePending(db, pending, setSetting);
+
   // Prune the default folder + every destination folder.
-  engine.pruneRetention(backupDir(userDataPath), cfg.retention);
-  for (const folder of folders) engine.pruneRetention(folder, cfg.retention);
+  engine.pruneRetention(primaryFolder(db, userDataPath), cfg.retention);
+  for (const d of dests) engine.pruneRetention(d.path, cfg.retention);
   return copies;
+}
+
+// Retry the copies that never reached a destination. Called on the scheduler
+// tick and from the "retry now" button.
+function retryDeliveries(db) {
+  const cfg = engine.getConfig(db);
+  const dests = cfg.destinations || [];
+  const res = engine.retryPending(db, dests, setSetting);
+  // A destination that just took its backlog is no longer failing.
+  if (res.delivered > 0) {
+    const waiting = engine.waitingByDest(db);
+    let changed = false;
+    for (const d of dests) {
+      if (d.lastError && !waiting[d.id]) { d.lastError = null; d.lastCopiedAt = new Date().toISOString(); changed = true; }
+    }
+    if (changed) engine.saveDestinations(db, dests, setSetting);
+  }
+  return res;
 }
 
 // The full automatic backup: snapshot → default folder → destinations → prune.
@@ -173,12 +229,50 @@ async function runAutomaticBackup(db, userDataPath) {
 async function maybeRunScheduledBackup(db, userDataPath) {
   try {
     const cfg = engine.getConfig(db);
-    if (!cfg.enabled) return;
+    // Always try to clear the retry backlog — a destination that was offline
+    // when a backup ran should be filled the moment it comes back, whether or
+    // not another backup is due.
+    try { retryDeliveries(db); } catch (_) {}
+    if (!cfg.scheduled) return;
     const last = cfg.lastAutoAt ? new Date(cfg.lastAutoAt) : null;
     if (engine.isBackupDue(cfg, new Date(), last)) {
       await runAutomaticBackup(db, userDataPath);
     }
   } catch (_) { /* never let the scheduler crash the app */ }
+}
+
+// The label prefixes used for the safety copies taken automatically before a
+// restore or a factory reset. Kept as constants so the list view can label
+// them "Pre-restore snapshot" / "Pre-reset snapshot" the way the operator reads
+// them, while still matching copies made by older builds.
+const PRE_RESTORE_LABEL = 'pre-restore-snapshot';
+const PRE_RESET_LABEL = 'pre-reset-snapshot';
+
+// Work out what a backup file IS from its name, for the restore list.
+function backupMeta(fileName) {
+  const n = String(fileName);
+  if (/-pre-restore-snapshot-|-safety-before-restore-/.test(n)) return { kind: 'pre-restore', label: 'Pre-restore snapshot' };
+  if (/-pre-reset-snapshot-|-safety-before-reset-/.test(n)) return { kind: 'pre-reset', label: 'Pre-reset snapshot' };
+  if (/-auto-/.test(n)) return { kind: 'auto', label: 'Automatic backup' };
+  return { kind: 'manual', label: 'Manual backup' };
+}
+
+// Heal the absolute upload paths in the live database so the logo, signatures
+// and photos survive a data-folder move (an app update, a new PC). Cheap; safe
+// to call on every launch. Uses the live handle, which is better-sqlite3 in the
+// app but only needs `.prepare`.
+function repairUploadPathsOnStartup(db, userDataPath) {
+  try {
+    const { repairUploadPaths } = require('./backup_archive');
+    const r = repairUploadPaths(db, userDataPath);
+    if (r.repaired > 0) {
+      try {
+        db.prepare("INSERT INTO system_log (level, source, message, detail) VALUES ('info','backup',?,?)")
+          .run(`Repaired ${r.repaired} upload path(s) after a data-folder move`, JSON.stringify(r.details).slice(0, 800));
+      } catch (_) {}
+    }
+    return r;
+  } catch (_) { return { repaired: 0 }; }
 }
 
 module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath) {
@@ -191,10 +285,17 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
 
   // ── Where backups are stored ──────────────────────────
   ipcMain.handle('backup:get-info', () => {
-    const dir = backupDir(userDataPath);
+    const dir = primaryFolder(db, userDataPath);
+    let chosen = '';
+    try { const r = db.prepare("SELECT value FROM settings WHERE key = 'backup_primary_folder'").get(); chosen = (r && r.value || '').trim(); } catch (_) {}
+    const reachable = chosen ? engine.testDestination(chosen).ok : true;
     return {
       ok: true,
       folder: dir,
+      configuredFolder: chosen || null,
+      isDefault: !chosen,
+      reachable,
+      defaultFolder: defaultBackupDir(userDataPath),
       dbPath: path.join(userDataPath, DB_FILE),
       uploadsPath: path.join(userDataPath, UPLOADS_DIR_NAME),
       format: 'zip',
@@ -203,14 +304,14 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
 
   // ── List previous backups ─────────────────────────────
   ipcMain.handle('backup:list', () => {
-    const dir = backupDir(userDataPath);
+    const dir = primaryFolder(db, userDataPath);
     if (!fs.existsSync(dir)) return { ok: true, folder: dir, backups: [] };
     const backups = fs.readdirSync(dir)
       .filter((f) => f.toLowerCase().endsWith('.zip'))
       .map((f) => {
         const full = path.join(dir, f);
         const st = fs.statSync(full);
-        return { fileName: f, path: full, size: st.size, modified: st.mtime.toISOString() };
+        return { fileName: f, path: full, size: st.size, modified: st.mtime.toISOString(), ...backupMeta(f) };
       })
       .sort((a, b) => b.modified.localeCompare(a.modified));
     return { ok: true, folder: dir, backups };
@@ -218,7 +319,7 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
 
   // ── Open the backups folder in the OS file manager ────
   ipcMain.handle('backup:open-folder', () => {
-    const dir = backupDir(userDataPath);
+    const dir = primaryFolder(db, userDataPath);
     ensureDir(dir);
     return require('electron').shell.openPath(dir);
   });
@@ -242,19 +343,24 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
   // ── Automated backup config ───────────────────────────
   ipcMain.handle('backup:get-config', () => {
     const cfg = engine.getConfig(db);
-    return { ok: true, config: cfg, defaultFolder: backupDir(userDataPath) };
+    return { ok: true, config: cfg, defaultFolder: primaryFolder(db, userDataPath) };
   });
 
   ipcMain.handle('backup:set-config', (_e, patch) => {
     if (!security.checkPermission(db, 'settings', 'edit')) return denied('change backup settings');
     const map = {
-      enabled: 'backup_auto_enabled', frequency: 'backup_frequency', time: 'backup_time',
+      mode: 'backup_schedule_mode', time: 'backup_time', time2: 'backup_time2',
       dayOfWeek: 'backup_day_of_week', retention: 'backup_retention',
+      // Legacy keys, still accepted so nothing that writes them breaks.
+      enabled: 'backup_auto_enabled', frequency: 'backup_frequency',
       folderPath: 'backup_folder_path', cloudPath: 'backup_cloud_path',
     };
     for (const [k, key] of Object.entries(map)) {
       if (patch[k] !== undefined) setSetting(db, key, patch[k], 'backup');
     }
+    // Keep the legacy enabled flag consistent with the mode so an older code
+    // path (or a downgrade) still reads the right on/off state.
+    if (patch.mode !== undefined) setSetting(db, 'backup_auto_enabled', patch.mode !== 'manual', 'backup');
     return { ok: true, config: engine.getConfig(db) };
   });
 
@@ -338,7 +444,7 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
       }
 
       // 5. Safety backup of the CURRENT data before we overwrite anything.
-      const safety = await createBackup(db, userDataPath, { label: 'safety-before-restore' });
+      const safety = await createBackup(db, userDataPath, { label: PRE_RESTORE_LABEL });
       if (!safety.ok) return { ok: false, error: 'Could not create a safety backup, restore aborted.' };
 
       recordAudit(db, 'restore', `Restoring from ${path.basename(backupPath)}; safety backup: ${safety.fileName}`, 'high');
@@ -372,6 +478,22 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
           ensureDir(path.dirname(entry.dest));
           fs.writeFileSync(entry.dest, entry.buffer);
         }
+
+        // 8c. Re-point the absolute upload paths inside the RESTORED database at
+        //     this machine's uploads folder. The backup carries the logo,
+        //     signatures and photos, but their stored paths name wherever the
+        //     backup was MADE — a different PC, or this one before an update
+        //     moved the data folder. Without this the files are on disk but the
+        //     database points elsewhere, and the logo shows broken. The live
+        //     handle is already closed, so open the on-disk copy just for this.
+        try {
+          const { repairUploadPaths } = require('./backup_archive');
+          let Database; try { Database = require('better-sqlite3'); } catch (_) { Database = null; }
+          if (Database) {
+            const restored = new Database(dbPath);
+            try { repairUploadPaths(restored, userDataPath); } finally { restored.close(); }
+          }
+        } catch (_) { /* a heal failure must never fail an otherwise-good restore */ }
       } catch (e) {
         // The database handle is already closed, so the app cannot continue in
         // this state either way — restart so it reopens against whatever is on
@@ -393,6 +515,134 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
     }
   });
 
+  // ── Where the first copy is kept (the primary folder) ──
+  ipcMain.handle('backup:set-primary-folder', (_e, folder) => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return denied('change the backup folder');
+    const chosen = (folder || '').trim();
+    if (chosen) {
+      const t = engine.testDestination(chosen);
+      if (!t.ok) return { ok: false, error: `That folder cannot be used: ${t.error}` };
+    }
+    setSetting(db, 'backup_primary_folder', chosen, 'backup');
+    recordAudit(db, 'backup_folder_changed', `Primary backup folder set to: ${chosen || '(default)'}`, 'normal');
+    return { ok: true, folder: primaryFolder(db, userDataPath), isDefault: !chosen };
+  });
+
+  // ── Health status for the hero card ───────────────────
+  ipcMain.handle('backup:status', () => {
+    const cfg = engine.getConfig(db);
+    const dir = primaryFolder(db, userDataPath);
+    let lastBackupAt = null, lastBackupSize = 0, keptHere = 0, totalHereBytes = 0;
+    try {
+      if (fs.existsSync(dir)) {
+        const files = fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith('.zip'))
+          .map(f => ({ f, st: fs.statSync(path.join(dir, f)) }))
+          .sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
+        keptHere = files.length;
+        totalHereBytes = files.reduce((n, x) => n + x.st.size, 0);
+        if (files.length) { lastBackupAt = files[0].st.mtime.toISOString(); lastBackupSize = files[0].st.size; }
+      }
+    } catch (_) {}
+    const waiting = engine.waitingByDest(db);
+    const waitingTotal = Object.values(waiting).reduce((a, b) => a + b, 0);
+    const status = engine.computeStatus(cfg, { lastBackupAt, waitingTotal }, new Date());
+    return {
+      ok: true, status,
+      lastBackupAt, lastBackupSize, keptHere, totalHereBytes,
+      retention: cfg.retention, mode: cfg.mode, defaultFolder: dir,
+    };
+  });
+
+  // ── Destinations (where copies go) ────────────────────
+  ipcMain.handle('backup:list-destinations', () => {
+    const cfg = engine.getConfig(db);
+    const waiting = engine.waitingByDest(db);
+    return { ok: true, destinations: cfg.destinations.map(d => ({ ...d, waiting: waiting[d.id] || 0 })) };
+  });
+
+  ipcMain.handle('backup:add-destination', (_e, { label, kind, path: destPath } = {}) => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return denied('add backup destinations');
+    if (!destPath || !String(destPath).trim()) return { ok: false, error: 'A folder is required.' };
+    const cfg = engine.getConfig(db);
+    const list = cfg.destinations.concat([{
+      id: engine.newId(),
+      label: (label && String(label).trim()) || (kind === 'network' ? 'Network or shared folder' : 'Folder on this computer'),
+      kind: kind === 'network' ? 'network' : 'local',
+      path: String(destPath).trim(), paused: false,
+    }]);
+    engine.saveDestinations(db, list, setSetting);
+    recordAudit(db, 'backup_destination_added', `Backup destination added: ${destPath}`, 'normal');
+    return { ok: true, destinations: engine.loadDestinations(db) };
+  });
+
+  ipcMain.handle('backup:update-destination', (_e, { id, patch } = {}) => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return denied('change backup destinations');
+    const cfg = engine.getConfig(db);
+    const list = cfg.destinations.map(d => d.id === id ? { ...d, ...(patch || {}), id: d.id } : d);
+    engine.saveDestinations(db, list, setSetting);
+    return { ok: true, destinations: engine.loadDestinations(db) };
+  });
+
+  ipcMain.handle('backup:remove-destination', (_e, id) => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return denied('remove backup destinations');
+    const cfg = engine.getConfig(db);
+    engine.saveDestinations(db, cfg.destinations.filter(d => d.id !== id), setSetting);
+    // Drop any queued copies for the removed destination.
+    engine.savePending(db, engine.loadPending(db).filter(x => x.destId !== id), setSetting);
+    recordAudit(db, 'backup_destination_removed', `Backup destination removed: ${id}`, 'normal');
+    return { ok: true, destinations: engine.loadDestinations(db) };
+  });
+
+  // Test one destination (by id) or an ad-hoc folder path (before adding it).
+  ipcMain.handle('backup:test-destination', (_e, { id, path: folder } = {}) => {
+    let target = folder;
+    if (id) { const d = engine.loadDestinations(db).find(x => x.id === id); target = d && d.path; }
+    const res = engine.testDestination(target);
+    if (id) {
+      const cfg = engine.getConfig(db);
+      const list = cfg.destinations.map(d => d.id === id
+        ? { ...d, lastError: res.ok ? null : (res.error || 'unreachable'), lastCopiedAt: res.ok ? d.lastCopiedAt : d.lastCopiedAt }
+        : d);
+      engine.saveDestinations(db, list, setSetting);
+    }
+    return res;
+  });
+
+  // Retry any copies that never reached a destination.
+  ipcMain.handle('backup:retry', () => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return denied('retry backups');
+    return { ok: true, ...retryDeliveries(db) };
+  });
+
+  // Save a copy of a backup somewhere the operator chooses (a USB stick, a
+  // shared drive) — the desktop equivalent of "download".
+  ipcMain.handle('backup:save-copy', async (_e, backupPath) => {
+    if (!backupPath || !fs.existsSync(backupPath)) return { ok: false, error: 'That backup no longer exists.' };
+    const { dialog, BrowserWindow } = require('electron');
+    const win = BrowserWindow.getFocusedWindow();
+    const res = await dialog.showSaveDialog(win, {
+      title: 'Save a copy of this backup',
+      defaultPath: path.basename(backupPath),
+      filters: [{ name: 'Backup ZIP', extensions: ['zip'] }],
+    });
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true };
+    try { fs.copyFileSync(backupPath, res.filePath); return { ok: true, path: res.filePath }; }
+    catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  });
+
+  // Restore from a file the operator picks off disk (a backup kept elsewhere).
+  ipcMain.handle('backup:pick-file', async () => {
+    const { dialog, BrowserWindow } = require('electron');
+    const win = BrowserWindow.getFocusedWindow();
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Choose a backup file to restore',
+      properties: ['openFile'],
+      filters: [{ name: 'Backup ZIP', extensions: ['zip'] }],
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false, canceled: true };
+    return { ok: true, path: res.filePaths[0] };
+  });
+
   // ── Factory reset ─────────────────────────────────────
   ipcMain.handle('backup:factory-reset', async (_e, payload) => {
     if (!security.checkPermission(db, 'settings', 'delete')) return denied('perform a factory reset');
@@ -405,7 +655,7 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
 
     try {
       // 1. Safety backup BEFORE destroying anything.
-      const safety = await createBackup(db, userDataPath, { label: 'safety-before-reset' });
+      const safety = await createBackup(db, userDataPath, { label: PRE_RESET_LABEL });
       if (!safety.ok) return { ok: false, error: 'Could not create a safety backup, reset aborted.' };
 
       recordAudit(db, 'factory_reset', `Factory reset; safety backup: ${safety.fileName}`, 'high');
@@ -445,6 +695,7 @@ function scheduleRelaunch(app) {
 
 module.exports.createBackup = createBackup;
 module.exports.runAutomaticBackup = runAutomaticBackup;
+module.exports.repairUploadPathsOnStartup = repairUploadPathsOnStartup;
 
 // Start the 60-second scheduler that runs due automatic backups.
 module.exports.startScheduler = function startScheduler(db, userDataPath) {
