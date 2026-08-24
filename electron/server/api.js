@@ -11,6 +11,7 @@
 const http = require('http');
 const url = require('url');
 const tokens = require('./tokens');
+const webapp = require('./webapp');
 const parents = require('./parents');
 const payments = require('./payments_service');
 const { getSetting } = require('../utils/idgen');
@@ -682,6 +683,12 @@ function createApiServer(db, opts = {}) {
     if (req.method === 'POST' && parsed.pathname === `${API}/webhooks/paystack`) {
       return handlePaystackWebhook(req, res);
     }
+
+    // The browser build of the mobile app, served from this same origin so a
+    // teacher on the school Wi-Fi can just open the address in Chrome. It only
+    // ever answers GET/HEAD outside /api/, so the API keeps priority and this
+    // is a no-op when no web build is installed.
+    if (webapp.serveWebApp(req, res, parsed.pathname)) return;
 
     // find route
     let route = null, routeParams = null;

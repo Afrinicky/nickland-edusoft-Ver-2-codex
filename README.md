@@ -82,6 +82,26 @@ npm run rebuild
 npm run dev
 ```
 
+## The web app (parents, teachers and staff)
+
+The mobile app also builds for the browser, from the same source. Nothing to
+install — parents and teachers open an address:
+
+```bash
+npm run build:web        # output in mobile/dist-web, plus copies for each server
+npm run serve:web        # preview it at http://localhost:4748
+```
+
+- **On the school Wi-Fi** the desktop serves it at `http://<desktop-ip>:4747`
+  (Settings → Mobile App → Start server). Full features for teachers and
+  parents, and it works with the school's internet down.
+- **Over the internet** the hosted portal serves it on HTTPS for parents, and
+  can be added to a phone's home screen like an installed app.
+
+The installer packages the web build automatically, so any desktop running the
+mobile server is already serving it. Full guide:
+**[`docs/WEB_APP.md`](docs/WEB_APP.md)**.
+
 ## Tech Stack
 | Layer | Technology |
 |---|---|
@@ -93,6 +113,8 @@ npm run dev
 | Excel | ExcelJS |
 | Word export | docx + docxtemplater |
 | Packaging | electron-builder (NSIS) |
+| Mobile + web app | React Native / Expo SDK 51 (`mobile/`) |
+| Hosted portal | FastAPI on Render, Postgres on Neon, web app on Vercel |
 | CI | GitHub Actions |
 
 ## First Run
@@ -114,6 +136,10 @@ nickland-edusoft/
 │       ├── store/       # Zustand global state
 │       ├── lib/         # Helpers (formatting, etc.)
 │       └── styles/      # Global CSS
+├── mobile/              # React Native app — Android, iOS and the web build
+├── cloud/               # Multi-school portal + sync API (Node, reference)
+├── cloud-python/        # The same service in FastAPI — deployed to Render
+├── scripts/             # build-web.mjs, serve-web.mjs
 ├── resources/           # App icon + initial data files
 ├── package.json         # Dependencies + electron-builder config
 └── vite.config.js       # Vite build config

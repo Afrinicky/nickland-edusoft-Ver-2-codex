@@ -98,7 +98,8 @@ Every response is `{ ok: boolean, ... }`. Errors use HTTP status codes
 ## Connection modes (the client speaks two APIs, one build)
 
 The Expo client connects one of two ways, chosen on the **Connect** screen and
-persisted in secure storage (`mode` = `host` | `cloud`):
+persisted (`mode` = `host` | `cloud`) — in the device keychain on a phone, in
+`localStorage` in a browser, since there is no keychain there.
 
 | Mode | Reaches | Base + routes | Audience | Writes |
 |------|---------|---------------|----------|--------|
@@ -114,10 +115,40 @@ the host's `/parent/*` replies use, so the parent screens are identical across
 modes. Staff and payments are intentionally host-only — the cloud is a read
 model, so those controls are hidden when connected over the internet.
 
+### Discovery: one request, not a guess
+
+The **web build** is served by the very thing it talks to — the desktop host at
+`http://<ip>:4747`, or the portal — so it does not ask for an address. It calls
+`GET /api/v1/info` on its own origin and reads the answer:
+
+| Reply | Meaning |
+|---|---|
+| `{ ok, school: {…}, parent_self_register, … }` | a desktop host → **host** mode |
+| `{ ok, mode: 'cloud', portal: true, schools: […] }` | the cloud portal → **cloud** mode |
+| anything else, or unreachable | no API here → fall back to `EXPO_PUBLIC_PORTAL_URL`, then the Connect screen |
+
+The portal answers `/info` publicly for exactly this reason: one question
+instead of probing endpoint by endpoint. A portal hosting one school is adopted
+silently; several are offered as a picker.
+
+A build hosted **apart** from its API (the Vercel deploy talking to Render) has
+no API on its own origin, so `EXPO_PUBLIC_PORTAL_URL` is compiled in at build
+time and used instead. See [`WEB_APP.md`](WEB_APP.md).
+
+### The host serves the app as well as the API
+
+Anything that is not `/api/*` on the desktop host is the **web app**: the
+browser build of these same screens, on the same origin as the API. That is
+deliberate — a browser on an HTTPS page cannot call a plain-HTTP LAN address at
+all (mixed content), so a portal-hosted copy could never reach a desktop on the
+school Wi-Fi, and a host-served one has no CORS or mixed-content problem to
+solve. GET and HEAD only; the API keeps priority on every path.
+
 ## Building the React Native (Expo) client
 1. **Connect screen:** choose **School Wi-Fi** (enter/scan the host URL, then
    `GET /info` to confirm and brand) or **Over the internet** (enter the portal
-   URL, then `GET /portal/schools` to pick the school).
+   URL, then `GET /portal/schools` to pick the school). Skipped entirely on the
+   web, where the connection is discovered from the serving origin (above).
 2. **Auth:** parent vs staff login; store the token in secure storage.
 3. **Parent tabs:** Children → per-child fees/canteen/attendance/reports,
    Notifications, Pay (initiates a payment the host records + receipts).

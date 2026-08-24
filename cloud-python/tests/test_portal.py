@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.store import MemoryStore
 from app import portal_auth as pauth
+from app import webapp
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -68,8 +69,32 @@ def main():
 
     c = TestClient(create_app(store))
 
+    # `/legacy` is always the hand-written parent page; `/` is that too, unless
+    # a web-app build has been installed under cloud-python/webapp, in which
+    # case the app takes the root (see app/webapp.py).
+    r = c.get("/legacy")
+    ck("legacy portal served at /legacy", r.status_code == 200 and "Student Portal" in r.text)
+
     r = c.get("/")
-    ck("website served at /", r.status_code == 200 and "Student Portal" in r.text)
+    ck("root serves a page", r.status_code == 200 and "<!DOCTYPE HTML>" in r.text[:200].upper())
+    if webapp.is_available():
+        ck("root serves the web app when one is installed",
+           "Nickland Edusoft" in r.text and "Student Portal" not in r.text)
+        # Client-side routes have no file of their own — they all get the shell.
+        r = c.get("/parent/child/1")
+        ck("client-side route falls back to the shell",
+           r.status_code == 200 and '<div id="root">' in r.text)
+        # Static assets are served, and cached by content hash.
+        r = c.get("/manifest.json")
+        ck("web manifest served", r.status_code == 200 and "Nickland Edusoft" in r.text)
+        # Nothing above may shadow the API.
+        r = c.get("/api/v1/portal/nope")
+        ck("API still answers under the web app", r.status_code in (401, 404))
+        # A traversal attempt must not escape the build directory.
+        r = c.get("/../../package.json")
+        ck("path traversal is refused", "electron-builder" not in r.text)
+    else:
+        ck("root falls back to the legacy portal with no build installed", "Student Portal" in r.text)
 
     r = c.get("/api/v1/portal/schools").json()
     ck("schools list includes tenant", r["ok"] and any(s["school_id"] == sid for s in r["schools"]))

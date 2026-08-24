@@ -14,6 +14,7 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const pauth = require('./portal_auth');
+const webapp = require('./webapp');
 
 const SITE = (() => {
   try { return fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8'); }
@@ -43,11 +44,31 @@ function createServer(store) {
       const p = parsed.pathname;
       const q = parsed.query || {};
 
-      // Website (SPA) — served at the root and /portal.
+      if (p === '/health' || p === '/api/v1/health') return json(res, 200, { ok: true, store: store.kind, web_app: webapp.isAvailable() });
+
+      // The legacy hand-written parent page, kept reachable by name so a
+      // school can be pointed back at it if the new app misbehaves.
+      if (req.method === 'GET' && p === '/legacy') return html(res, SITE);
+
+      // The browser build of the mobile app — parents AND staff, the same
+      // screens as the phone. Only answers GET/HEAD outside /api/, so the API
+      // keeps priority. Falls through when no build is installed here, which
+      // is the normal shape when the static build lives on a CDN.
+      if (webapp.serveWebApp(req, res, p)) return;
+
+      // No web build installed: the legacy page still answers at the root.
       if (req.method === 'GET' && (p === '/' || p === '/portal' || p === '/app')) return html(res, SITE);
-      if (p === '/health' || p === '/api/v1/health') return json(res, 200, { ok: true, store: store.kind });
 
       // ── Public portal endpoints ──
+
+      // The same path a desktop host answers, so a client can ask one question
+      // — "what are you?" — and get the answer, instead of probing endpoint by
+      // endpoint. A host returns a `school`; this returns the tenant list.
+      if (p === '/api/v1/info' && req.method === 'GET') {
+        const schools = await store.listSchools();
+        return json(res, 200, { ok: true, mode: 'cloud', portal: true, schools });
+      }
+
       if (p === '/api/v1/portal/schools' && req.method === 'GET') {
         const schools = await store.listSchools();
         return json(res, 200, { ok: true, schools });

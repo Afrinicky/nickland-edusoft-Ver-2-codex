@@ -2,6 +2,9 @@ node_modules/
 .expo/
 dist/
 web-build/
+
+# Web build output — produced by `npm run build:web`, published by CI.
+dist-web/
 *.log
 .DS_Store
 

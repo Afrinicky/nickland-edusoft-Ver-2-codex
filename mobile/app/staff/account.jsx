@@ -6,7 +6,7 @@ import { useAuth } from '../../src/auth';
 import { Screen, Card, H2, Muted, Button } from '../../src/ui';
 
 export default function Account() {
-  const { profile, host, signOut } = useAuth();
+  const { profile, host, signOut, forgetConnection } = useAuth();
   const u = profile?.user || {};
   const perms = profile?.permissions || {};
   const allowed = Object.keys(perms).filter(k => perms[k]?.canView);
@@ -22,6 +22,7 @@ export default function Account() {
         <Muted>{profile?.is_admin ? 'Full access (administrator).' : (allowed.length ? allowed.join(', ') : 'No modules enabled.')}</Muted>
       </Card>
       <Button title="Sign out" variant="danger" onPress={async () => { await signOut(); router.replace('/login'); }} />
+      <Button title="Change school" variant="ghost" onPress={async () => { await forgetConnection(); router.replace('/connect'); }} />
     </Screen>
   );
 }

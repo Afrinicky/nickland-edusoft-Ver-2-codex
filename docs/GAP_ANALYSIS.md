@@ -66,11 +66,16 @@ The limitation is off-LAN reach — see §2.4.
 
 ### 2.4 Web student portal (cloud) — **Good for reads (est. 65%)**
 
-The hosted portal (`cloud/` Node service + `cloud/public/index.html`, and a Python twin in `cloud-python/`) implements parent login and serves each child's **fees & canteen balances, attendance summary, academic report (results), receipts, announcements, and profile edits**. The `student_snapshot` read model carries all of this (see `CLOUD_SYNC.md`), and both portal twins render attendance + performance cards.
+The hosted portal (`cloud/` Node service, and a Python twin in `cloud-python/`) implements parent login and serves each child's **fees & canteen balances, attendance summary, academic report (results), receipts, announcements, and profile edits**. The `student_snapshot` read model carries all of this (see `CLOUD_SYNC.md`), and both portal twins render attendance + performance cards.
+
+> **Update (this branch): the portal front end is now the mobile app itself.** `mobile/` builds for the browser as well as for Android, so the third pillar is no longer a separate hand-written page that has to be kept in step with the app — it is the same eighteen screens, from the same source. The desktop host serves it over the school Wi-Fi (full features, teachers included, no internet needed) and the hosted portal serves it over HTTPS to parents, where it can be added to a phone's home screen. The old `public/index.html` is kept at `/legacy`. See [`WEB_APP.md`](WEB_APP.md).
+>
+> This changes the pillar-3 gap from "the portal is thinner than the app" to "the cloud API is thinner than the host API" — which is §2.4's remaining list below, and the teacher-over-internet gap in §2.2.
 
 Remaining gaps (not "the data is missing" — it's there):
 
 - ~~**Contract mismatch**~~ — **closed on this branch.** The mobile app now speaks `/portal/*` in its internet mode and `/parent/*` in its LAN/tunnel mode, from one build (see §5 P0 #3).
+- **No staff surface in the cloud.** The portal has parent auth and a parent read model only, so a teacher off-site cannot sign in at all — they need a tunnel to the school desktop. Staff auth, permissions and a write-back queue for registers/scores in the cloud is the next backend piece.
 - **Read-model depth:** the snapshot is current-term and summary-level (per-subject totals + grade, average, rank, remarks) — no historical terms and no per-assessment breakdown. Consistent with the "thin cloud" philosophy, but worth noting as a ceiling.
 - **No SaaS control plane:** per-school onboarding and subscription billing aren't built, so this is infrastructure rather than a product yet.
 

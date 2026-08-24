@@ -12,6 +12,7 @@ the API it talks to, [`MOBILE_API.md`](MOBILE_API.md).
 
 | You want | Use | Needs |
 |---|---|---|
+| **No install at all — just an address** | `npm run build:web` (repo root) | Nothing; see [`WEB_APP.md`](WEB_APP.md) |
 | An APK to sideload / share on WhatsApp | `npm run build:apk` | Free Expo account |
 | An APK built on your own machine, no account | `npm run apk:gradle` | Android SDK + JDK 17+ |
 | To put it on Google Play | `npm run build:play` | Play Console account ($25 once) |
@@ -20,6 +21,13 @@ the API it talks to, [`MOBILE_API.md`](MOBILE_API.md).
 For a single school in Ghana, **sideloading the APK is the right answer** —
 no Play Store account, no review delay, and it installs from a memory stick,
 Bluetooth or WhatsApp.
+
+Faster still, and worth doing first: the **web build**. Same screens, no
+install — the desktop serves it over the school Wi-Fi and the portal serves it
+over the internet, and on HTTPS a parent can add it to their home screen where
+it behaves like an installed app. See [`WEB_APP.md`](WEB_APP.md). The APK is
+the better experience on a phone; it is not a prerequisite for getting people
+using the system.
 
 ---
 
@@ -172,9 +180,11 @@ Icon, splash, package name, permissions and version all live in `app.json`, and
 | `assets/splash.png` | Launch screen |
 | `assets/notification-icon.png` | Monochrome tray icon |
 | `assets/favicon.png` | Web build |
+| `public/app-icon.png`, `public/app-icon-maskable.png` | Home-screen icon for the web build (copies of the two above) |
 
-To rebrand for another school, replace those five images and change `name`,
-`slug`, `android.package` and `ios.bundleIdentifier` in `app.json`.
+To rebrand for another school, replace those images and change `name`, `slug`,
+`android.package` and `ios.bundleIdentifier` in `app.json` — and the `name`,
+`short_name` and colours in `mobile/public/manifest.json` for the web build.
 
 ---
 

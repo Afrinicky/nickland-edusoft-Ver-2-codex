@@ -5,6 +5,13 @@ node_modules/
 dist/
 dist-app/
 
+# Mobile web app build, and the copies the servers serve it from. Produced by
+# `npm run build:web` at the repo root; never committed.
+mobile/dist-web/
+resources/webapp/
+cloud/webapp/
+cloud-python/webapp/
+
 # Electron-builder cache (created during CI builds)
 .cache/
 

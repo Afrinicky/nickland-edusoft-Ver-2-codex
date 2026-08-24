@@ -30,7 +30,9 @@ POST /api/v1/admin/enqueue-change          → { ok, id }          (queue a clou
 ```
 **Parent portal** endpoints — the public website:
 ```
-GET  /                                     → the parent web app (SPA)
+GET  /                                     → the web app if one is installed, else the legacy page
+GET  /legacy                               → the legacy hand-written parent page, always
+GET  /api/v1/info                          → { ok, mode:'cloud', portal:true, schools }  (public)
 GET  /api/v1/portal/schools                → { ok, schools }     (login picker)
 POST /api/v1/portal/login                  → { ok, token, parent }   { school_id, identifier, password }
 GET  /api/v1/portal/me            (Bearer) → { ok, parent, school }
@@ -72,6 +74,12 @@ key rejection — no Postgres required.
   persistent Node process; point it at a **Neon** database via `DATABASE_URL`.
 - Put it behind HTTPS. The desktop's Cloud Sync just needs the base URL + the
   school's key.
-- The public multi-school **website/portal frontend** (parent login, child
-  pages) reads the `snapshots` read model and enqueues parent edits via
-  `portal/enqueue-change`; build it as a separate app against this same API.
+- The public **web app** — the browser build of `mobile/`, covering parents and
+  (against a desktop host) staff — is the front end now. Build it with
+  `npm run build:web` at the repo root; it lands in `cloud/webapp/` and this
+  service serves it at `/`, or point `WEBAPP_DIR` at a copy. The usual
+  production shape puts it on a CDN (Vercel) with this service behind it as the
+  API, in which case nothing is installed here and `/` stays the legacy page.
+  See [`../docs/WEB_APP.md`](../docs/WEB_APP.md).
+- `/api/v1/info` is public and answers the same question the desktop host does,
+  so a client can discover what it is talking to in one request.

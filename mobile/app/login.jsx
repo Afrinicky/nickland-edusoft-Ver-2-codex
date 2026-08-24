@@ -7,7 +7,9 @@ import { api } from '../src/api';
 import { Screen, Card, H1, Muted, Field, Button, ErrorNote } from '../src/ui';
 import { colors } from '../src/theme';
 
-const DEVICE = Platform.OS + ' app';
+// Shown in the desktop's paired-devices list, so it should read like the
+// thing the person is actually holding.
+const DEVICE = Platform.OS === 'web' ? 'web browser' : Platform.OS + ' app';
 
 export default function Login() {
   const { host, mode: conn, signIn } = useAuth();
@@ -52,6 +54,12 @@ export default function Login() {
           <Tab label="Parent" active={mode === 'parent'} onPress={() => { setMode('parent'); setError(null); }} />
           <Tab label="Staff / Teacher" active={mode === 'staff'} onPress={() => { setMode('staff'); setError(null); }} />
         </View>
+      )}
+      {isCloud && (
+        <Muted style={{ textAlign: 'center', marginBottom: 4 }}>
+          Parent sign-in. Teachers: open the school address on the school Wi-Fi to mark
+          registers and enter scores.
+        </Muted>
       )}
 
       <Card>

@@ -1,0 +1,19 @@
+{
+  "name": "Nickland Edusoft",
+  "short_name": "Edusoft",
+  "description": "Fees, results, attendance and school notices for parents, teachers and staff.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1B3A6B",
+  "theme_color": "#1B3A6B",
+  "lang": "en-GH",
+  "dir": "ltr",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "/app-icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
+    { "src": "/app-icon-maskable.png", "sizes": "1024x1024", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -46,8 +46,11 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/favicon.png"
+      "output": "single",
+      "favicon": "./assets/favicon.png",
+      "lang": "en",
+      "themeColor": "#1B3A6B",
+      "description": "Fees, results, attendance and school notices for parents, teachers and staff — Nickland Edusoft."
     },
     "plugins": [
       "expo-router",

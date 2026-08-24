@@ -9,10 +9,11 @@ source of truth.
 """
 import os
 from fastapi import FastAPI, Request, Header, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import portal_auth as pauth
+from . import webapp
 from .store import create_store
 
 _SITE_PATH = os.path.join(os.path.dirname(__file__), "..", "public", "index.html")
@@ -54,18 +55,35 @@ def create_app(store=None) -> FastAPI:
         return claims, rec
 
     # ── Website ──
+    # The legacy hand-written parent page, kept reachable by name so a school
+    # can be pointed back at it if the new app misbehaves.
+    @app.get("/legacy", response_class=HTMLResponse)
+    def legacy_site():
+        return HTMLResponse(SITE)
+
     @app.get("/", response_class=HTMLResponse)
     @app.get("/portal", response_class=HTMLResponse)
     @app.get("/app", response_class=HTMLResponse)
     def site():
+        shell = webapp.shell()
+        if shell:
+            return FileResponse(shell, media_type="text/html; charset=utf-8",
+                                headers={"Cache-Control": "no-cache"})
         return HTMLResponse(SITE)
 
     @app.get("/health")
     @app.get("/api/v1/health")
     def health():
-        return {"ok": True, "store": S().kind}
+        return {"ok": True, "store": S().kind, "web_app": webapp.is_available()}
 
     # ── Public portal ──
+    # The same path a desktop host answers, so a client can ask one question —
+    # "what are you?" — instead of probing endpoint by endpoint. A host returns
+    # a `school`; this returns the tenant list.
+    @app.get("/api/v1/info")
+    def info():
+        return {"ok": True, "mode": "cloud", "portal": True, "schools": S().list_schools()}
+
     @app.get("/api/v1/portal/schools")
     def schools():
         return {"ok": True, "schools": S().list_schools()}
@@ -186,6 +204,31 @@ def create_app(store=None) -> FastAPI:
             return _err(400, "type required")
         cid = S().enqueue_change(school["school_id"], {"type": body["type"], "payload": body.get("payload", {})})
         return {"ok": True, "id": cid}
+
+    # ── Web app static files (registered last, so it can never shadow the API) ──
+    @app.get("/{full_path:path}")
+    def web_app(full_path: str):
+        if not webapp.is_available():
+            raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
+        url_path = "/" + full_path
+        if url_path.startswith("/api/"):
+            raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
+
+        found = webapp.resolve(url_path)
+        if found:
+            return FileResponse(found, media_type=webapp.content_type(found), headers={
+                "Cache-Control": webapp.cache_header(url_path),
+                "X-Content-Type-Options": "nosniff",
+            })
+
+        # Single-page output: /parent/child/7 and every other client-side route
+        # has no file of its own, so unmatched paths get the shell and the
+        # router takes it from there. A path that plainly wants a file gets a
+        # 404 rather than HTML pretending to be a script.
+        if not os.path.splitext(url_path)[1]:
+            return FileResponse(webapp.shell(), media_type="text/html; charset=utf-8",
+                                headers={"Cache-Control": "no-cache"})
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
 
     return app
 
