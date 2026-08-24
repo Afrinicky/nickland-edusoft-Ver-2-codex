@@ -167,57 +167,87 @@ async function createBackup(db, userDataPath, { label } = {}) {
 // Copy a freshly-made backup out to every configured destination, remember any
 // that could not be reached so they are retried later, update each
 // destination's status, and prune old automatic backups everywhere.
-function fanOutAndPrune(db, userDataPath, srcPath) {
+// Deliver a backup to ONE destination — a folder copy, or a network upload —
+// and return { ok } | { ok:false, error }. Never throws.
+async function deliverTo(dest, srcPath) {
+  const name = path.basename(srcPath);
+  if (dest.remote) {
+    const cfg = secrets.openConfig(dest.type, dest.config);
+    return await remote.uploadRemote(dest.type, cfg, srcPath, name);
+  }
+  try {
+    if (!dest.path) return { ok: false, error: 'No folder set.' };
+    if (!fs.existsSync(dest.path)) fs.mkdirSync(dest.path, { recursive: true });
+    fs.copyFileSync(srcPath, path.join(dest.path, name));
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+}
+
+// Copy a freshly-made backup out to every configured destination, remember any
+// that could not be reached so they are retried later, update each
+// destination's status, and prune old automatic backups everywhere.
+async function fanOutAndPrune(db, userDataPath, srcPath) {
   const cfg = engine.getConfig(db);
   const dests = cfg.destinations || [];
-  const copies = srcPath ? engine.copyToDestinations(srcPath, dests) : [];
-
-  // Record failures for retry, and stamp each destination with its outcome so
-  // the screen can show a red or green dot without re-testing.
   const pending = engine.loadPending(db);
   const now = new Date().toISOString();
-  const byId = new Map(dests.map(d => [d.id, d]));
-  for (const r of copies) {
-    const d = byId.get(r.id);
-    if (!d || r.skipped) continue;
+  const results = [];
+
+  for (const d of dests) {
+    if (d.paused) { results.push({ id: d.id, skipped: true }); continue; }
+    const r = srcPath ? await deliverTo(d, srcPath) : { ok: false, error: 'no source' };
+    results.push({ id: d.id, ...r });
     if (r.ok) { d.lastCopiedAt = now; d.lastError = null; }
     else {
-      d.lastError = r.error || 'copy failed';
-      if (srcPath) pending.push({ destId: r.id, srcPath, queuedAt: now });
+      d.lastError = r.error || 'delivery failed';
+      if (srcPath) pending.push({ destId: d.id, srcPath, queuedAt: now });
     }
   }
   engine.saveDestinations(db, dests, setSetting);
   engine.savePending(db, pending, setSetting);
 
-  // Prune the default folder + every destination folder.
+  // Prune the primary folder + every LOCAL destination folder. Remote services
+  // keep their own copies; we never reach in and delete there.
   engine.pruneRetention(primaryFolder(db, userDataPath), cfg.retention);
-  for (const d of dests) engine.pruneRetention(d.path, cfg.retention);
-  return copies;
+  for (const d of dests) if (!d.remote && d.path) engine.pruneRetention(d.path, cfg.retention);
+  return results;
 }
 
 // Retry the copies that never reached a destination. Called on the scheduler
 // tick and from the "retry now" button.
-function retryDeliveries(db) {
-  const cfg = engine.getConfig(db);
-  const dests = cfg.destinations || [];
-  const res = engine.retryPending(db, dests, setSetting);
-  // A destination that just took its backlog is no longer failing.
-  if (res.delivered > 0) {
-    const waiting = engine.waitingByDest(db);
+async function retryDeliveries(db) {
+  const dests = engine.getConfig(db).destinations || [];
+  const byId = new Map(dests.map(d => [d.id, d]));
+  const pending = engine.loadPending(db);
+  if (!pending.length) return { delivered: 0, remaining: 0 };
+
+  const stillPending = [];
+  let delivered = 0;
+  for (const item of pending) {
+    const d = byId.get(item.destId);
+    if (!d || d.paused) { stillPending.push(item); continue; }
+    if (!fs.existsSync(item.srcPath)) continue;   // source pruned away — drop it
+    const r = await deliverTo(d, item.srcPath);
+    if (r.ok) delivered++; else stillPending.push(item);
+  }
+  engine.savePending(db, stillPending, setSetting);
+
+  if (delivered > 0) {
+    const remainByDest = new Set(stillPending.map(x => x.destId));
     let changed = false;
     for (const d of dests) {
-      if (d.lastError && !waiting[d.id]) { d.lastError = null; d.lastCopiedAt = new Date().toISOString(); changed = true; }
+      if (d.lastError && !remainByDest.has(d.id)) { d.lastError = null; d.lastCopiedAt = new Date().toISOString(); changed = true; }
     }
     if (changed) engine.saveDestinations(db, dests, setSetting);
   }
-  return res;
+  return { delivered, remaining: stillPending.length };
 }
 
 // The full automatic backup: snapshot → default folder → destinations → prune.
 async function runAutomaticBackup(db, userDataPath) {
   const res = await createBackup(db, userDataPath, { label: engine.AUTO_LABEL });
   if (!res.ok) return res;
-  const copies = fanOutAndPrune(db, userDataPath, res.path);
+  const copies = await fanOutAndPrune(db, userDataPath, res.path);
   try {
     setSetting(db, 'backup_last_auto_at', new Date().toISOString(), 'backup');
     recordAudit(db, 'backup_auto', `Automatic backup: ${res.fileName}`, 'normal');
@@ -225,20 +255,28 @@ async function runAutomaticBackup(db, userDataPath) {
   return { ...res, copies };
 }
 
-// Called by a 60-second scheduler in the main process.
+// Called by a 60-second scheduler in the main process. A remote upload can run
+// for minutes, longer than the tick interval, so a re-entrancy guard stops two
+// ticks overlapping — otherwise the same backup could be uploaded twice, or a
+// scheduled backup run twice.
+let _schedulerBusy = false;
 async function maybeRunScheduledBackup(db, userDataPath) {
+  if (_schedulerBusy) return;
+  _schedulerBusy = true;
   try {
     const cfg = engine.getConfig(db);
     // Always try to clear the retry backlog — a destination that was offline
     // when a backup ran should be filled the moment it comes back, whether or
     // not another backup is due.
-    try { retryDeliveries(db); } catch (_) {}
-    if (!cfg.scheduled) return;
-    const last = cfg.lastAutoAt ? new Date(cfg.lastAutoAt) : null;
-    if (engine.isBackupDue(cfg, new Date(), last)) {
-      await runAutomaticBackup(db, userDataPath);
+    try { await retryDeliveries(db); } catch (_) {}
+    if (cfg.scheduled) {
+      const last = cfg.lastAutoAt ? new Date(cfg.lastAutoAt) : null;
+      if (engine.isBackupDue(cfg, new Date(), last)) {
+        await runAutomaticBackup(db, userDataPath);
+      }
     }
   } catch (_) { /* never let the scheduler crash the app */ }
+  finally { _schedulerBusy = false; }
 }
 
 // The label prefixes used for the safety copies taken automatically before a
@@ -282,6 +320,14 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
     ok: false,
     error: `Access denied. Only an Administrator or Proprietor can ${action}.`,
   });
+
+  const defaultLabel = (type) => ({
+    network: 'Hospital / office server or shared folder',
+    local: 'Folder on this computer',
+    s3: 'S3 storage',
+    webdav: 'Nextcloud / ownCloud / NAS',
+    gdrive: 'Google Drive',
+  }[type] || 'Backup destination');
 
   // ── Where backups are stored ──────────────────────────
   ipcMain.handle('backup:get-info', () => {
@@ -330,7 +376,7 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
     try {
       const res = await createBackup(db, userDataPath, {});
       if (res.ok) {
-        const copies = fanOutAndPrune(db, userDataPath, res.path);
+        const copies = await fanOutAndPrune(db, userDataPath, res.path);
         recordAudit(db, 'backup_created', `Backup created: ${res.fileName}`, 'normal');
         return { ...res, copies };
       }
@@ -350,7 +396,9 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
     if (!security.checkPermission(db, 'settings', 'edit')) return denied('change backup settings');
     const map = {
       mode: 'backup_schedule_mode', time: 'backup_time', time2: 'backup_time2',
-      dayOfWeek: 'backup_day_of_week', retention: 'backup_retention',
+      dayOfWeek: 'backup_day_of_week', dayOfMonth: 'backup_day_of_month',
+      everyN: 'backup_every_n', everyUnit: 'backup_every_unit',
+      retention: 'backup_retention',
       // Legacy keys, still accepted so nothing that writes them breaks.
       enabled: 'backup_auto_enabled', frequency: 'backup_frequency',
       folderPath: 'backup_folder_path', cloudPath: 'backup_cloud_path',
@@ -554,64 +602,121 @@ module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath)
   });
 
   // ── Destinations (where copies go) ────────────────────
+  // Secrets never leave the main process: the list is redacted, and a stored
+  // secret is only decrypted at the moment of an upload or a verify.
+  function redactDest(d) {
+    const out = { id: d.id, label: d.label, type: d.type, kind: d.kind, path: d.path,
+      remote: d.remote, paused: d.paused, lastCopiedAt: d.lastCopiedAt, lastError: d.lastError };
+    if (d.remote) out.config = secrets.redactConfig(d.type, d.config || {});
+    return out;
+  }
+
+  // Check a destination is real before it is trusted — a folder that is
+  // writable, or a remote service that accepts (and lets us remove) a probe.
+  // "A destination that only turns out to be wrong at two in the morning is
+  // worse than none."
+  async function verifyDest({ type, path: destPath, config }) {
+    if (remote.isRemote(type)) {
+      // config here is PLAINTEXT as just typed by the operator.
+      return await remote.verifyRemote(type, secrets.openConfig(type, secrets.sealConfig(type, config || {})));
+    }
+    return engine.testDestination(destPath);
+  }
+
   ipcMain.handle('backup:list-destinations', () => {
     const cfg = engine.getConfig(db);
     const waiting = engine.waitingByDest(db);
-    return { ok: true, destinations: cfg.destinations.map(d => ({ ...d, waiting: waiting[d.id] || 0 })) };
+    return {
+      ok: true,
+      encryptionAvailable: secrets.canEncrypt(),
+      destinations: cfg.destinations.map(d => ({ ...redactDest(d), waiting: waiting[d.id] || 0 })),
+    };
   });
 
-  ipcMain.handle('backup:add-destination', (_e, { label, kind, path: destPath } = {}) => {
+  // Add a destination — but ONLY after it has been checked against the real
+  // thing. Nothing is saved if the check fails. Secrets are sealed before they
+  // touch the database.
+  ipcMain.handle('backup:add-destination', async (_e, { label, type, path: destPath, config } = {}) => {
     if (!security.checkPermission(db, 'settings', 'edit')) return denied('add backup destinations');
-    if (!destPath || !String(destPath).trim()) return { ok: false, error: 'A folder is required.' };
+    const t = type || 'local';
+    if (!remote.isRemote(t) && (!destPath || !String(destPath).trim())) return { ok: false, error: 'A folder is required.' };
+
+    const check = await verifyDest({ type: t, path: destPath, config });
+    if (!check.ok) return { ok: false, error: check.error || 'That destination could not be verified.' };
+
     const cfg = engine.getConfig(db);
-    const list = cfg.destinations.concat([{
+    const entry = {
       id: engine.newId(),
-      label: (label && String(label).trim()) || (kind === 'network' ? 'Network or shared folder' : 'Folder on this computer'),
-      kind: kind === 'network' ? 'network' : 'local',
-      path: String(destPath).trim(), paused: false,
-    }]);
-    engine.saveDestinations(db, list, setSetting);
-    recordAudit(db, 'backup_destination_added', `Backup destination added: ${destPath}`, 'normal');
-    return { ok: true, destinations: engine.loadDestinations(db) };
+      label: (label && String(label).trim()) || defaultLabel(t),
+      type: t, paused: false, lastCopiedAt: new Date().toISOString(), lastError: null,
+      path: remote.isRemote(t) ? '' : String(destPath).trim(),
+      config: remote.isRemote(t) ? secrets.sealConfig(t, config || {}) : {},
+    };
+    engine.saveDestinations(db, cfg.destinations.concat([entry]), setSetting);
+    recordAudit(db, 'backup_destination_added', `Backup destination added: ${entry.label} (${t})`, 'normal');
+    return { ok: true, destinations: engine.loadDestinations(db).map(redactDest) };
   });
 
-  ipcMain.handle('backup:update-destination', (_e, { id, patch } = {}) => {
+  // Edit a destination. A blank secret means "keep the stored one". A remote
+  // edit is re-verified before it is saved.
+  ipcMain.handle('backup:update-destination', async (_e, { id, patch } = {}) => {
     if (!security.checkPermission(db, 'settings', 'edit')) return denied('change backup destinations');
     const cfg = engine.getConfig(db);
-    const list = cfg.destinations.map(d => d.id === id ? { ...d, ...(patch || {}), id: d.id } : d);
+    const target = cfg.destinations.find(d => d.id === id);
+    if (!target) return { ok: false, error: 'That destination no longer exists.' };
+    const p = patch || {};
+
+    let nextConfig = target.config;
+    if (target.remote && p.config) {
+      nextConfig = secrets.mergeConfig(target.type, target.config, p.config);
+      // Re-verify with the merged (decrypted) config unless this is only a rename/pause.
+      const changingConnection = Object.keys(p.config).some(k => !/__set$|__encrypted$/.test(k));
+      if (changingConnection) {
+        const check = await remote.verifyRemote(target.type, secrets.openConfig(target.type, nextConfig));
+        if (!check.ok) return { ok: false, error: check.error || 'The changes could not be verified.' };
+      }
+    }
+    const list = cfg.destinations.map(d => d.id === id
+      ? { ...d, label: p.label !== undefined ? p.label : d.label,
+          paused: p.paused !== undefined ? !!p.paused : d.paused,
+          path: (!d.remote && p.path !== undefined) ? p.path : d.path,
+          config: nextConfig,
+          lastError: (p.paused ? d.lastError : d.lastError) }
+      : d);
     engine.saveDestinations(db, list, setSetting);
-    return { ok: true, destinations: engine.loadDestinations(db) };
+    return { ok: true, destinations: engine.loadDestinations(db).map(redactDest) };
   });
 
   ipcMain.handle('backup:remove-destination', (_e, id) => {
     if (!security.checkPermission(db, 'settings', 'edit')) return denied('remove backup destinations');
     const cfg = engine.getConfig(db);
     engine.saveDestinations(db, cfg.destinations.filter(d => d.id !== id), setSetting);
-    // Drop any queued copies for the removed destination.
     engine.savePending(db, engine.loadPending(db).filter(x => x.destId !== id), setSetting);
     recordAudit(db, 'backup_destination_removed', `Backup destination removed: ${id}`, 'normal');
-    return { ok: true, destinations: engine.loadDestinations(db) };
+    return { ok: true, destinations: engine.loadDestinations(db).map(redactDest) };
   });
 
-  // Test one destination (by id) or an ad-hoc folder path (before adding it).
-  ipcMain.handle('backup:test-destination', (_e, { id, path: folder } = {}) => {
-    let target = folder;
-    if (id) { const d = engine.loadDestinations(db).find(x => x.id === id); target = d && d.path; }
-    const res = engine.testDestination(target);
+  // Test an existing destination (by id), or an ad-hoc config typed on the Add
+  // form (before it is saved). Records the outcome on an existing destination.
+  ipcMain.handle('backup:test-destination', async (_e, { id, type, path: folder, config } = {}) => {
     if (id) {
+      const d = engine.getConfig(db).destinations.find(x => x.id === id);
+      if (!d) return { ok: false, error: 'That destination no longer exists.' };
+      const res = d.remote
+        ? await remote.verifyRemote(d.type, secrets.openConfig(d.type, d.config))
+        : engine.testDestination(d.path);
       const cfg = engine.getConfig(db);
-      const list = cfg.destinations.map(d => d.id === id
-        ? { ...d, lastError: res.ok ? null : (res.error || 'unreachable'), lastCopiedAt: res.ok ? d.lastCopiedAt : d.lastCopiedAt }
-        : d);
-      engine.saveDestinations(db, list, setSetting);
+      engine.saveDestinations(db, cfg.destinations.map(x => x.id === id
+        ? { ...x, lastError: res.ok ? null : (res.error || 'unreachable') } : x), setSetting);
+      return res;
     }
-    return res;
+    return await verifyDest({ type, path: folder, config });
   });
 
   // Retry any copies that never reached a destination.
-  ipcMain.handle('backup:retry', () => {
+  ipcMain.handle('backup:retry', async () => {
     if (!security.checkPermission(db, 'settings', 'edit')) return denied('retry backups');
-    return { ok: true, ...retryDeliveries(db) };
+    return { ok: true, ...(await retryDeliveries(db)) };
   });
 
   // Save a copy of a backup somewhere the operator chooses (a USB stick, a

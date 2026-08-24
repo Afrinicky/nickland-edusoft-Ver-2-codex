@@ -380,6 +380,87 @@ console.log('\n── Backup restore: upload paths survive a data-folder move (t
   try { fs.rmSync(ud, { recursive: true, force: true }); } catch (_) {}
 }
 
+console.log('\n── Backup: cloud destinations (S3 SigV4, WebDAV, Google Drive) ──');
+{
+  const nodeCrypto = require('crypto');
+  const remote = require(path.join(ROOT, 'electron/ipc/backup_remote.js'));
+
+  // AWS's own published SigV4 example — if this matches, the signer is correct.
+  const signed = remote.signS3({
+    method: 'GET', host: 'examplebucket.s3.amazonaws.com', canonicalUri: '/test.txt',
+    region: 'us-east-1', accessKeyId: 'AKIAIOSFODNN7EXAMPLE',
+    secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+    headers: { Range: 'bytes=0-9' },
+    payloadHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    now: new Date('2013-05-24T00:00:00Z'),
+  });
+  ck('S3 SigV4 matches AWS published test vector',
+    signed.signature === 'f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41');
+
+  const built = remote.s3Request(
+    { endpoint: 'https://s3.us-west-004.backblazeb2.com', region: 'us-west-004', bucket: 'lab-backups', accessKeyId: 'k', secretAccessKey: 's', prefix: 'sech' },
+    { method: 'PUT', key: 'backup.zip', payloadHash: 'UNSIGNED-PAYLOAD' });
+  ck('S3 object URL is path-style with prefix', built.url === 'https://s3.us-west-004.backblazeb2.com/lab-backups/sech/backup.zip');
+  ck('S3 streams uploads unsigned (no whole-file hash in memory)', built.headers['x-amz-content-sha256'] === 'UNSIGNED-PAYLOAD');
+  ck('S3 keys encode spaces and keep slashes', remote.encodeS3Path('a b/backup 1.zip') === 'a%20b/backup%201.zip');
+
+  ck('WebDAV URL joins base and encodes the name',
+    remote.webdavUrl({ url: 'https://cloud.org/dav/Backups/' }, 'nk backup.zip') === 'https://cloud.org/dav/Backups/nk%20backup.zip');
+
+  // Google Drive JWT: sign with a generated key, verify with its public half.
+  const { publicKey, privateKey } = nodeCrypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const assertion = remote.gdriveAssertion(
+    { client_email: 'svc@p.iam.gserviceaccount.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }), token_uri: 'https://oauth2.googleapis.com/token' },
+    1700000000);
+  const [h64, c64, sig64] = assertion.split('.');
+  const claims = JSON.parse(Buffer.from(c64, 'base64url').toString());
+  ck('Drive JWT carries the right claims', claims.scope.includes('drive.file') && claims.exp === 1700003600);
+  ck('Drive JWT signature verifies with the public key',
+    nodeCrypto.createVerify('RSA-SHA256').update(`${h64}.${c64}`).verify(publicKey, Buffer.from(sig64, 'base64url')));
+}
+
+console.log('\n── Backup: destination secrets at rest ──');
+{
+  const sec = require(path.join(ROOT, 'electron/ipc/backup_secrets.js'));
+  const sealed = sec.sealConfig('webdav', { url: 'https://x', username: 'u', password: 'p@ss' });
+  ck('a secret is not stored as a bare string', typeof sealed.password === 'object');
+  ck('seal → open round-trips the secret', sec.openConfig('webdav', sealed).password === 'p@ss');
+  const red = sec.redactConfig('webdav', sealed);
+  ck('the redacted view hides the secret but flags it is set', red.password === undefined && red.password__set === true);
+  ck('a blank edit keeps the stored secret', sec.openConfig('webdav', sec.mergeConfig('webdav', sealed, { url: 'https://y', password: '' })).password === 'p@ss');
+  ck('a new secret replaces the old one', sec.openConfig('webdav', sec.mergeConfig('webdav', sealed, { password: 'new' })).password === 'new');
+}
+
+console.log('\n── Backup engine: weekly / monthly / custom schedules ──');
+{
+  const engine = require(path.join(ROOT, 'electron/ipc/backup_engine.js'));
+  const db = makeDb();
+  const set = (k, v) => setSetting(db, k, v, 'backup');
+
+  set('backup_schedule_mode', 'weekly'); set('backup_day_of_week', '3'); set('backup_time', '02:00');
+  let cfg = engine.getConfig(db);
+  ck('weekly catches a missed week after the PC was off',
+    engine.isBackupDue(cfg, new Date('2026-08-28T10:00:00'), new Date('2026-08-24T09:00:00')) === true);
+  ck('weekly not due once the week is done',
+    engine.isBackupDue(cfg, new Date('2026-08-28T10:00:00'), new Date('2026-08-26T02:30:00')) === false);
+
+  set('backup_schedule_mode', 'monthly'); set('backup_day_of_month', '1');
+  cfg = engine.getConfig(db);
+  ck('monthly catches the 1st', engine.isBackupDue(cfg, new Date('2026-09-05T10:00:00'), new Date('2026-08-20T02:30:00')) === true);
+  ck('monthly not due once the 1st is done', engine.isBackupDue(cfg, new Date('2026-09-05T10:00:00'), new Date('2026-09-01T02:30:00')) === false);
+  ck('monthly next run is the 1st', (engine.nextRunAt(cfg, new Date('2026-09-05T10:00:00')) || {}).getDate?.() === 1);
+
+  set('backup_schedule_mode', 'custom'); set('backup_every_unit', 'days'); set('backup_every_n', '3'); set('backup_time', '02:00');
+  cfg = engine.getConfig(db);
+  ck('custom(days): due after 3 days', engine.isBackupDue(cfg, new Date('2026-08-28T03:00:00'), new Date('2026-08-25T02:30:00')) === true);
+  ck('custom(days): not due after 1 day', engine.isBackupDue(cfg, new Date('2026-08-26T03:00:00'), new Date('2026-08-25T02:30:00')) === false);
+
+  set('backup_every_unit', 'hours'); set('backup_every_n', '6');
+  cfg = engine.getConfig(db);
+  ck('custom(hours): due after 6h', engine.isBackupDue(cfg, new Date('2026-08-25T12:00:00'), new Date('2026-08-25T06:00:00')) === true);
+  ck('custom(hours): not due after 2h', engine.isBackupDue(cfg, new Date('2026-08-25T08:00:00'), new Date('2026-08-25T06:00:00')) === false);
+}
+
 console.log('\n── Parent accounts ──');
 {
   const db = makeDb();
