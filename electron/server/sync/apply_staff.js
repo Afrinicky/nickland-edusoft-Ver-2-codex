@@ -177,6 +177,69 @@ function applyHomework(db, payload) {
 }
 
 // ── applied-change ledger ───────────────────────────────────────────────────
+// ── password changes made away from the school ──────────────────────────────
+// The cloud verified the current password against the projected hash and
+// computed the new one; what arrives here is a bcrypt hash, never a password.
+// The desktop still re-reads the account, because the projection the cloud
+// checked against could have been pushed before the account was disabled.
+//
+// Idempotent by nature: writing the same hash twice leaves the same row.
+function applyPasswordChange(db, payload) {
+  const user = actor(db, payload);
+  if (!user) return false;
+  const hash = String((payload && payload.new_hash) || '');
+  // Only ever a bcrypt digest. A payload carrying anything else is malformed,
+  // and storing it would lock the account out of every surface at once.
+  if (!/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(hash)) return false;
+  try {
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?')
+      .run(hash, user.id);
+  } catch (_) { return false; }
+
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+      VALUES ('user', ?, 'password_changed_remotely', ?, ?, 'high')
+    `).run(user.id, user.id, `${user.username} changed their password from the ${payload.source || 'mobile'} app`);
+  } catch (_) {}
+
+  try { require('./staff_projection').enqueueStaffAuth(db, user.id); } catch (_) {}
+  return true;
+}
+
+// ── a reset asked for from a phone ──────────────────────────────────────────
+// Recorded as a pending request for an Administrator to approve on the
+// desktop, exactly as if it had been raised at the sign-in screen. Nothing is
+// granted here — the whole point of the flow is that a person approves it.
+//
+// Not naturally idempotent (a redelivery would queue a second request), so it
+// is guarded by the one-open-request rule rather than by the ledger.
+function applyPasswordResetRequest(db, payload) {
+  const username = String((payload && payload.username) || '').trim();
+  if (!username) return false;
+  let u;
+  try { u = db.prepare('SELECT id, username FROM users WHERE username = ? AND is_active = 1').get(username); }
+  catch (_) { return false; }
+  // Silently dropped for an unknown account: the cloud already answered the
+  // phone without saying whether the username was real, and nothing here
+  // should turn that into a record that says otherwise.
+  if (!u) return true;
+
+  try {
+    const open = db.prepare(`
+      SELECT id FROM password_reset_requests
+      WHERE user_id = ? AND status IN ('pending', 'approved')
+    `).get(u.id);
+    if (open) return true;
+    db.prepare(`
+      INSERT INTO password_reset_requests (user_id, username, status, reason, requested_from)
+      VALUES (?, ?, 'pending', ?, ?)
+    `).run(u.id, u.username, String((payload && payload.reason) || '').slice(0, 500) || null,
+           payload && payload.source === 'web' ? 'web' : 'mobile');
+  } catch (_) { return false; }
+  return true;
+}
+
 // A tiny table so a redelivered change that is NOT naturally idempotent — a
 // canteen collection, a homework assignment — is applied exactly once. Kept
 // here rather than in the main schema because it belongs to sync, and created
@@ -223,6 +286,8 @@ const HANDLERS = {
   score_entry: applyScores,
   canteen_collect: applyCanteen,
   homework_create: applyHomework,
+  staff_password_change: applyPasswordChange,
+  staff_password_reset_request: applyPasswordResetRequest,
 };
 
 function applyStaffChange(db, change) {

@@ -114,6 +114,32 @@ function createServer(store) {
         });
       }
 
+      // ── Staff password reset (public) ──
+      // Raising a request and redeeming an approved code both happen before
+      // sign-in, so neither can require a token. Approval itself is not here
+      // and never will be: an Administrator does that on the school's desktop,
+      // face to face, and only the hash of the code they hand over is
+      // projected up for this to check against.
+      if (p === '/api/v1/staff/password-reset/request' && req.method === 'POST') {
+        const body = await readBody(req);
+        if (!body.school_id) return json(res, 400, { ok: false, error: 'school is required' });
+        if (ratelimit.limited(req, 'staff', body.username)) {
+          return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+        }
+        const r = await staffApi.requestPasswordReset(store, body.school_id, body, body.source);
+        return json(res, r.ok ? 200 : (r.status || 400), r.ok ? r : { ok: false, error: r.error });
+      }
+
+      if (p === '/api/v1/staff/password-reset/complete' && req.method === 'POST') {
+        const body = await readBody(req);
+        if (!body.school_id) return json(res, 400, { ok: false, error: 'school is required' });
+        if (ratelimit.limited(req, 'staff', body.username)) {
+          return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+        }
+        const r = await staffApi.completePasswordReset(store, body.school_id, body, body.source);
+        return json(res, r.ok ? 200 : (r.status || 400), r.ok ? r : { ok: false, error: r.error });
+      }
+
       // ── Staff-token endpoints ──
       if (p.startsWith('/api/v1/staff/')) {
         const claims = staffApi.staffClaims(bearer(req));
@@ -133,6 +159,7 @@ function createServer(store) {
             ok: true, role: 'staff', mode: 'cloud',
             user: { id: rec.user_id, full_name: rec.full_name, username: rec.username, staff_id: rec.staff_id },
             designation: rec.designation, is_admin: !!rec.is_admin,
+            must_change_password: !!rec.must_change_password,
             permissions: rec.permissions || {}, school,
           });
         }
@@ -205,6 +232,12 @@ function createServer(store) {
           return send(await staffApi.submitHomework(store, sid, rec, await readBody(req)));
         }
 
+        // Changing your own password. No permission gate: an account is not a
+        // module, and every teacher owns theirs.
+        if (p === '/api/v1/staff/password' && req.method === 'POST') {
+          return send(await staffApi.changePassword(store, sid, rec, await readBody(req), 'mobile'));
+        }
+
         if (p === '/api/v1/staff/pending' && req.method === 'GET') {
           return send(await staffApi.pendingSummary(store, sid, rec));
         }
@@ -269,9 +302,16 @@ function createServer(store) {
           if (typeof body.email === 'string') patch.email = body.email;
           if (!Object.keys(patch).length) return json(res, 400, { ok: false, error: 'Nothing to update.' });
           // Reflect immediately in the read model, and queue for the desktop.
+          // The version has to come off the snapshot ROW: `authRec` is a
+          // payload, `payload.version` does not exist, and the store keeps the
+          // higher version — so this always went up as 2 and was dropped on the
+          // floor once the desktop had pushed a third.
+          const authRow = (await store.listSnapshots(claims.school_id, 'parent_auth'))
+            .find(a => a.entity_key === `parent:${claims.parent_id}`);
           await store.upsertSnapshot(claims.school_id, {
             entity_type: 'parent_auth', entity_key: `parent:${claims.parent_id}`,
-            uuid: authRec.uuid, op: 'upsert', version: (authRec.version || 1) + 1,
+            uuid: authRow ? authRow.uuid : undefined,
+            op: 'upsert', version: ((authRow && authRow.version) || 1) + 1,
             payload: { ...authRec, ...patch },
           });
           await store.enqueueChange(claims.school_id, { type: 'parent_update', payload: { parent_id: claims.parent_id, ...patch } });

@@ -1,7 +1,7 @@
 {
   "name": "nickland-edusoft",
   "version": "2.0.0",
-  "description": "Nickland Edusoft — School Management System by Nickland Sales",
+  "description": "Nickland Edusoft \u2014 School Management System by Nickland Sales",
   "main": "electron/main.js",
   "author": "Nickland Sales",
   "license": "Proprietary",
@@ -15,9 +15,9 @@
     "build:web": "node scripts/build-web.mjs",
     "serve:web": "node scripts/serve-web.mjs",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "test": "node test/regressions.js && node test/webapp.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js",
+    "test": "node test/regressions.js && node test/webapp.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
     "test:regressions": "node test/regressions.js && node test/webapp.js",
-    "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js"
+    "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.0.0",
@@ -47,7 +47,7 @@
   "build": {
     "appId": "com.nicklandsales.edusoft",
     "productName": "Nickland Edusoft",
-    "copyright": "Copyright © 2026 Nickland Sales. All rights reserved.",
+    "copyright": "Copyright \u00a9 2026 Nickland Sales. All rights reserved.",
     "directories": {
       "output": "dist-app",
       "buildResources": "resources"

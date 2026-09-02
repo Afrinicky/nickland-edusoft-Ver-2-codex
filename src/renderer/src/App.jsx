@@ -54,10 +54,16 @@ export default function App() {
     })();
   }, []);
 
-  // When auth state changes, advance to app
+  // Auth state drives the phase in BOTH directions. Advancing on sign-in was
+  // always here; the way back was not, so signing out cleared the session but
+  // left `phase` on 'app'. Every route then rendered null behind a sidebar
+  // still showing the signed-out user — a blank window with no way back to the
+  // login screen short of restarting the app.
   useEffect(() => {
+    if (phase === 'loading' || phase === 'bootstrap') return;
     if (isAuthenticated && phase === 'login') setPhase('app');
-  }, [isAuthenticated]);
+    else if (!isAuthenticated && phase === 'app') setPhase('login');
+  }, [isAuthenticated, phase]);
 
   if (phase === 'loading') return <Splash />;
 

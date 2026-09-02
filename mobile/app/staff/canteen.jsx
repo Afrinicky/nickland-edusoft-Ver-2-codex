@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { Stack } from 'expo-router';
 import { useAuth } from '../../src/auth';
+import { RequireModule } from '../../src/guard';
 import { api, money } from '../../src/api';
 import { Screen, Card, H2, Muted, Row, Field, Button, Loading, ErrorNote } from '../../src/ui';
 import { colors } from '../../src/theme';
@@ -12,7 +13,7 @@ import { ClassPicker } from './attendance';
 
 const METHODS = ['Cash', 'Momo', 'Bank'];
 
-export default function Canteen() {
+function CanteenScreen() {
   const { token } = useAuth();
   const [classes, setClasses] = useState(null);
   const [classId, setClassId] = useState(null);
@@ -129,5 +130,16 @@ export default function Canteen() {
         </>
       )}
     </Screen>
+  );
+}
+
+// Reachable by URL in the browser build, so the screen guards itself rather
+// than relying on the tab bar having hidden it. The server checks the same
+// permissions on every request regardless.
+export default function Canteen() {
+  return (
+    <RequireModule modules={[['canteen', 'view']]}>
+      <CanteenScreen />
+    </RequireModule>
   );
 }

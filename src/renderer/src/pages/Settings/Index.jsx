@@ -17,10 +17,18 @@ import ReceiptTemplates from './ReceiptTemplates.jsx';
 import Payments from './Payments.jsx';
 import Cloud from './Cloud.jsx';
 import Users from './Users.jsx';
+import { useStore } from '../../store/index.js';
+import Guard from '../../components/RequirePermission.jsx';
 import AccessControl from './AccessControl.jsx';
 import Backup from './Backup.jsx';
 
-// Settings grouped into logical sections
+// Settings grouped into logical sections.
+//
+// Reaching Settings at all needs the `settings` module, which in practice
+// means an Administrator or Proprietor. Some pages here configure a module of
+// their own, though, and an account allowed into Settings without payroll has
+// no business seeing the payroll configuration — so those carry a `module` and
+// are hidden the same way the main sidebar hides a section.
 const SECTIONS = [
   {
     title: 'School',
@@ -42,16 +50,16 @@ const SECTIONS = [
   {
     title: 'Finance & Operations',
     items: [
-      { to: 'canteen',    label: 'Canteen',           icon: '🍱' },
-      { to: 'payroll',    label: 'Payroll',           icon: '💼' },
-      { to: 'payments',   label: 'Online Payments',   icon: '💳' },
-      { to: 'receipts',   label: 'Receipt Templates', icon: '🧾' },
+      { to: 'canteen',    label: 'Canteen',           icon: '🍱', module: 'canteen' },
+      { to: 'payroll',    label: 'Payroll',           icon: '💼', module: 'payroll' },
+      { to: 'payments',   label: 'Online Payments',   icon: '💳', module: 'fees' },
+      { to: 'receipts',   label: 'Receipt Templates', icon: '🧾', module: 'fees' },
     ],
   },
   {
     title: 'Communications',
     items: [
-      { to: 'notifications', label: 'Notifications',  icon: '📨' },
+      { to: 'notifications', label: 'Notifications',  icon: '📨', module: 'notifications' },
     ],
   },
   {
@@ -73,6 +81,7 @@ const SECTIONS = [
 ];
 
 export default function SettingsIndex() {
+  const can = useStore(s => s.can);
   return (
     <div>
       <div className="page-header">
@@ -83,7 +92,10 @@ export default function SettingsIndex() {
       </div>
       <div className="settings-layout">
         <aside className="settings-sidebar">
-          {SECTIONS.map((section, si) => (
+          {SECTIONS
+            .map(section => ({ ...section, items: section.items.filter(t => !t.module || can(t.module, 'view')) }))
+            .filter(section => section.items.length)
+            .map((section, si) => (
             <div key={si} className="settings-section">
               <div className="settings-section-title">{section.title}</div>
               {section.items.map(t => (
@@ -102,8 +114,8 @@ export default function SettingsIndex() {
             <Route path="school" element={<SchoolIdentity />} />
             <Route path="branding" element={<Branding />} />
             <Route path="signatures" element={<Signatures />} />
-            <Route path="receipts" element={<ReceiptTemplates />} />
-            <Route path="payments" element={<Payments />} />
+            <Route path="receipts" element={<Guard module="fees"><ReceiptTemplates /></Guard>} />
+            <Route path="payments" element={<Guard module="fees"><Payments /></Guard>} />
             <Route path="features" element={<Features />} />
             <Route path="mobile" element={<MobileApp />} />
             <Route path="cloud" element={<Cloud />} />
@@ -111,9 +123,9 @@ export default function SettingsIndex() {
             <Route path="terms" element={<Terms />} />
             <Route path="subjects" element={<Subjects />} />
             <Route path="grading" element={<Grading />} />
-            <Route path="canteen" element={<Canteen />} />
-            <Route path="notifications" element={<NotificationsConfig />} />
-            <Route path="payroll" element={<Payroll />} />
+            <Route path="canteen" element={<Guard module="canteen"><Canteen /></Guard>} />
+            <Route path="notifications" element={<Guard module="notifications"><NotificationsConfig /></Guard>} />
+            <Route path="payroll" element={<Guard module="payroll"><Payroll /></Guard>} />
             <Route path="users" element={<Users />} />
             <Route path="access" element={<AccessControl />} />
             <Route path="backup" element={<Backup />} />

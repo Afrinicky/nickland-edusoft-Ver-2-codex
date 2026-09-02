@@ -84,6 +84,16 @@ const canAny = (rec, pairs) => pairs.some(([m, a]) => can(rec, m, a));
 
 // ── projection readers ──────────────────────────────────────────────────────
 
+// The snapshot ROW, not just its payload. Anything that writes a projection
+// back needs the row's version: the store keeps the higher version and drops
+// the rest, and `payload.version` does not exist — reading it there yields
+// undefined, so every write went up as version 2 and was silently ignored once
+// the desktop had pushed a third.
+async function snapshotRow(store, school_id, type, key) {
+  const rows = await store.listSnapshots(school_id, type);
+  return rows.find(r => r.entity_key === key) || null;
+}
+
 async function snapshotPayload(store, school_id, type, key) {
   const rows = await store.listSnapshots(school_id, type);
   const hit = key ? rows.find(r => r.entity_key === key) : rows[0];
@@ -334,6 +344,121 @@ async function submitHomework(store, school_id, rec, body) {
   return { ok: true, queued: true };
 }
 
+// ── passwords ───────────────────────────────────────────────────────────────
+// A teacher away from the school still has to be able to change a password, and
+// still forgets one. Both are handled here, and both keep the desktop as the
+// authority:
+//
+//   • Changing one is verified against the projected hash and applied to the
+//     projection at once, so the new password works on the next request rather
+//     than after the school's computer next syncs. The change is queued for the
+//     desktop as a bcrypt hash — never a password.
+//
+//   • Forgetting one raises a request for an Administrator to approve ON THE
+//     DESKTOP. The cloud cannot approve anything: approval is a person
+//     recognising another person. Once approved, the desktop projects the hash
+//     of the six-digit code, and only then can the cloud check one.
+
+const BCRYPT_ROUNDS = 10;
+
+function hashPassword(password) {
+  return bcrypt().hashSync(String(password), BCRYPT_ROUNDS);
+}
+
+function sha256(v) { return crypto.createHash('sha256').update(String(v)).digest('hex'); }
+
+// Reflect a new hash into the read model so the account keeps working over the
+// internet, and queue the same change for the desktop to apply for real.
+async function persistNewPassword(store, school_id, rec, newHash, source) {
+  const key = `user:${rec.user_id}`;
+  const row = await snapshotRow(store, school_id, 'staff_auth', key);
+  await store.upsertSnapshot(school_id, {
+    entity_type: 'staff_auth',
+    entity_key: key,
+    uuid: row ? row.uuid : undefined,
+    op: 'upsert',
+    version: ((row && row.version) || 1) + 1,
+    payload: { ...rec, password_hash: newHash, must_change_password: false },
+  });
+  await store.enqueueChange(school_id, {
+    type: 'staff_password_change',
+    payload: { uuid: newRef(), user_id: rec.user_id, new_hash: newHash, source },
+  });
+}
+
+async function changePassword(store, school_id, rec, { currentPassword, newPassword }, source) {
+  if (!newPassword || String(newPassword).length < 6) {
+    return { ok: false, status: 400, error: 'New password must be at least 6 characters.' };
+  }
+  if (!verifyStaffPassword(currentPassword, rec.password_hash)) {
+    return { ok: false, status: 401, error: 'Your current password is not correct.' };
+  }
+  if (String(currentPassword) === String(newPassword)) {
+    return { ok: false, status: 400, error: 'The new password must be different from the current one.' };
+  }
+  await persistNewPassword(store, school_id, rec, hashPassword(newPassword), source || 'mobile');
+  return { ok: true, queued: true };
+}
+
+async function requestPasswordReset(store, school_id, { username, reason }, source) {
+  const u = String(username || '').trim();
+  if (!u) return { ok: false, status: 400, error: 'Enter your username.' };
+  // Queued whether or not the account exists. The answer must not tell an
+  // anonymous caller which usernames are real, and the desktop drops the ones
+  // that match nothing.
+  await store.enqueueChange(school_id, {
+    type: 'staff_password_reset_request',
+    payload: {
+      uuid: newRef(), username: u,
+      reason: String(reason || '').slice(0, 500),
+      source: source === 'web' ? 'web' : 'mobile',
+    },
+  });
+  return { ok: true, submitted: true };
+}
+
+// Redeem a code an Administrator approved on the desktop. The claim reaches the
+// cloud only as a hash, so a code cannot be read out of the projection.
+async function completePasswordReset(store, school_id, { username, code, newPassword }, source) {
+  const u = String(username || '').trim();
+  if (!u || !code) return { ok: false, status: 400, error: 'Enter your username and the approval code.' };
+  if (!newPassword || String(newPassword).length < 6) {
+    return { ok: false, status: 400, error: 'Password must be at least 6 characters.' };
+  }
+
+  const claim = await snapshotPayload(store, school_id, 'staff_reset_claim', `claim:${u}`);
+  const generic = { ok: false, status: 400, error: 'That approval code is not correct, or has expired.' };
+  if (!claim || !claim.claim_hash) return generic;
+  if (claim.expires_at && new Date(String(claim.expires_at).replace(' ', 'T') + 'Z') < new Date()) return generic;
+
+  const given = sha256(String(code).trim());
+  let match = false;
+  try {
+    const a = Buffer.from(given, 'hex');
+    const b = Buffer.from(String(claim.claim_hash), 'hex');
+    match = a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch (_) { match = false; }
+  if (!match) return generic;
+
+  const rec = await loadStaff(store, school_id, claim.user_id);
+  if (!rec) return { ok: false, status: 401, error: 'That account is not available.' };
+
+  await persistNewPassword(store, school_id, rec, hashPassword(newPassword), source || 'mobile');
+  // Spend the claim here too. The desktop retires its own copy when it applies
+  // the change; withdrawing the projection now stops the same code being used
+  // twice in the meantime — which it only does if the version moves past the
+  // one the desktop pushed, or the store keeps the live claim and the code
+  // stays a standing key to the account.
+  const claimRow = await snapshotRow(store, school_id, 'staff_reset_claim', `claim:${u}`);
+  await store.upsertSnapshot(school_id, {
+    entity_type: 'staff_reset_claim', entity_key: `claim:${u}`,
+    uuid: claimRow ? claimRow.uuid : undefined,
+    op: 'delete', version: ((claimRow && claimRow.version) || 1) + 1,
+    payload: { username: u, user_id: claim.user_id, claim_hash: null, expires_at: null },
+  });
+  return { ok: true };
+}
+
 // How much of a teacher's work is still waiting for the school's desktop. Shown
 // on their account screen: "3 changes waiting to reach the school" is the
 // difference between trusting the app and wondering whether it saved anything.
@@ -352,4 +477,5 @@ module.exports = {
   dashboard, students, debtors, classes, attendanceSheet, scoreSubjects, scoreSheet,
   canteenStudent, timetableMine, homeworkForClass,
   submitAttendance, submitScores, submitCanteen, submitHomework, pendingSummary,
+  changePassword, requestPasswordReset, completePasswordReset,
 };

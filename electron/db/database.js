@@ -73,6 +73,32 @@ CREATE TABLE IF NOT EXISTS login_sessions (
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+-- A member of staff who has forgotten their password cannot be handed a new one
+-- over email — a school desktop has no mail server, and the phone app talks to
+-- a read model. So the request is recorded here and an Administrator or
+-- Proprietor approves it in person. Approval mints a single-use claim that the
+-- account itself redeems by choosing a new password; the approver never sees
+-- and never sets it, so a reset cannot become a quiet account takeover.
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | denied | used | cancelled
+  reason TEXT,
+  requested_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  requested_from TEXT,                      -- 'desktop' | 'mobile' | 'web'
+  decided_by INTEGER,
+  decided_at TEXT,
+  decision_note TEXT,
+  claim_hash TEXT,                          -- sha256 of the single-use claim code
+  claim_expires_at TEXT,
+  used_at TEXT,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (decided_by) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_pwreset_user   ON password_reset_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_pwreset_status ON password_reset_requests(status);
+
 -- ─────────────────────────────────────────────────────────
 -- ACADEMIC STRUCTURE
 -- ─────────────────────────────────────────────────────────
@@ -1272,6 +1298,30 @@ function runMigrations(db) {
       } catch (_) { /* nothing more we can do */ }
     }
   };
+
+  // 0. password_reset_requests — added in F9. Created here as well as in SCHEMA
+  // so a school upgrading from an older database gets it without a reinstall.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS password_reset_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        username TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        reason TEXT,
+        requested_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        requested_from TEXT,
+        decided_by INTEGER,
+        decided_at TEXT,
+        decision_note TEXT,
+        claim_hash TEXT,
+        claim_expires_at TEXT,
+        used_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_pwreset_user   ON password_reset_requests(user_id);
+      CREATE INDEX IF NOT EXISTS idx_pwreset_status ON password_reset_requests(status);
+    `);
+  });
 
   // 1. users.photo_path (added in E1)
   safe(() => {

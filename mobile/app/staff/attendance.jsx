@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView } from 'react-native';
 import { Stack } from 'expo-router';
 import { useAuth } from '../../src/auth';
+import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import { Screen, Card, H2, Muted, Field, Button, Loading, ErrorNote } from '../../src/ui';
 import { colors } from '../../src/theme';
@@ -15,7 +16,7 @@ const STATUSES = [
   { key: 'late', label: 'Late', color: colors.accent },
 ];
 
-export default function Attendance() {
+function AttendanceScreen() {
   const { token } = useAuth();
   const [classes, setClasses] = useState(null);
   const [classId, setClassId] = useState(null);
@@ -120,5 +121,16 @@ export function ClassPicker({ classes, value, onChange }) {
         })}
       </View>
     </ScrollView>
+  );
+}
+
+// Reachable by URL in the browser build, so the screen guards itself rather
+// than relying on the tab bar having hidden it. The server checks the same
+// permissions on every request regardless.
+export default function Attendance() {
+  return (
+    <RequireModule modules={[['students', 'view'], ['academics', 'view']]}>
+      <AttendanceScreen />
+    </RequireModule>
   );
 }

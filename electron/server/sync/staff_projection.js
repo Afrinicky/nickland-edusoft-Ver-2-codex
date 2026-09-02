@@ -50,7 +50,7 @@ function enqueueStaffAuth(db, userId) {
     if (!syncEnabled(db)) return null;
     const u = db.prepare(`
       SELECT u.id, u.username, u.full_name, u.password_hash, u.is_active, u.staff_id,
-             d.name AS designation
+             u.must_change_password, d.name AS designation
       FROM users u LEFT JOIN designations d ON d.id = u.designation_id
       WHERE u.id = ?
     `).get(userId);
@@ -76,7 +76,40 @@ function enqueueStaffAuth(db, userId) {
         // to be re-enrolled to work off-LAN.
         password_hash: u.password_hash,
         is_active: !!u.is_active,
+        // Set when an administrator chose the password. The phone app asks for
+        // a new one before it will go any further, exactly as the desktop does.
+        must_change_password: !!u.must_change_password,
         permissions,
+      },
+    });
+  } catch (_) { return null; }
+}
+
+// ── staff_reset_claim ───────────────────────────────────────────────────────
+// A teacher who forgets their password while away from the school cannot be
+// approved by anyone in the cloud — approval is a person recognising another
+// person, and that happens on the desktop. What the cloud needs is only the
+// ability to CHECK a code that has already been approved there, so an approved
+// claim is projected: the hash of the code and when it stops working. The code
+// itself is never here, and an unapproved request projects nothing at all.
+function enqueueResetClaim(db, requestId) {
+  try {
+    if (!syncEnabled(db)) return null;
+    const r = db.prepare('SELECT * FROM password_reset_requests WHERE id = ?').get(requestId);
+    if (!r) return null;
+    const live = r.status === 'approved' && r.claim_hash;
+    return postToOutbox(db, {
+      entity_type: 'staff_reset_claim',
+      entity_key: `claim:${r.username}`,
+      // Used, denied, expired: the projection is withdrawn, so a code that has
+      // done its job on the desktop cannot still be spent over the internet.
+      op: live ? 'upsert' : 'delete',
+      payload: {
+        username: r.username,
+        user_id: r.user_id,
+        claim_hash: live ? r.claim_hash : null,
+        expires_at: live ? r.claim_expires_at : null,
+        updated_at: new Date().toISOString(),
       },
     });
   } catch (_) { return null; }
@@ -277,6 +310,6 @@ function enqueueRostersForStudents(db, studentIds) {
 
 module.exports = {
   ATTENDANCE_DAYS,
-  enqueueStaffAuth, enqueueClassRoster, enqueueSchoolMetrics, enqueueDebtors,
+  enqueueStaffAuth, enqueueClassRoster, enqueueSchoolMetrics, enqueueDebtors, enqueueResetClaim,
   enqueueStaffTimetable, enqueueAllStaff, enqueueRostersForStudents, classOfStudent,
 };

@@ -7,6 +7,7 @@
 // load in the plain-Node test harness, which has no node_modules.
 let _bcrypt = null;
 function bcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
+const passwords = require('../server/passwords');
 const security = require('./_security');
 const { setSetting } = require('../utils/idgen');
 
@@ -311,25 +312,8 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // could target somebody else's account, and any account whose password_hash
   // was still NULL could be taken over outright because the old-password check
   // was skipped for it. Administrators reset other people via auth:reset-password.
-  ipcMain.handle('auth:change-password', (_e, { oldPassword, newPassword }) => {
-    const userId = security.getCurrentUserId();
-    if (!userId) return { ok: false, error: 'Please sign in again.' };
-    if (!newPassword || String(newPassword).length < 6) {
-      return { ok: false, error: 'New password must be at least 6 characters.' };
-    }
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    if (!user) return { ok: false, error: 'User not found.' };
-    if (!user.password_hash) {
-      return { ok: false, error: 'This account has no password set. Ask an Administrator to reset it.' };
-    }
-    if (!bcrypt().compareSync(String(oldPassword || ''), user.password_hash)) {
-      return { ok: false, error: 'Current password is incorrect.' };
-    }
-    const hash = bcrypt().hashSync(newPassword, 10);
-    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, userId);
-    projectStaff(db, userId);
-    return { ok: true };
-  });
+  ipcMain.handle('auth:change-password', (_e, { oldPassword, newPassword }) =>
+    passwords.changeOwnPassword(db, security.getCurrentUserId(), { oldPassword, newPassword, source: 'desktop' }));
 
   // ═══════════════════════════════════════════════════════
   // EFFECTIVE PERMISSIONS — designation defaults + per-user overrides
@@ -345,6 +329,51 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       SELECT module, can_view, can_create, can_edit, can_delete
       FROM user_permission_overrides WHERE user_id = ?
     `).all(userId);
+  });
+
+  // ══════════════════════════════════════════════════════
+  // PASSWORD RESET REQUESTS
+  // ══════════════════════════════════════════════════════
+  // The rules live in electron/server/passwords.js, shared with the LAN API a
+  // phone reaches on the school Wi-Fi and — through the projected claim — with
+  // the cloud. A reset rule that holds here and not over Wi-Fi is not a rule.
+
+  function isDecider(userId) {
+    if (!userId) return false;
+    const actor = db.prepare(`
+      SELECT d.name AS designation FROM users u
+      LEFT JOIN designations d ON d.id = u.designation_id
+      WHERE u.id = ? AND u.is_active = 1
+    `).get(userId);
+    return !!(actor && ['Administrator', 'Proprietor'].includes(actor.designation));
+  }
+
+  ipcMain.handle('auth:request-password-reset', (_e, { username, reason, from } = {}) =>
+    passwords.requestReset(db, { username, reason, source: from || 'desktop' }));
+
+  ipcMain.handle('auth:pending-password-resets', () => {
+    // The count drives a badge only an approver ever sees.
+    if (!isDecider(security.getCurrentUserId())) return { ok: true, count: 0 };
+    return { ok: true, count: passwords.pendingCount(db) };
+  });
+
+  ipcMain.handle('auth:list-password-resets', (_e, { status } = {}) => {
+    if (!isDecider(security.getCurrentUserId())) {
+      return { ok: false, error: 'Only an Administrator or Proprietor can review password requests.', requests: [] };
+    }
+    return { ok: true, requests: passwords.listRequests(db, status) };
+  });
+
+  ipcMain.handle('auth:decide-password-reset', (_e, { requestId, approve, note } = {}) =>
+    passwords.decideReset(db, { requestId, approve, note, actorUserId: security.getCurrentUserId() }));
+
+  ipcMain.handle('auth:password-reset-status', (_e, { username } = {}) =>
+    passwords.resetStatus(db, { username }));
+
+  ipcMain.handle('auth:complete-password-reset', (_e, { username, code, newPassword } = {}) => {
+    const r = passwords.completeReset(db, { username, code, newPassword });
+    if (r.ok) clearLoginFailures(String(username || '').trim());
+    return r.ok ? { ok: true } : r;
   });
 
   // ── Teacher class / subject assignments (per-user) ─────

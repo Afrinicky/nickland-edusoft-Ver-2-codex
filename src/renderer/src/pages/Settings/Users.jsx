@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/index.js';
 import { sanitizeForForm } from '../../lib/formSafe.js';
 import PhotoUploader from '../../components/PhotoUploader.jsx';
+import Modal from '../../components/Modal.jsx';
 import UserAssignmentsModal from './UserAssignmentsModal.jsx';
 
 export default function Users() {
@@ -17,36 +18,39 @@ export default function Users() {
   const [editing, setEditing] = useState(null);
   const [assignModal, setAssignModal] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState(null);   // user whose password an admin is setting
+  const [requests, setRequests] = useState([]);       // staff waiting on a reset approval
+  const [granted, setGranted] = useState(null);       // the code to read out, shown once
 
   async function refresh() {
     setLoading(true);
-    const [u, d, s] = await Promise.all([
+    const [u, d, s, r] = await Promise.all([
       window.api.auth.listUsers(),
       window.api.auth.listDesignations(),
       window.api.staff.list({}),
+      window.api.auth.listPasswordResets({ status: 'pending' }),
     ]);
     setUsers(u);
     setDesignations(d);
     setStaffList(s);
+    setRequests(r.ok ? r.requests : []);
     setLoading(false);
   }
   useEffect(() => { refresh(); }, []);
 
-  async function resetPassword(user) {
-    const newPw = prompt(`Reset password for ${user.full_name}.\n\nEnter a new temporary password (min 6 characters).\nThe user will be required to change it at next login.`);
-    if (!newPw) return;
-    if (newPw.length < 6) { showToast('Password must be at least 6 characters', 'warning'); return; }
-    const res = await window.api.auth.resetPassword({
-      actorUserId: currentUser?.id,
-      targetUserId: user.id,
-      newPassword: newPw,
-    });
-    if (res.ok) {
-      showToast(`Password reset for ${res.username}. They must change it at next login.`, 'success');
-    } else {
-      showToast(res.error || 'Reset failed', 'error');
-    }
+  // Approving does not set a password — it mints a single-use code the person
+  // redeems themselves. Shown once here, because only its hash is stored.
+  async function decide(req, approve) {
+    const res = await window.api.auth.decidePasswordReset({ requestId: req.id, approve });
+    if (!res.ok) { showToast(res.error || 'Could not record the decision', 'error'); return; }
+    if (approve) setGranted({ username: res.username, code: res.code, hours: res.expiresInHours });
+    else showToast(`Request from ${req.username} declined`, 'success');
+    refresh();
   }
+
+  // Opens a modal rather than window.prompt(): Electron does not implement
+  // prompt(), so this button threw and did nothing at all.
+  function resetPassword(user) { setResetting(user); }
 
   async function toggleActive(user) {
     const verb = user.is_active ? 'deactivate' : 'activate';
@@ -71,6 +75,47 @@ export default function Users() {
           which parts of the app they can access. Link the account to a staff record if applicable.
         </div>
       </div>
+
+      {requests.length > 0 && (
+        <div className="card" style={{ marginTop: 16, borderLeft: '3px solid var(--warning, #C9961A)' }}>
+          <div className="section-header">
+            <div className="section-title">
+              Password requests waiting
+              <span className="badge badge-warning" style={{ marginLeft: 8 }}>{requests.length}</span>
+            </div>
+          </div>
+          <div className="text-sm text-muted" style={{ marginBottom: 10, lineHeight: 1.6 }}>
+            Approving does not set a password. It produces a 6-digit code to give the person —
+            they choose their own password with it. Check who you are speaking to before you approve.
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Name</th><th>Username</th><th>Asked</th><th>From</th><th>Note</th><th></th></tr>
+              </thead>
+              <tbody>
+                {requests.map(r => (
+                  <tr key={r.id}>
+                    <td><strong>{r.full_name || '—'}</strong>
+                      <div className="text-xs text-muted">{r.designation || '—'}</div>
+                    </td>
+                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.username}</td>
+                    <td className="text-sm text-muted">
+                      {r.requested_at ? new Date(r.requested_at.replace(' ', 'T') + 'Z').toLocaleString() : '—'}
+                    </td>
+                    <td className="text-sm text-muted">{r.requested_from || 'desktop'}</td>
+                    <td className="text-sm text-muted">{r.reason || '—'}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button className="btn btn-primary btn-sm" onClick={() => decide(r, true)}>Approve</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => decide(r, false)}>Decline</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="section-header">
@@ -165,7 +210,83 @@ export default function Users() {
       {assignModal && (
         <UserAssignmentsModal user={assignModal} onClose={() => setAssignModal(null)} />
       )}
+      {resetting && (
+        <AdminResetModal
+          user={resetting}
+          onClose={() => setResetting(null)}
+          onDone={(username) => {
+            setResetting(null);
+            showToast(`Password reset for ${username}. They must change it at next sign-in.`, 'success');
+          }}
+        />
+      )}
+      {granted && (
+        <Modal title="Approved — give them this code" size="sm" onClose={() => setGranted(null)}
+          footer={<button className="btn btn-primary" onClick={() => setGranted(null)}>Done</button>}>
+          <p className="text-sm" style={{ lineHeight: 1.6 }}>
+            Read this code to <strong>{granted.username}</strong>. They enter it on the sign-in
+            screen under <em>"I have an approval code"</em> and choose their own password.
+          </p>
+          <div style={{
+            fontFamily: 'monospace', fontSize: 34, fontWeight: 700, letterSpacing: 6,
+            textAlign: 'center', padding: '18px 0', color: 'var(--primary)',
+          }}>{granted.code}</div>
+          <p className="text-sm text-muted" style={{ lineHeight: 1.6 }}>
+            It works once and expires in {granted.hours} hours. It is not stored anywhere you can
+            read it again — if it is lost, decline the request and ask them to send a new one.
+          </p>
+        </Modal>
+      )}
     </div>
+  );
+}
+
+// An administrator setting a temporary password for somebody. Distinct from the
+// approval flow: this is the admin choosing the password, so the account is
+// flagged to change it at next sign-in.
+function AdminResetModal({ user, onClose, onDone }) {
+  const showToast = useStore(s => s.showToast);
+  const [pw, setPw] = useState({ next: '', confirm: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function save() {
+    setError('');
+    if (pw.next.length < 6) return setError('Password must be at least 6 characters.');
+    if (pw.next !== pw.confirm) return setError('The two passwords do not match.');
+    setBusy(true);
+    const res = await window.api.auth.resetPassword({ targetUserId: user.id, newPassword: pw.next });
+    setBusy(false);
+    if (!res.ok) { setError(res.error || 'Reset failed.'); return; }
+    onDone(res.username || user.username);
+  }
+
+  return (
+    <Modal title={`Reset password — ${user.full_name}`} size="sm" onClose={onClose}
+      footer={<>
+        <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" onClick={save} disabled={busy}>
+          {busy ? 'Saving…' : 'Reset password'}
+        </button>
+      </>}>
+      <p className="text-sm text-muted" style={{ lineHeight: 1.6, marginBottom: 12 }}>
+        Set a temporary password for <strong>{user.username}</strong>. They will be asked to
+        choose their own the next time they sign in.
+      </p>
+      <div className="form-group">
+        <label>New password</label>
+        <input type="password" value={pw.next} autoFocus
+          onChange={e => setPw(p => ({ ...p, next: e.target.value }))}
+          placeholder="At least 6 characters" />
+      </div>
+      <div className="form-group">
+        <label>Confirm password</label>
+        <input type="password" value={pw.confirm}
+          onChange={e => setPw(p => ({ ...p, confirm: e.target.value }))}
+          placeholder="Type it again" />
+      </div>
+      {error && <div className="auth-error">{error}</div>}
+    </Modal>
   );
 }
 

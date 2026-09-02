@@ -4,12 +4,13 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TextInput, ScrollView, TouchableOpacity } from 'react-native';
 import { Stack } from 'expo-router';
 import { useAuth } from '../../src/auth';
+import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import { Screen, Card, H2, Muted, Row, Field, Button, Loading, ErrorNote } from '../../src/ui';
 import { colors } from '../../src/theme';
 import { ClassPicker } from './attendance';
 
-export default function Homework() {
+function HomeworkScreen() {
   const { token } = useAuth();
   const [classes, setClasses] = useState(null);
   const [classId, setClassId] = useState(null);
@@ -200,5 +201,16 @@ function MarkSheet({ token, homework, onClose }) {
       ))}
       <Button title={saving ? 'Saving…' : 'Save marks'} onPress={save} disabled={saving} />
     </Card>
+  );
+}
+
+// Reachable by URL in the browser build, so the screen guards itself rather
+// than relying on the tab bar having hidden it. The server checks the same
+// permissions on every request regardless.
+export default function Homework() {
+  return (
+    <RequireModule modules={[['academics', 'view']]}>
+      <HomeworkScreen />
+    </RequireModule>
   );
 }
