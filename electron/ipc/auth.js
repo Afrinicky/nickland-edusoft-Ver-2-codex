@@ -7,6 +7,7 @@
 // load in the plain-Node test harness, which has no node_modules.
 let _bcrypt = null;
 function bcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
+const crypto = require('crypto');
 const security = require('./_security');
 const { setSetting } = require('../utils/idgen');
 
@@ -345,6 +346,214 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       SELECT module, can_view, can_create, can_edit, can_delete
       FROM user_permission_overrides WHERE user_id = ?
     `).all(userId);
+  });
+
+  // ══════════════════════════════════════════════════════
+  // PASSWORD RESET REQUESTS
+  // ══════════════════════════════════════════════════════
+  // A school has no mail server and the phone app talks to a read model, so
+  // "email me a reset link" is not available. Instead the request is recorded
+  // and an Administrator or Proprietor approves it face to face.
+  //
+  // Approval does NOT set a password. It mints a single-use claim code that the
+  // account holder redeems by choosing their own password. That matters on a
+  // shared office machine: if approval alone unlocked the "choose a new
+  // password" screen, anyone who walked past between the approval and the
+  // teacher's return could take the account. The approver reads the code out;
+  // only somebody holding it can complete the reset.
+
+  const RESET_CLAIM_TTL_HOURS = 24;
+  const RESET_SOURCES = ['desktop', 'mobile', 'web'];
+
+  function hashClaim(code) {
+    return crypto.createHash('sha256').update(String(code)).digest('hex');
+  }
+  // Six digits, drawn from the CSPRNG and read aloud by the approver. Short
+  // enough to say over a desk, and single-use against a 24-hour window.
+  function newClaimCode() {
+    return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  }
+  function isDecider(userId) {
+    if (!userId) return false;
+    const actor = db.prepare(`
+      SELECT d.name AS designation FROM users u
+      LEFT JOIN designations d ON d.id = u.designation_id
+      WHERE u.id = ? AND u.is_active = 1
+    `).get(userId);
+    return !!(actor && ['Administrator', 'Proprietor'].includes(actor.designation));
+  }
+
+  // ── Raise a request (public — reachable from the login screen) ──
+  ipcMain.handle('auth:request-password-reset', (_e, { username, reason, from } = {}) => {
+    const uname = String(username || '').trim();
+    if (!uname) return { ok: false, error: 'Enter your username.' };
+    const source = RESET_SOURCES.includes(from) ? from : 'desktop';
+
+    const user = db.prepare('SELECT id, username, full_name FROM users WHERE username = ? AND is_active = 1').get(uname);
+
+    // Deliberately the same answer whether or not the account exists. The login
+    // screen is reachable by anyone in the building; telling them which
+    // usernames are real turns this into a staff directory.
+    const generic = { ok: true, submitted: true };
+    if (!user) return generic;
+
+    // One open request per account. Asking twice should not give an approver
+    // two rows to work through, or mint a second code that invalidates nothing.
+    const open = db.prepare(`
+      SELECT id FROM password_reset_requests
+      WHERE user_id = ? AND status IN ('pending', 'approved')
+    `).get(user.id);
+    if (open) return generic;
+
+    db.prepare(`
+      INSERT INTO password_reset_requests (user_id, username, status, reason, requested_from)
+      VALUES (?, ?, 'pending', ?, ?)
+    `).run(user.id, user.username, String(reason || '').slice(0, 500) || null, source);
+
+    try {
+      db.prepare(`
+        INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+        VALUES ('user', ?, 'password_reset_requested', NULL, ?, 'normal')
+      `).run(user.id, `${user.full_name || user.username} asked for a password reset (${source})`);
+    } catch (_) { /* audit is best-effort */ }
+
+    return generic;
+  });
+
+  // ── How many are waiting (drives the badge an approver sees) ──
+  ipcMain.handle('auth:pending-password-resets', () => {
+    if (!isDecider(security.getCurrentUserId())) return { ok: true, count: 0 };
+    const row = db.prepare("SELECT COUNT(*) c FROM password_reset_requests WHERE status = 'pending'").get();
+    return { ok: true, count: row.c };
+  });
+
+  // ── The approver's queue ──
+  ipcMain.handle('auth:list-password-resets', (_e, { status } = {}) => {
+    if (!isDecider(security.getCurrentUserId())) {
+      return { ok: false, error: 'Only an Administrator or Proprietor can review password requests.', requests: [] };
+    }
+    const rows = status
+      ? db.prepare(`
+          SELECT r.*, u.full_name, d.name AS designation
+          FROM password_reset_requests r
+          JOIN users u ON u.id = r.user_id
+          LEFT JOIN designations d ON d.id = u.designation_id
+          WHERE r.status = ? ORDER BY r.requested_at DESC LIMIT 200
+        `).all(status)
+      : db.prepare(`
+          SELECT r.*, u.full_name, d.name AS designation
+          FROM password_reset_requests r
+          JOIN users u ON u.id = r.user_id
+          LEFT JOIN designations d ON d.id = u.designation_id
+          ORDER BY r.requested_at DESC LIMIT 200
+        `).all();
+    // The stored hash never leaves the main process.
+    return { ok: true, requests: rows.map(({ claim_hash, ...r }) => r) };
+  });
+
+  // ── Approve or deny ──
+  // Approving returns the claim code ONCE, for the approver to hand over. It is
+  // stored only as a hash, so it cannot be recovered afterwards — a lost code
+  // means denying the request and asking the person to raise a fresh one.
+  ipcMain.handle('auth:decide-password-reset', (_e, { requestId, approve, note } = {}) => {
+    const actorUserId = security.getCurrentUserId();
+    if (!actorUserId) return { ok: false, error: 'Please sign in again.' };
+    if (!isDecider(actorUserId)) {
+      return { ok: false, error: 'Only an Administrator or Proprietor can approve password requests.' };
+    }
+    const req = db.prepare("SELECT * FROM password_reset_requests WHERE id = ?").get(requestId);
+    if (!req) return { ok: false, error: 'Request not found.' };
+    if (req.status !== 'pending') return { ok: false, error: `This request has already been ${req.status}.` };
+
+    if (!approve) {
+      db.prepare(`
+        UPDATE password_reset_requests
+        SET status = 'denied', decided_by = ?, decided_at = datetime('now'), decision_note = ?
+        WHERE id = ?
+      `).run(actorUserId, String(note || '').slice(0, 500) || null, requestId);
+      return { ok: true, approved: false };
+    }
+
+    const code = newClaimCode();
+    db.prepare(`
+      UPDATE password_reset_requests
+      SET status = 'approved', decided_by = ?, decided_at = datetime('now'), decision_note = ?,
+          claim_hash = ?, claim_expires_at = datetime('now', ?)
+      WHERE id = ?
+    `).run(actorUserId, String(note || '').slice(0, 500) || null, hashClaim(code),
+           `+${RESET_CLAIM_TTL_HOURS} hours`, requestId);
+
+    try {
+      db.prepare(`
+        INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+        VALUES ('user', ?, 'password_reset_approved', ?, ?, 'high')
+      `).run(req.user_id, actorUserId, `Password reset approved for ${req.username}`);
+    } catch (_) {}
+
+    return { ok: true, approved: true, code, username: req.username, expiresInHours: RESET_CLAIM_TTL_HOURS };
+  });
+
+  // ── Has my request been dealt with? (login screen polls this) ──
+  // Says only whether a decision has been made, never the code. Without a code
+  // in hand the answer is not worth anything to somebody else at the machine.
+  ipcMain.handle('auth:password-reset-status', (_e, { username } = {}) => {
+    const uname = String(username || '').trim();
+    if (!uname) return { ok: true, status: 'none' };
+    const row = db.prepare(`
+      SELECT status, claim_expires_at FROM password_reset_requests
+      WHERE username = ? ORDER BY requested_at DESC LIMIT 1
+    `).get(uname);
+    if (!row) return { ok: true, status: 'none' };
+    if (row.status === 'approved' && row.claim_expires_at &&
+        new Date(row.claim_expires_at.replace(' ', 'T') + 'Z') < new Date()) {
+      return { ok: true, status: 'expired' };
+    }
+    return { ok: true, status: row.status };
+  });
+
+  // ── Redeem the claim and choose a new password ──
+  ipcMain.handle('auth:complete-password-reset', (_e, { username, code, newPassword } = {}) => {
+    const uname = String(username || '').trim();
+    if (!uname || !code) return { ok: false, error: 'Enter your username and the approval code.' };
+    if (!newPassword || String(newPassword).length < 6) {
+      return { ok: false, error: 'Password must be at least 6 characters.' };
+    }
+    const req = db.prepare(`
+      SELECT * FROM password_reset_requests
+      WHERE username = ? AND status = 'approved' ORDER BY decided_at DESC LIMIT 1
+    `).get(uname);
+    if (!req) return { ok: false, error: 'No approved request for that username. Ask an Administrator to approve one.' };
+    if (req.claim_expires_at && new Date(req.claim_expires_at.replace(' ', 'T') + 'Z') < new Date()) {
+      db.prepare("UPDATE password_reset_requests SET status = 'cancelled' WHERE id = ?").run(req.id);
+      return { ok: false, error: 'That approval has expired. Please ask for a new one.' };
+    }
+
+    const given = hashClaim(String(code).trim());
+    let match = false;
+    try {
+      const a = Buffer.from(given, 'hex');
+      const b = Buffer.from(String(req.claim_hash || ''), 'hex');
+      match = a.length === b.length && crypto.timingSafeEqual(a, b);
+    } catch (_) { match = false; }
+    if (!match) return { ok: false, error: 'That approval code is not correct.' };
+
+    // The reset clears must_change_password: the person has just chosen this
+    // password themselves, so making them change it again at the next screen
+    // would be a loop with no purpose.
+    const hash = bcrypt().hashSync(String(newPassword), 10);
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, req.user_id);
+    db.prepare("UPDATE password_reset_requests SET status = 'used', used_at = datetime('now') WHERE id = ?").run(req.id);
+    clearLoginFailures(uname);
+
+    try {
+      db.prepare(`
+        INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+        VALUES ('user', ?, 'password_reset_completed', ?, ?, 'high')
+      `).run(req.user_id, req.user_id, `${uname} set a new password after approval`);
+    } catch (_) {}
+
+    projectStaff(db, req.user_id);
+    return { ok: true };
   });
 
   // ── Teacher class / subject assignments (per-user) ─────

@@ -24,6 +24,14 @@ const api = {
     getDesignationPermissions: (id)    => ipcRenderer.invoke('auth:get-designation-permissions', id),
     updateDesignationPermission:(data) => ipcRenderer.invoke('auth:update-designation-permission', data),
     changePassword:            (data)  => ipcRenderer.invoke('auth:change-password', data),
+    // Password reset by approval — see electron/ipc/auth.js. Raising a request
+    // and redeeming a claim are both reachable before sign-in, by design.
+    requestPasswordReset:      (data)  => ipcRenderer.invoke('auth:request-password-reset', data),
+    passwordResetStatus:       (data)  => ipcRenderer.invoke('auth:password-reset-status', data),
+    completePasswordReset:     (data)  => ipcRenderer.invoke('auth:complete-password-reset', data),
+    listPasswordResets:        (data)  => ipcRenderer.invoke('auth:list-password-resets', data || {}),
+    pendingPasswordResets:     ()      => ipcRenderer.invoke('auth:pending-password-resets'),
+    decidePasswordReset:       (data)  => ipcRenderer.invoke('auth:decide-password-reset', data),
   },
 
   // ── Access control (roles + per-person overrides, level-based) ────────
