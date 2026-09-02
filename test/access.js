@@ -129,6 +129,8 @@ const CHANNELS = [
   'timetable:save-entry', 'timetable:save-period',
   'canteen:class-roster-for-date', 'canteen:mark-bulk-paid',
   'exams:save-paper', 'homework:save',
+  'scores:save-subject', 'students:promote',
+  'canteen:setup-term-calendar', 'canteen:save-calendar-day',
 ];
 for (const c of CHANNELS) guarded.handle(c, () => ({ ok: true, ran: true }));
 
@@ -376,7 +378,82 @@ ck('a head teacher is not confined to one class',
     !forTeacher.some(c => Number(c.id) === B4));
 }
 
-// ══ 15. denials are recorded ══
+// ══ 15. the three faults the school reported after F10.1 ══
+// Each of these was reachable in the shipped build despite the permissions
+// and assignments being set correctly, so each gets a check of its own.
+{
+  const ipc4 = fakeIpcMain();
+  const guarded4 = guardedIpcMain(ipc4, db);
+  require(path.join(ROOT, 'electron/ipc/scores.js'))(guarded4, db);
+  const scoreCall = (ch, ...a) => ipc4.handlers.get(ch)({}, ...a);
+
+  // Justice: class teacher of B5, and takes French in B6 only.
+  as(justice);
+
+  // (a) The score sheet is the class's WHOLE subject grid. Scoping it by
+  //     class let a teacher who takes one subject in a class type into every
+  //     column of it — the exact screenshot the school sent.
+  const b6sheet = scoreCall('scores:exam-sheet', { classId: B6, termId: 3 });
+  const b6subjects = (b6sheet && b6sheet.subjects) || [];
+  ck('the exam sheet for a class they visit shows only their subject',
+    b6subjects.length === 1 && Number(b6subjects[0].id) === FRENCH);
+
+  const b5sheet = scoreCall('scores:exam-sheet', { classId: B5, termId: 3 });
+  ck('...and their own class still shows every subject',
+    ((b5sheet && b5sheet.subjects) || []).length >= 2);
+
+  // (b) The write path names no class, so the channel policy could not scope
+  //     it. A mark in a subject that is not theirs has to be refused even
+  //     when the call is made directly.
+  const bad = scoreCall('scores:save-exam-mark',
+    { studentId: 903, subjectId: MATHS, termId: 3, examScore: 99 });
+  ck('a mark in a subject they do not teach is refused', bad && bad.denied);
+
+  const good = scoreCall('scores:save-exam-mark',
+    { studentId: 903, subjectId: FRENCH, termId: 3, examScore: 71 });
+  ck('...and a mark in their own subject is saved', good && good.ok);
+
+  // Bulk and Import Excel go through the same door.
+  const bulk = scoreCall('scores:save-bulk',
+    { entries: [{ student_id: 903, subject_id: MATHS, exam_score: 99 }] });
+  ck('a bulk save containing one forbidden subject is refused whole',
+    bulk && bulk.denied);
+
+  const compilation = scoreCall('scores:save-assessment-compilation', {
+    classId: B6, termId: 3,
+    students: [{ student_id: 903, subject_scores: { [MATHS]: { exam_raw: 99 } } }],
+  });
+  ck('an Excel compilation import cannot reach another subject either',
+    compilation && compilation.denied);
+
+  // (c) Creating a subject changes the curriculum for every class. It names
+  //     no class, so no scope rule could ever have caught it.
+  ck('a teacher cannot create a school subject',
+    denied(call('scores:save-subject', { name: 'Invented' })));
+
+  // The canteen term calendar decides which days the whole school is charged.
+  ck('a class teacher cannot generate the term calendar',
+    denied(call('canteen:setup-term-calendar', {})));
+  ck('...nor rewrite a single calendar day',
+    denied(call('canteen:save-calendar-day', {})));
+
+  // Admissions, import and promotion stay office work.
+  ck('a class teacher still cannot admit, import or promote',
+    denied(call('students:create', { surname: 'X' }))
+    && denied(call('students:bulk-commit', {}))
+    && denied(call('students:promote', {})));
+
+  // And the administrator is untouched by all of it.
+  as(admin);
+  const adminSheet = scoreCall('scores:exam-sheet', { classId: B6, termId: 3 });
+  ck('an administrator sees every subject in every class',
+    ((adminSheet && adminSheet.subjects) || []).length >= 2);
+  ck('...and may save any mark',
+    (scoreCall('scores:save-exam-mark', { studentId: 903, subjectId: MATHS, termId: 3, examScore: 55 }) || {}).ok);
+  ck('...and may set up the term calendar', ran(call('canteen:setup-term-calendar', {})));
+}
+
+// ══ 16. denials are recorded ══
 const denials = db.prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'permission_denied'").get().c;
 ck('every refusal is written to the audit log', denials > 0);
 

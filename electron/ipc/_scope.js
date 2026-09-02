@@ -181,8 +181,34 @@ function canAccessStudent(db, scope, studentId) {
   return cid ? canAccessClass(scope, cid) : false;
 }
 
+// Narrow a class's subject list to the ones the signed-in user may touch.
+//
+// A score sheet is a grid of every subject in the class, so scoping the SHEET
+// by class is not enough: a teacher who takes only Mathematics in Basic 4 was
+// handed the whole Basic 4 grid — English, Science, everything — and could
+// type in any of it. The columns have to be filtered, not just the sheet.
+//
+// Returns the list unchanged for anyone unrestricted, and for a teacher who
+// holds the class outright.
+function filterSubjectsForCurrentUser(db, classId, subjects) {
+  if (!Array.isArray(subjects) || !subjects.length) return subjects;
+  let userId = null;
+  try { userId = require('./_security').getCurrentUserId(); } catch (_) { userId = null; }
+  // No session: this is a background or start-up read, not somebody browsing.
+  if (!userId) return subjects;
+
+  const scope = scopeFor(db, userId);
+  if (scope.unrestricted) return subjects;
+  if (scope.wholeClasses.has(Number(classId))) return subjects;
+
+  const allowed = visibleSubjectIds(db, scope, classId);
+  if (!allowed) return subjects;
+  return subjects.filter(sub => allowed.has(Number(sub.id)));
+}
+
 module.exports = {
   UNRESTRICTED_DESIGNATIONS,
   scopeFor, canAccessClass, canAccessSubject, isClassTeacherOf,
   visibleClassIds, visibleSubjectIds, canAccessStudent, classOfStudent,
+  filterSubjectsForCurrentUser,
 };
