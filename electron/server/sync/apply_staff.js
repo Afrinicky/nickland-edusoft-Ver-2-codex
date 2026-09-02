@@ -176,6 +176,237 @@ function applyHomework(db, payload) {
   return true;
 }
 
+// ── continuous assessment ───────────────────────────────────────────────────
+// Upserted on (column, student), so replaying lands on the same marks. The
+// weighted class score is recomputed afterwards through the desktop's own
+// `recomputeClassScore`, which is what the Class Scores sheet calls — an
+// off-LAN mark and an on-LAN one cannot end up weighted differently.
+function applyAssessments(db, payload) {
+  const user = actor(db, payload);
+  if (!user) return false;
+  if (!allowed(db, user.id, 'academics', 'edit')) return false;
+
+  const classId = parseInt(payload.class_id, 10);
+  const subjectId = parseInt(payload.subject_id, 10);
+  const entries = Array.isArray(payload.marks) ? payload.marks : [];
+  if (!classId || !subjectId || !entries.length) return false;
+  const termId = payload.term_id ?? currentTermId(db);
+  if (!termId) return false;
+
+  let columns;
+  try {
+    columns = Object.fromEntries(db.prepare(`
+      SELECT id, max_marks FROM assessment_columns
+      WHERE class_group_id = ? AND subject_id = ? AND term_id = ?
+    `).all(classId, subjectId, termId).map(c => [String(c.id), c]));
+  } catch (_) { return false; }
+
+  const up = db.prepare(`
+    INSERT INTO assessment_scores (assessment_column_id, student_id, marks) VALUES (?, ?, ?)
+    ON CONFLICT (assessment_column_id, student_id) DO UPDATE SET marks = excluded.marks
+  `);
+  const clear = db.prepare('DELETE FROM assessment_scores WHERE assessment_column_id = ? AND student_id = ?');
+  const touched = new Set();
+  try {
+    db.transaction(() => {
+      for (const e of entries) {
+        const col = columns[String(e.column_id)];
+        const sid = parseInt(e.student_id, 10);
+        if (!col || !sid) continue;
+        if (e.marks === '' || e.marks == null) { clear.run(col.id, sid); touched.add(sid); continue; }
+        const v = Number(e.marks);
+        // One impossible mark must not block the rest of the class; the change
+        // is not coming back for a retry.
+        if (!Number.isFinite(v) || v < 0 || v > col.max_marks) continue;
+        up.run(col.id, sid, v);
+        touched.add(sid);
+      }
+    })();
+  } catch (_) { return false; }
+
+  try {
+    const { recomputeClassScore, readWeights } = require('../../ipc/scores');
+    const w = readWeights(db);
+    for (const sid of touched) recomputeClassScore(db, classId, subjectId, termId, sid, w);
+  } catch (_) {}
+  refresh(db, [...touched]);
+  return touched.size > 0;
+}
+
+// ── end-of-term remarks ─────────────────────────────────────────────────────
+// Conduct, interests, talents and the class teacher's remark. Upserted on
+// (student, term).
+function applyTermRemarks(db, payload) {
+  const user = actor(db, payload);
+  if (!user) return false;
+  if (!allowed(db, user.id, 'academics', 'edit')) return false;
+  const sid = parseInt(payload.student_id, 10);
+  if (!sid) return false;
+  const termId = payload.term_id ?? currentTermId(db);
+  if (!termId) return false;
+  let classId = null;
+  try { classId = db.prepare('SELECT current_class_id AS id FROM students WHERE id = ?').get(sid)?.id || null; } catch (_) { return false; }
+  try {
+    db.prepare(`
+      INSERT INTO student_term_summary (student_id, term_id, class_group_id, conduct_traits, learner_interests, learner_talents, teacher_remarks)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (student_id, term_id) DO UPDATE SET
+        conduct_traits    = excluded.conduct_traits,
+        learner_interests = excluded.learner_interests,
+        learner_talents   = excluded.learner_talents,
+        teacher_remarks   = excluded.teacher_remarks
+    `).run(sid, termId, classId,
+      payload.conduct || null, payload.interests || null, payload.talents || null, payload.remarks || null);
+  } catch (_) { return false; }
+  refresh(db, [sid]);
+  return true;
+}
+
+// ── lesson notes ────────────────────────────────────────────────────────────
+// A note written on the way home. Keyed by the cloud's uuid so a redelivery
+// updates the same note rather than filing a second copy of it — the local id
+// cannot be used, because the note did not exist locally when it was written.
+const LESSON_COLUMNS = [
+  'class_group_id', 'subject_id', 'week_number', 'lesson_date', 'duration_minutes',
+  'topic', 'sub_topic', 'references_text', 'tlms', 'objectives', 'rpk',
+  'introduction', 'presentation', 'activity', 'evaluation', 'closure',
+  'assignment', 'remarks', 'status',
+];
+
+function applyLessonNote(db, payload) {
+  const user = actor(db, payload);
+  if (!user || !user.staff_id) return false;
+  const note = payload.note || {};
+  if (!note.topic || !String(note.topic).trim()) return false;
+  const ref = payload.uuid;
+  if (!ref) return false;
+
+  const values = LESSON_COLUMNS.map(c => (note[c] === undefined ? null : note[c]));
+
+  // An edit made off-LAN names the note it edits; a new one does not.
+  const localId = parseInt(payload.local_id, 10) || null;
+  try {
+    if (localId) {
+      const existing = db.prepare('SELECT id, staff_id, status FROM lesson_notes WHERE id = ?').get(localId);
+      if (!existing || existing.staff_id !== user.staff_id) return true;   // not theirs — drop it
+      if (existing.status === 'approved') return true;                     // reviewed; not theirs to rewrite
+      db.prepare(`UPDATE lesson_notes SET ${LESSON_COLUMNS.map(c => `${c} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .run(...values, localId);
+    } else {
+      if (alreadyApplied(db, ref)) return true;
+      const cols = ['staff_id', 'term_id', ...LESSON_COLUMNS];
+      db.prepare(`INSERT INTO lesson_notes (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
+        .run(user.staff_id, payload.term_id ?? currentTermId(db), ...values);
+      markApplied(db, ref);
+    }
+  } catch (_) { return false; }
+  try { require('./staff_projection').enqueueStaffProfile(db, user.id); } catch (_) {}
+  return true;
+}
+
+// ── leave ───────────────────────────────────────────────────────────────────
+// Filed as pending, for whoever reviews leave to decide on the desktop. Nothing
+// here approves anything.
+function applyLeaveRequest(db, payload) {
+  const user = actor(db, payload);
+  if (!user || !user.staff_id) return false;
+  const ref = payload.uuid;
+  if (!ref || alreadyApplied(db, ref)) return !!ref;
+  const { leave_type, start_date, end_date, days_requested, justification } = payload;
+  if (!leave_type || !start_date || !end_date || !justification) return false;
+  try {
+    db.prepare(`
+      INSERT INTO leave_requests (staff_id, leave_type, start_date, end_date, days_requested, justification, status)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending')
+    `).run(user.staff_id, leave_type, start_date, end_date, days_requested || 1, justification);
+  } catch (_) { return false; }
+  markApplied(db, ref);
+  try { require('./staff_projection').enqueueStaffProfile(db, user.id); } catch (_) {}
+  return true;
+}
+
+// ── clocking in from off site ───────────────────────────────────────────────
+// Upserted on (staff, date). A second clock-in for a day already opened does
+// not move the first stamp — the earliest arrival is the record.
+function applyStaffClock(db, payload) {
+  const user = actor(db, payload);
+  if (!user || !user.staff_id) return false;
+  const date = payload.date;
+  const at = payload.at;
+  if (!date || !at) return false;
+  try {
+    if (payload.direction === 'out') {
+      db.prepare(`
+        UPDATE staff_attendance SET clock_out = COALESCE(clock_out, ?)
+        WHERE staff_id = ? AND date = ?
+      `).run(at, user.staff_id, date);
+    } else {
+      db.prepare(`
+        INSERT INTO staff_attendance (staff_id, date, clock_in, status) VALUES (?, ?, ?, 'present')
+        ON CONFLICT (staff_id, date) DO UPDATE SET clock_in = COALESCE(staff_attendance.clock_in, excluded.clock_in), status = 'present'
+      `).run(user.staff_id, date, at);
+    }
+  } catch (_) { return false; }
+  try { require('./staff_projection').enqueueStaffProfile(db, user.id); } catch (_) {}
+  return true;
+}
+
+// ── replying to a parent ────────────────────────────────────────────────────
+// Goes through the desktop's own `postMessage`, so the reply is mirrored to the
+// parent's SMS or email exactly as one typed at the school would be.
+function applyMessageReply(db, payload) {
+  const user = actor(db, payload);
+  if (!user) return false;
+  if (!allowed(db, user.id, 'notifications', 'create')) return false;
+  const ref = payload.uuid;
+  if (!ref) return false;
+  if (alreadyApplied(db, ref)) return true;
+  if (!payload.body || !String(payload.body).trim()) return false;
+
+  // The cloud knows a thread by its uuid; the desktop by its row id.
+  let threadId = null;
+  if (payload.thread_uuid) {
+    try { threadId = db.prepare('SELECT id FROM message_threads WHERE uuid = ?').get(payload.thread_uuid)?.id || null; } catch (_) {}
+    if (!threadId) return false;
+  }
+  try {
+    const r = require('../../ipc/messaging').postMessage(db, {
+      threadId,
+      parentId: payload.parent_id ? parseInt(payload.parent_id, 10) : null,
+      studentId: payload.student_id ? parseInt(payload.student_id, 10) : null,
+      subject: payload.subject || null,
+      senderType: 'staff', senderId: user.id,
+      senderName: db.prepare('SELECT full_name FROM users WHERE id = ?').get(user.id)?.full_name || null,
+      body: payload.body,
+    });
+    if (!r || !r.ok) return false;
+  } catch (_) { return false; }
+  markApplied(db, ref);
+  return true;
+}
+
+// ── posting a notice ────────────────────────────────────────────────────────
+function applyAnnouncement(db, payload) {
+  const user = actor(db, payload);
+  if (!user) return false;
+  if (!allowed(db, user.id, 'notifications', 'edit')) return false;
+  const ref = payload.uuid;
+  if (!ref) return false;
+  if (alreadyApplied(db, ref)) return true;
+  if (!payload.title || !payload.body) return false;
+  const audience = payload.audience === 'student' ? 'student' : 'all';
+  try {
+    const r = db.prepare(`
+      INSERT INTO announcements (title, body, audience, target_student_id, created_by)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(String(payload.title).slice(0, 200), String(payload.body).slice(0, 4000),
+           audience, audience === 'student' ? (parseInt(payload.student_id, 10) || null) : null, user.id);
+    require('../../ipc/announcements').project(db, r.lastInsertRowid);
+  } catch (_) { return false; }
+  markApplied(db, ref);
+  return true;
+}
+
 // ── applied-change ledger ───────────────────────────────────────────────────
 // ── password changes made away from the school ──────────────────────────────
 // The cloud verified the current password against the projected hash and
@@ -284,8 +515,15 @@ function refresh(db, studentIds) {
 const HANDLERS = {
   attendance_mark: applyAttendance,
   score_entry: applyScores,
+  assessment_entry: applyAssessments,
+  term_remarks: applyTermRemarks,
   canteen_collect: applyCanteen,
   homework_create: applyHomework,
+  lesson_note_save: applyLessonNote,
+  leave_request: applyLeaveRequest,
+  staff_clock: applyStaffClock,
+  message_reply: applyMessageReply,
+  announcement_create: applyAnnouncement,
   staff_password_change: applyPasswordChange,
   staff_password_reset_request: applyPasswordResetRequest,
 };

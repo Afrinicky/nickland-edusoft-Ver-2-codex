@@ -234,6 +234,12 @@ function enqueueStudentSnapshot(db, studentId) {
         student_id: studentId,
         index_number: s.index_number,
         name: `${s.surname} ${s.first_name} ${s.other_names || ''}`.trim(),
+        // The class the pupil sits in, not only its name. The cloud's staff
+        // surface checks "is this teacher the class teacher here" against it
+        // before letting a canteen collection through; without the id that
+        // check read `undefined` and let every teacher collect from every
+        // pupil in the school.
+        class_id: s.current_class_id || null,
         class_name: s.class_name,
         term: term ? term.label : null,
         fees: { billed: bill?.total_billed || 0, paid: bill?.total_paid || 0, balance: bill?.balance || 0 },
