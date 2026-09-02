@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
+import { mediaUrl } from '../../lib/media.js';
 
 // School identity: covers everything needed to use the system for any school —
 // name, motto, vision/mission, addresses, registrations, logo.
@@ -15,7 +16,7 @@ export default function SchoolIdentity() {
     const merged = { ...(settings.school || {}), ...(settings.registration || {}), ...(settings.branding || {}) };
     setData(merged);
     if (merged.school_logo_path) {
-      setLogoSrc(`file://${merged.school_logo_path}?t=${Date.now()}`);
+      setLogoSrc(mediaUrl(merged.school_logo_path, Date.now()));
     }
   }, [settings]);
 
@@ -50,7 +51,7 @@ export default function SchoolIdentity() {
     if (res.canceled || res.filePaths.length === 0) return;
     const out = await window.api.settings.uploadLogo(res.filePaths[0]);
     if (out.ok) {
-      setLogoSrc(`file://${out.path}?t=${Date.now()}`);
+      setLogoSrc(mediaUrl(out.path, Date.now()));
       await loadSettings();
       showToast('Logo updated');
     }

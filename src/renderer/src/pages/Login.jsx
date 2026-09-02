@@ -1,6 +1,7 @@
 // Nickland Edusoft — Login Screen
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store/index.js';
+import { mediaUrl } from '../lib/media.js';
 
 // Screens this component can be on. Sign-in is the only one anybody reaches
 // without asking for it.
@@ -25,7 +26,7 @@ export default function Login({ onLogin }) {
   const school = settings.school || {};
   const branding = settings.branding || {};
   const logoPath = branding.school_logo_path;
-  const logoSrc = logoPath ? `file://${logoPath}` : null;
+  const logoSrc = logoPath ? mediaUrl(logoPath) : null;
   const schoolName = school.school_name || 'Your School Name';
   const schoolMotto = school.school_motto || '';
 

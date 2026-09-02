@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/index.js';
 import { fmtDate, initials } from '../../lib/format.js';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StaffDashboard({ onSwitchTab }) {
   const navigate = useNavigate();
@@ -151,7 +152,7 @@ export default function StaffDashboard({ onSwitchTab }) {
           : <div className="recent-hires">
               {data.recent_hires.map(h => (
                 <div key={h.id} className="recent-hire-card" onClick={() => navigate(`/staff/${h.id}`)}>
-                  <div className="avatar avatar-lg">{initials(h)}</div>
+                  <Avatar person={h} size="lg" />
                   <div>
                     <div className="recent-hire-name">{h.surname} {h.first_name}</div>
                     <div className="text-xs text-muted">{h.role}</div>

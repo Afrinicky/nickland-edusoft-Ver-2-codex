@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { fmtDate, initials } from '../../lib/format.js';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StaffLeaveTab() {
   const showToast = useStore(s => s.showToast);
@@ -89,7 +90,7 @@ export default function StaffLeaveTab() {
                 <div key={r.id} className={`card leave-card leave-${r.status}`}>
                   <div className="leave-card-header">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <div className="avatar">{initials({ surname: r.surname, first_name: r.first_name })}</div>
+                      <Avatar person={{ surname: r.surname, first_name: r.first_name, photo_path: r.photo_path }} />
                       <div>
                         <div style={{ fontWeight: 600 }}>{r.surname} {r.first_name}</div>
                         <div className="text-sm text-muted">{r.role} · {r.staff_number}</div>

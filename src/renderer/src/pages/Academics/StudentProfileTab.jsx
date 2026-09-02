@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useStore } from '../../store/index.js';
 import { fullName, initials } from '../../lib/format.js';
+import { mediaUrl } from '../../lib/media.js';
 
 export default function StudentProfileTab() {
   const classes = useStore(s => s.classes);
@@ -103,7 +104,7 @@ function ProfileView({ profile, events, homework, onAddEvent }) {
       <div className="card profile-header-card">
         <div className="profile-photo">
           {student.photo_path
-            ? <img src={`file://${student.photo_path}`} alt="" />
+            ? <img src={mediaUrl(student.photo_path)} alt="" />
             : <div className="avatar avatar-lg">{initials(student)}</div>
           }
         </div>

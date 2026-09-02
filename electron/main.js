@@ -1,6 +1,6 @@
 // Nickland Edusoft — Main Process
 // Copyright © 2026 Nickland Sales. All rights reserved.
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { initDatabase } = require('./db/database');
@@ -195,6 +195,62 @@ function createWindow() {
   mainWindow.on('unresponsive', () => logger.warn('window', 'Window became unresponsive'));
 }
 
+// ── nes-media:// — reading the school's own uploaded files ──────────────────
+// Photos, logos and signatures live outside the app bundle, under
+// %APPDATA%/NicklandEdusoft/uploads. The renderer used to point <img> straight
+// at `file://<absolute path>`, which is not a thing a page can do: in
+// development the page is served from http://localhost:5173 and the browser
+// blocks a file:// subresource outright, and even packaged it depends on
+// Chromium's file-origin rules rather than on anything we control. A staff
+// photo therefore uploaded fine, saved fine, and rendered as a broken image.
+//
+// A scheme of our own fixes it in both, and unlike disabling webSecurity it
+// does not hand the renderer the whole disk: every request is resolved against
+// an allowlist of roots and anything outside them is refused.
+const MEDIA_SCHEME = 'nes-media';
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: MEDIA_SCHEME,
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false },
+}]);
+
+// The only directories this scheme will ever read from.
+function mediaRoots() {
+  const roots = [];
+  try { roots.push(path.join(getUserDataPath(), 'uploads')); } catch (_) {}
+  try { roots.push(getResourcePath('')); } catch (_) {}
+  return roots.filter(Boolean).map(r => path.resolve(r));
+}
+
+function insideAllowedRoot(target) {
+  const full = path.resolve(target);
+  return mediaRoots().some(root => full === root || full.startsWith(root + path.sep));
+}
+
+function registerMediaProtocol() {
+  protocol.handle(MEDIA_SCHEME, async (request) => {
+    try {
+      // nes-media://local/<url-encoded absolute path>[?v=…]
+      const url = new URL(request.url);
+      const raw = decodeURIComponent(url.pathname.replace(/^\//, ''));
+      if (!raw) return new Response('Not found', { status: 404 });
+
+      // Windows paths arrive as C:/... — path.resolve normalises the rest.
+      const target = path.resolve(raw);
+      if (!insideAllowedRoot(target)) {
+        logger.warn('media', `Refused a request outside the media roots: ${raw.slice(0, 200)}`);
+        return new Response('Forbidden', { status: 403 });
+      }
+      if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        return new Response('Not found', { status: 404 });
+      }
+      return net.fetch('file://' + target.split(path.sep).join('/'));
+    } catch (e) {
+      return new Response('Bad request', { status: 400 });
+    }
+  });
+}
+
 app.whenReady().then(async () => {
   // Another copy is already running and owns the database — this process is on
   // its way out, so it must not touch anything.
@@ -207,6 +263,8 @@ app.whenReady().then(async () => {
 
   logger.init(userDataPath);
   logger.info('startup', `Nickland Edusoft ${app.getVersion()} starting (${isDev ? 'dev' : 'packaged'})`);
+
+  registerMediaProtocol();
 
   let db;
   try {

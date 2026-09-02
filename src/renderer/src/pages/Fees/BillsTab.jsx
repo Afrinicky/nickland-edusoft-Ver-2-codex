@@ -15,6 +15,7 @@ import { useStore } from '../../store/index.js';
 import { fmtCedi, fmtDate } from '../../lib/format.js';
 import { previewBills } from '../../lib/printHelpers.js';
 import Modal from '../../components/Modal.jsx';
+import { mediaUrl } from '../../lib/media.js';
 
 export default function BillsTab({ overview, perms = {}, onChanged, onGoToTemplates }) {
   const currentTerm = useStore(s => s.currentTerm);
@@ -269,7 +270,7 @@ function BillDetail({ billId, perms = {}, onClose }) {
       <div className="printable-page" style={{ marginTop: 16 }}>
         {/* Header */}
         <div className="print-header">
-          {logoPath && <img src={`file://${logoPath}`} alt="" className="print-logo" />}
+          {logoPath && <img src={mediaUrl(logoPath)} alt="" className="print-logo" />}
           <div className="print-school-block">
             <h1 className="print-school-name">{(school.school_name || 'School').toUpperCase()}</h1>
             {school.school_motto && <div className="print-school-motto">"{school.school_motto}"</div>}
@@ -498,7 +499,7 @@ function BillDetail({ billId, perms = {}, onClose }) {
           <div className="print-signature-grid">
             <div className="signature-block">
               {propSig?.path
-                ? <img src={`file://${propSig.path}`} alt="" className="signature-image" />
+                ? <img src={mediaUrl(propSig.path)} alt="" className="signature-image" />
                 : <div className="signature-spacer"></div>
               }
               <div className="signature-line"></div>
@@ -507,7 +508,7 @@ function BillDetail({ billId, perms = {}, onClose }) {
             </div>
             <div className="signature-block">
               {headSig?.path
-                ? <img src={`file://${headSig.path}`} alt="" className="signature-image" />
+                ? <img src={mediaUrl(headSig.path)} alt="" className="signature-image" />
                 : <div className="signature-spacer"></div>
               }
               <div className="signature-line"></div>

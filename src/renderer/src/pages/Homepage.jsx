@@ -3,6 +3,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store/index.js';
+import { mediaUrl } from '../lib/media.js';
 
 const MODULES = [
   {
@@ -130,7 +131,7 @@ export default function Homepage() {
   const branding = settings.branding || {};
   const features = settings.features || {};
   const logoPath = branding.school_logo_path;
-  const logoSrc = logoPath ? `file://${logoPath}` : null;
+  const logoSrc = logoPath ? mediaUrl(logoPath) : null;
   const schoolName = school.school_name || 'Your School Name';
   const schoolMotto = school.school_motto || '';
 

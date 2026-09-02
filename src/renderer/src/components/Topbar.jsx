@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store/index.js';
+import { mediaUrl } from '../lib/media.js';
 
 export default function Topbar() {
   const navigate = useNavigate();
@@ -10,7 +11,7 @@ export default function Topbar() {
   const school = settings.school || {};
   const branding = settings.branding || {};
   const logoPath = branding.school_logo_path;
-  const logoSrc = logoPath ? `file://${logoPath}` : null;
+  const logoSrc = logoPath ? mediaUrl(logoPath) : null;
   const schoolName = school.school_name || 'Your School Name';
   const schoolMotto = school.school_motto || '';
   const [search, setSearch] = useState('');

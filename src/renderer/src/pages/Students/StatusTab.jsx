@@ -4,6 +4,7 @@ import { useStore } from '../../store/index.js';
 import { fullName, initials } from '../../lib/format.js';
 import Modal from '../../components/Modal.jsx';
 import StudentForm from './Form.jsx';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StudentsStatusTab() {
   const classes = useStore(s => s.classes);
@@ -108,7 +109,7 @@ export default function StudentsStatusTab() {
           <tbody>
             {students.map(s => (
               <tr key={s.id} onClick={() => navigate(`/students/${s.id}`)}>
-                <td><div className="avatar">{initials(s)}</div></td>
+                <td><Avatar person={s} /></td>
                 <td className="bold">{s.index_number || '—'}</td>
                 <td>{fullName(s)}</td>
                 <td>{s.class_name}</td>

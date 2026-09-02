@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { fullName, initials, fmtDate } from '../../lib/format.js';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StaffAttendanceTab() {
   const showToast = useStore(s => s.showToast);
@@ -114,7 +115,7 @@ export default function StaffAttendanceTab() {
                   const isComplete = att?.clock_in && att?.clock_out;
                   return (
                     <tr key={s.id}>
-                      <td><div className="avatar avatar-sm">{initials(s)}</div></td>
+                      <td><Avatar person={s} size="sm" /></td>
                       <td><strong>{s.surname} {s.first_name}</strong></td>
                       <td className="text-sm">{s.role}</td>
                       <td className="text-sm">

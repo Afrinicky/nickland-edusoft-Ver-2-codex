@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { fmtCedi, fmtDate, initials } from '../../lib/format.js';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function CanteenDashboard({ onSwitchTab }) {
   const { currentTerm } = useStore();
@@ -82,7 +83,7 @@ export default function CanteenDashboard({ onSwitchTab }) {
             : <div className="debtors-list">
                 {data.top_debtors.slice(0, 8).map(d => (
                   <div key={d.student_id} className="debtor-row">
-                    <div className="avatar avatar-sm">{initials(d)}</div>
+                    <Avatar person={d} size="sm" />
                     <div className="debtor-info">
                       <div className="debtor-id">{d.index_number}</div>
                       <div className="debtor-name">{d.surname} {d.first_name}</div>
