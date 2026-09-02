@@ -164,3 +164,74 @@ and `resolveEffectivePermissions` came out undefined.
 `students.js`, `settings.js`, `electron/server/sync/staff_projection.js`,
 `cloud/src/staff.js`, `cloud/src/server.js`, the Students / Academics /
 Timetable / Settings screens, and the sixteen avatar and `file://` sites.
+
+
+---
+
+# F10.1 — Repairing what F10 broke
+
+Three regressions shipped with F10. All three came from changing more than the
+reported faults required.
+
+## Every class dropdown came up empty — for everybody
+
+The app reads the class list **once at start-up, before the login screen**, and
+caches it for the session. F10 filtered that list by the signed-in user, so a
+caller who had not signed in yet got nothing — and that empty result was what
+every picker used from then on. Administrators included.
+
+Fixed: the full list is served when nobody is signed in (it is reference data;
+the handlers that read actual pupils enforce scope), and the renderer re-reads
+it on sign-in and sign-out.
+
+`test/access.js` now reproduces that exact ordering.
+
+## The logo and every photo disappeared
+
+F10 moved uploaded files onto a custom `nes-media://` protocol so they would
+also load under `npm run dev`, where the renderer is served over http and a
+`file://` subresource is blocked. **The packaged app loads from `file://` and
+never had that problem.** The change fixed nothing anybody had and broke
+everything they did.
+
+Reverted to `file://`. Development remains the case that does not work; a
+missing thumbnail on a developer's machine is not worth a broken logo in the
+product.
+
+The half of that change that was a real fix stays: the staff profile genuinely
+never read `photo_path`, and the shared `Avatar` component still fixes it.
+
+## Any channel the policy did not name was refused
+
+The table named 98 of 381 channels, and F10 refused everything it missed — so
+every non-admin account broke on the other 283.
+
+An unlisted channel now takes the module and action **derived from its own
+name**, checked exactly as a listed one is. The guarantee is unchanged; the
+blast radius is gone. Derivation reads the safe way round — a channel is a read
+only if it says so, and an unrecognised verb is treated as a change — which
+misfiles ten read-only channels named after what they produce, so those ten are
+named in the table.
+
+## The administrator is not restricted anywhere
+
+Stated outright by the school, and now enforced first and on its own in both
+processes, before any other rule can intervene. Their designation falls back to
+the one captured at sign-in when the account carries none: an old restore leaves
+`designation_id` null, and an administrator with access to nothing is not a
+state to ship.
+
+A **Head Teacher is deliberately not included** — unrestricted as to *which*
+class, but payroll and finance are still theirs only if the school granted them.
+
+## What this phase taught
+
+Both breakages were changes made beyond the fault. The photo fault was one
+component not reading a field; rewriting how every image in the app is addressed
+was not required to fix it. The permission fault was 98 unguarded handlers;
+refusing the other 283 was not required to fix it either.
+
+Tests now check the **whole** channel surface rather than a sample, and the
+start-up ordering that no unit test would have caught.
+
+**517 passing.**
