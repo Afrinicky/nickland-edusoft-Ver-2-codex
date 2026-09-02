@@ -1,7 +1,8 @@
 // Nickland Edusoft — Sidebar (Dark Navy, exact Image 1 design)
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/index.js';
+import ChangePasswordModal from './ChangePasswordModal.jsx';
 
 const NAV_ITEMS = [
   { to: '/',              icon: 'home',      label: 'Home',                  module: null         },
@@ -50,6 +51,7 @@ function NavIcon({ name }) {
 export default function Sidebar() {
   const navigate = useNavigate();
   const { currentUser, logout, settings, can } = useStore();
+  const [changingPassword, setChangingPassword] = useState(false);
   const school = settings.school || {};
   const features = settings.features || {};
   const branding = settings.branding || {};
@@ -117,12 +119,20 @@ export default function Sidebar() {
             <span className="status-dot online" />Online
           </div>
         </div>
+        <button className="sidebar-logout-btn" onClick={() => setChangingPassword(true)} title="Change your password">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <rect x="4" y="10" width="16" height="10" rx="2" stroke="currentColor" strokeWidth="1.8"/>
+            <path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" strokeWidth="1.8"/>
+          </svg>
+        </button>
         <button className="sidebar-logout-btn" onClick={handleLogout} title="Sign out">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
             <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" strokeWidth="1.8"/>
           </svg>
         </button>
       </div>
+
+      {changingPassword && <ChangePasswordModal onClose={() => setChangingPassword(false)} />}
 
       {/* Clock */}
       <div className="sidebar-clock">
