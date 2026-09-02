@@ -276,7 +276,12 @@ function createApiServer(db, opts = {}) {
 
   // ── Authed ──
   add('GET', `${API}/me`, async (ctx, req, res) => {
-    if (ctx.role === 'parent') return json(res, 200, { ok: true, role: 'parent', parent: ctx.parent, children: ctx.student_ids.length });
+    if (ctx.role === 'parent') {
+      return json(res, 200, {
+        ok: true, role: 'parent', parent: ctx.parent, children: ctx.student_ids.length,
+        school: { name: getSetting(db, 'school_name', 'School') },
+      });
+    }
     return json(res, 200, {
       ok: true, role: 'staff', user: ctx.user, designation: ctx.designation,
       is_admin: ctx.is_admin, permissions: ctx.permissions,

@@ -130,7 +130,6 @@ export default function Login() {
             onChangeText={v => set('password', v)}
             secureTextEntry={!reveal}
             placeholder="Your password"
-            icon="wallet"
             autoComplete="current-password"
             returnKeyType="go"
             onSubmitEditing={submit}
@@ -142,7 +141,7 @@ export default function Login() {
             )}
           />
           <ErrorNote message={error} />
-          <Button title={busy ? 'Signing in…' : 'Sign in'} onPress={submit} busy={busy} size="lg" iconRight="back" />
+          <Button title={busy ? 'Signing in…' : 'Sign in'} onPress={submit} busy={busy} size="lg" iconRight="chevron" />
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
             <TouchableOpacity onPress={() => goto('forgot')}>
               <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13.5 }}>Forgot your password?</Text>

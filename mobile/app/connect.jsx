@@ -149,7 +149,7 @@ export default function Connect() {
           <ErrorNote message={error} />
           {school && <SuccessNote message={`Connected to ${school.name}.`} />}
           {school
-            ? <Button title="Continue" onPress={() => router.replace('/login')} size="lg" iconRight="back" />
+            ? <Button title="Continue" onPress={() => router.replace('/login')} size="lg" iconRight="chevron" />
             : <Button title={busy ? 'Checking…' : 'Connect'} onPress={verifyLan} busy={busy} size="lg" />}
         </Card>
       ) : (
@@ -194,7 +194,7 @@ export default function Connect() {
             </View>
           )}
           {picked
-            ? <Button title={`Continue as ${picked.name}`} onPress={continueCloud} size="lg" iconRight="back" />
+            ? <Button title={`Continue as ${picked.name}`} onPress={continueCloud} size="lg" iconRight="chevron" />
             : (!detectedSchools && <Button title={busy ? 'Searching…' : 'Find my school'} onPress={findSchools} busy={busy} size="lg" />)}
         </Card>
       )}
