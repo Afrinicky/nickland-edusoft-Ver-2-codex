@@ -12,6 +12,17 @@ const {
   setNextRollNumber,
 } = require('../utils/idgen');
 
+// The class ids the signed-in user may see, or null when they are not
+// restricted (Proprietor, Administrator, Head Teacher). Applied in the main
+// process, so the roll cannot be read by calling the channel directly.
+function scopedClassIds(db) {
+  const security = require('./_security');
+  const scopes = require('./_scope');
+  const userId = security.getCurrentUserId();
+  if (!userId) return new Set();
+  return scopes.visibleClassIds(db, scopes.scopeFor(db, userId));
+}
+
 function registerStudentHandlers(ipcMain, db, userDataPath) {
   // List students with optional filters
   ipcMain.handle('students:list', (_e, filters = {}) => {
@@ -36,6 +47,13 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
       sql += ' AND (s.surname LIKE ? OR s.first_name LIKE ? OR s.other_names LIKE ? OR s.index_number LIKE ?)';
       const q = `%${filters.search}%`;
       params.push(q, q, q, q);
+    }
+    // A teacher sees the classes they are assigned to and no others.
+    const only = scopedClassIds(db);
+    if (only) {
+      if (!only.size) return [];
+      sql += ` AND s.current_class_id IN (${[...only].map(() => '?').join(',')})`;
+      params.push(...only);
     }
     sql += ' ORDER BY c.level_order, s.surname, s.first_name';
     const rows = db.prepare(sql).all(...params);

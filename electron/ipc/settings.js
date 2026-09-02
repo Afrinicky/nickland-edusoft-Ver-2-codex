@@ -114,8 +114,11 @@ function registerSettingsHandlers(ipcMain, db, getResourcePath) {
   });
 
   // ===== Class management =====
+  // Every class picker in the app is built from this. A teacher assigned to
+  // Basic 5 should not be offered Basic 6 in a dropdown and told "access
+  // denied" on choosing it — they should not be offered it at all.
   ipcMain.handle('settings:list-classes', () => {
-    return db.prepare(`
+    const rows = db.prepare(`
       SELECT c.*, p.name AS parent_name, (
         SELECT COUNT(*) FROM students s WHERE s.current_class_id = c.id AND s.status = 'Active'
       ) AS student_count
@@ -123,6 +126,13 @@ function registerSettingsHandlers(ipcMain, db, getResourcePath) {
       LEFT JOIN class_groups p ON p.id = c.parent_class_id
       ORDER BY c.level_order, c.name
     `).all();
+    const security = require('./_security');
+    const scopes = require('./_scope');
+    const userId = security.getCurrentUserId();
+    if (!userId) return [];
+    const only = scopes.visibleClassIds(db, scopes.scopeFor(db, userId));
+    if (!only) return rows;
+    return rows.filter(r => only.has(Number(r.id)));
   });
 
   ipcMain.handle('settings:save-class', (_e, data) => {

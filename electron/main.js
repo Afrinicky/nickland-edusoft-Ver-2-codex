@@ -14,6 +14,7 @@ const registerSettingsHandlers = require('./ipc/settings');
 const registerReportsHandlers = require('./ipc/reports');
 const registerNotificationsHandlers = require('./ipc/notifications');
 const registerAuthHandlers = require('./ipc/auth');
+const { guardedIpcMain } = require('./ipc/_guard');
 const registerAccessHandlers = require('./ipc/access');
 const registerDashboardHandlers = require('./ipc/dashboard');
 const registerStudentAttendanceHandlers = require('./ipc/students_attendance');
@@ -279,6 +280,13 @@ app.whenReady().then(async () => {
   // that module's features, not the whole application. Failures are recorded
   // rather than swallowed, so a feature that "does nothing" is traceable.
   const failedModules = [];
+  // Every module below registers through this stand-in rather than ipcMain
+  // itself. It applies the permission and scope policy (electron/ipc/_policy.js)
+  // to each channel, in the main process, where the renderer cannot reach
+  // around it. Auth registers on the real ipcMain: those channels are how a
+  // person signs in, so they cannot require being signed in.
+  const guarded = guardedIpcMain(ipcMain, db);
+
   const mount = (name, fn) => {
     try { fn(); } catch (e) {
       failedModules.push(name);
@@ -294,52 +302,54 @@ app.whenReady().then(async () => {
     return reportFatal(e, 'setting up sign-in');
   }
 
-  mount('dashboard', () => registerDashboardHandlers(ipcMain, db));
-  mount('students.attendance', () => registerStudentAttendanceHandlers(ipcMain, db, userDataPath, getResourcePath));
-  mount('students.sheet', () => registerStudentsSheetHandlers(ipcMain, db));
-  mount('academics', () => registerAcademicsHandlers(ipcMain, db));
-  mount('fees.extra', () => registerFeesExtraHandlers(ipcMain, db));
-  mount('fees.billing', () => registerFeesBillingHandlers(ipcMain, db));
-  mount('finance.workbook', () => registerFinanceWorkbookHandlers(ipcMain, db, app, userDataPath));
-  mount('canteen.extra', () => registerCanteenExtraHandlers(ipcMain, db));
-  mount('staff.hr', () => registerStaffHrHandlers(ipcMain, db, userDataPath));
-  mount('payroll', () => registerPayrollHandlers(ipcMain, db));
-  mount('mobile.sync', () => registerMobileSyncHandlers(ipcMain, db));
-  mount('fees.discounts', () => registerDiscountsHandlers(ipcMain, db));
-  mount('books', () => registerBooksHandlers(ipcMain, db));
-  mount('fees.bulkPay', () => registerFeesBulkPayHandlers(ipcMain, db));
-  mount('inventory', () => registerInventoryHandlers(ipcMain, db));
-  mount('auditLog', () => registerAuditLogHandlers(ipcMain, db));
-  mount('receiptTemplates', () => registerReceiptTemplatesHandlers(ipcMain, db, userDataPath, getResourcePath));
-  mount('photos', () => registerPhotosHandlers(ipcMain, db, userDataPath));
-  mount('staff.activities', () => registerStaffActivitiesHandlers(ipcMain, db));
-  mount('students', () => registerStudentHandlers(ipcMain, db, userDataPath));
-  mount('staff', () => registerStaffHandlers(ipcMain, db, userDataPath));
-  mount('fees', () => registerFeesHandlers(ipcMain, db));
-  mount('scores', () => registerScoresHandlers(ipcMain, db));
-  mount('canteen', () => registerCanteenHandlers(ipcMain, db));
-  mount('finance', () => registerFinanceHandlers(ipcMain, db));
-  mount('settings', () => registerSettingsHandlers(ipcMain, db, getResourcePath));
-  mount('reports', () => registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath));
-  mount('notifications', () => registerNotificationsHandlers(ipcMain, db));
-  mount('backup', () => registerBackupHandlers(ipcMain, db, app, userDataPath));
+  mount('dashboard', () => registerDashboardHandlers(guarded, db));
+  mount('students.attendance', () => registerStudentAttendanceHandlers(guarded, db, userDataPath, getResourcePath));
+  mount('students.sheet', () => registerStudentsSheetHandlers(guarded, db));
+  mount('academics', () => registerAcademicsHandlers(guarded, db));
+  mount('fees.extra', () => registerFeesExtraHandlers(guarded, db));
+  mount('fees.billing', () => registerFeesBillingHandlers(guarded, db));
+  mount('finance.workbook', () => registerFinanceWorkbookHandlers(guarded, db, app, userDataPath));
+  mount('canteen.extra', () => registerCanteenExtraHandlers(guarded, db));
+  mount('staff.hr', () => registerStaffHrHandlers(guarded, db, userDataPath));
+  mount('payroll', () => registerPayrollHandlers(guarded, db));
+  mount('mobile.sync', () => registerMobileSyncHandlers(guarded, db));
+  mount('fees.discounts', () => registerDiscountsHandlers(guarded, db));
+  mount('books', () => registerBooksHandlers(guarded, db));
+  mount('fees.bulkPay', () => registerFeesBulkPayHandlers(guarded, db));
+  mount('inventory', () => registerInventoryHandlers(guarded, db));
+  mount('auditLog', () => registerAuditLogHandlers(guarded, db));
+  mount('receiptTemplates', () => registerReceiptTemplatesHandlers(guarded, db, userDataPath, getResourcePath));
+  mount('photos', () => registerPhotosHandlers(guarded, db, userDataPath));
+  mount('staff.activities', () => registerStaffActivitiesHandlers(guarded, db));
+  mount('students', () => registerStudentHandlers(guarded, db, userDataPath));
+  mount('staff', () => registerStaffHandlers(guarded, db, userDataPath));
+  mount('fees', () => registerFeesHandlers(guarded, db));
+  mount('scores', () => registerScoresHandlers(guarded, db));
+  mount('canteen', () => registerCanteenHandlers(guarded, db));
+  mount('finance', () => registerFinanceHandlers(guarded, db));
+  mount('settings', () => registerSettingsHandlers(guarded, db, getResourcePath));
+  mount('reports', () => registerReportsHandlers(guarded, db, userDataPath, getResourcePath));
+  mount('notifications', () => registerNotificationsHandlers(guarded, db));
+  mount('backup', () => registerBackupHandlers(guarded, db, app, userDataPath));
   // Heal absolute upload paths (logo, signatures, photos) the moment the app
   // starts, so a data-folder move from an update — or a restore taken on
   // another PC — never leaves the logo showing broken.
   mount('backup.repair', () => require('./ipc/backup').repairUploadPathsOnStartup(db, userDataPath));
   mount('backup.scheduler', () => require('./ipc/backup').startScheduler(db, userDataPath));
-  mount('session', () => registerSessionHandlers(ipcMain, db));
-  mount('mobile', () => registerMobileHandlers(ipcMain, db));
-  mount('payments.intents', () => registerPaymentsIntentsHandlers(ipcMain, db));
-  mount('cloudSync', () => registerCloudSyncHandlers(ipcMain, db));
-  mount('announcements', () => registerAnnouncementsHandlers(ipcMain, db));
-  mount('timetable', () => registerTimetableHandlers(ipcMain, db));
-  mount('transport', () => registerTransportHandlers(ipcMain, db));
-  mount('messaging', () => registerMessagingHandlers(ipcMain, db));
-  mount('homework', () => registerHomeworkHandlers(ipcMain, db));
+  mount('session', () => registerSessionHandlers(guarded, db));
+  mount('mobile', () => registerMobileHandlers(guarded, db));
+  mount('payments.intents', () => registerPaymentsIntentsHandlers(guarded, db));
+  mount('cloudSync', () => registerCloudSyncHandlers(guarded, db));
+  mount('announcements', () => registerAnnouncementsHandlers(guarded, db));
+  mount('timetable', () => registerTimetableHandlers(guarded, db));
+  mount('transport', () => registerTransportHandlers(guarded, db));
+  mount('messaging', () => registerMessagingHandlers(guarded, db));
+  mount('homework', () => registerHomeworkHandlers(guarded, db));
 
-  // Stubs LAST — only register channels not already taken
-  mount('stubs', () => registerStubHandlers(ipcMain, db));
+  // Stubs LAST — only register channels not already taken. Guarded like the
+  // rest: a stub is still a channel, and an unguarded one is a way round the
+  // policy for whatever it stands in for.
+  mount('stubs', () => registerStubHandlers(guarded, db));
 
   if (failedModules.length) {
     logger.warn('startup', `Started with ${failedModules.length} module(s) unavailable: ${failedModules.join(', ')}`);

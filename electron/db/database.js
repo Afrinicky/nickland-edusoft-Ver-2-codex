@@ -2060,4 +2060,8 @@ function initDatabase(userDataPath, getResourcePath) {
 // SCHEMA and runMigrations are exported so tests can build a database the same
 // way the app does. Hand-rolled test schemas drift from the real one — that is
 // how the sync outbox shipped without its version counter.
-module.exports = { initDatabase, runMigrations, SCHEMA };
+// seedDefaults is exported alongside the schema so a test can build a database
+// that looks like a real one — designations and their permission defaults
+// included. Without it every account came out with a null designation, which
+// is not a state the app ever ships.
+module.exports = { initDatabase, runMigrations, SCHEMA, seedDefaults };
