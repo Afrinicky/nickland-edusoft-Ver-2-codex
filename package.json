@@ -15,8 +15,8 @@
     "build:web": "node scripts/build-web.mjs",
     "serve:web": "node scripts/serve-web.mjs",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "test": "node test/regressions.js && node test/access.js && node test/webapp.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
-    "test:regressions": "node test/regressions.js && node test/access.js && node test/webapp.js",
+    "test": "node test/regressions.js && node test/access.js && node test/teacher_api.js && node test/webapp.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
+    "test:regressions": "node test/regressions.js && node test/access.js && node test/teacher_api.js && node test/webapp.js",
     "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js"
   },
   "dependencies": {
