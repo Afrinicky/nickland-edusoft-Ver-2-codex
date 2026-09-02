@@ -91,6 +91,50 @@ function createServer(store) {
         return json(res, 200, { ok: true, token, parent: { full_name: rec.full_name, phone: rec.phone, email: rec.email } });
       }
 
+      // ── One sign-in box (public) ──
+      // The app used to ask "parent or staff?" before it asked who you were.
+      // Nobody answers that at the school gate, and getting it wrong reads as a
+      // wrong password. A staff username is matched first, then a parent's
+      // phone or email, and the reply says which surface the account belongs to.
+      // A match ends it, so an account is never authenticated twice against two
+      // different passwords.
+      if (p === '/api/v1/signin' && req.method === 'POST') {
+        const body = await readBody(req);
+        const identifier = String(body.identifier || body.username || '').trim();
+        if (!body.school_id || !identifier || !body.password) {
+          return json(res, 400, { ok: false, error: 'school, identifier and password are required' });
+        }
+        if (ratelimit.limited(req, 'signin', identifier)) {
+          return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+        }
+
+        const staffRec = await staffApi.findStaffByUsername(store, body.school_id, identifier);
+        if (staffRec && staffApi.verifyStaffPassword(body.password, staffRec.password_hash)) {
+          return json(res, 200, {
+            ok: true, role: 'staff',
+            token: staffApi.signStaffToken(body.school_id, staffRec.user_id),
+            user: { id: staffRec.user_id, full_name: staffRec.full_name, username: staffRec.username },
+          });
+        }
+
+        const auths = await store.listSnapshots(body.school_id, 'parent_auth');
+        const np = pauth.normPhone(identifier);
+        const em = identifier.toLowerCase();
+        const rec = auths.map(a => a.payload).find(pl =>
+          pl && pl.is_active && (pauth.normPhone(pl.phone) === np || (pl.email || '').toLowerCase() === em));
+        if (rec && pauth.verifyPassword(body.password, rec.password_hash)) {
+          return json(res, 200, {
+            ok: true, role: 'parent',
+            token: pauth.signToken({ school_id: body.school_id, parent_id: rec.parent_id }),
+            parent: { full_name: rec.full_name, phone: rec.phone, email: rec.email },
+          });
+        }
+
+        // One message for both tables. Saying "that username exists but the
+        // password is wrong" tells an outsider which accounts are real.
+        return json(res, 401, { ok: false, error: 'Those details did not match an account. Check and try again.' });
+      }
+
       // ── Staff sign-in (public) ──
       // What lets a teacher work with the school's desktop switched off. The
       // account, its password hash and its permissions are all projected up by
@@ -230,6 +274,126 @@ function createServer(store) {
         if (p === '/api/v1/staff/homework' && req.method === 'POST') {
           if (!staffApi.can(rec, 'academics', 'edit')) return deny();
           return send(await staffApi.submitHomework(store, sid, rec, await readBody(req)));
+        }
+
+        if (p === '/api/v1/staff/subjects' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'academics', 'view')) return deny();
+          return send(await staffApi.allSubjects(store, sid, rec, q.classId));
+        }
+
+        if (p.startsWith('/api/v1/staff/students/') && p.endsWith('/parents') && req.method === 'GET') {
+          // Contacts live on the roster as guardian names and numbers; the
+          // portal has no parent accounts to start a thread against, so this
+          // answers empty rather than pretending otherwise.
+          if (!staffApi.can(rec, 'notifications', 'view')) return deny();
+          return json(res, 200, { ok: true, parents: [] });
+        }
+
+        if (p.startsWith('/api/v1/staff/students/') && req.method === 'GET') {
+          if (!staffApi.can(rec, 'students', 'view')) return deny();
+          return send(await staffApi.studentProfile(store, sid, p.split('/').pop(), rec));
+        }
+
+        if (p === '/api/v1/staff/attendance/history' && req.method === 'GET') {
+          if (!staffApi.canAny(rec, [['students', 'view'], ['academics', 'view']])) return deny();
+          if (!q.classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+          return send(await staffApi.attendanceHistory(store, sid, q.classId, parseInt(q.days, 10) || 30, rec));
+        }
+
+        if (p === '/api/v1/staff/assessments' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'academics', 'view')) return deny();
+          if (!q.classId || !q.subjectId) return json(res, 400, { ok: false, error: 'classId and subjectId are required.' });
+          return send(await staffApi.assessmentSheet(store, sid, q.classId, q.subjectId, rec));
+        }
+        if (p === '/api/v1/staff/assessments' && req.method === 'POST') {
+          if (!staffApi.can(rec, 'academics', 'edit')) return deny();
+          return send(await staffApi.submitAssessments(store, sid, rec, await readBody(req)));
+        }
+        if (p === '/api/v1/staff/assessments/column' && req.method === 'POST') {
+          // The desktop numbers the column; marks queued against an id this
+          // side invented would arrive pointing at nothing.
+          return json(res, 400, {
+            ok: false,
+            error: "Adding an assessment column needs the school's own system. Connect on the school Wi-Fi to add one; marks against the columns already there save from anywhere.",
+          });
+        }
+
+        if (p === '/api/v1/staff/results' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'academics', 'view')) return deny();
+          if (!q.classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+          return send(await staffApi.resultsBroadsheet(store, sid, q.classId, rec));
+        }
+        if (p.startsWith('/api/v1/staff/results/student/') && req.method === 'GET') {
+          if (!staffApi.can(rec, 'academics', 'view')) return deny();
+          return send(await staffApi.studentReport(store, sid, p.split('/').pop(), rec));
+        }
+        if (p === '/api/v1/staff/results/remarks' && req.method === 'POST') {
+          if (!staffApi.can(rec, 'academics', 'edit')) return deny();
+          return send(await staffApi.submitRemarks(store, sid, rec, await readBody(req)));
+        }
+
+        if (p === '/api/v1/staff/canteen/class' && req.method === 'GET') {
+          if (!staffApi.can(rec, 'canteen', 'view')) return deny();
+          if (!q.classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+          return send(await staffApi.canteenClass(store, sid, q.classId, rec));
+        }
+
+        if (p === '/api/v1/staff/lesson-notes' && req.method === 'GET') {
+          return send(await staffApi.lessonNotes(store, sid, rec));
+        }
+        if (p === '/api/v1/staff/lesson-notes' && req.method === 'POST') {
+          return send(await staffApi.submitLessonNote(store, sid, rec, await readBody(req)));
+        }
+        if (p.startsWith('/api/v1/staff/lesson-notes/') && req.method === 'GET') {
+          return send(await staffApi.lessonNote(store, sid, rec, p.split('/').pop()));
+        }
+
+        if (p === '/api/v1/staff/hr/me' && req.method === 'GET') {
+          return send(await staffApi.staffProfile(store, sid, rec));
+        }
+        if (p === '/api/v1/staff/hr/attendance' && req.method === 'GET') {
+          const prof = await staffApi.staffProfile(store, sid, rec);
+          const month = parseInt(q.month, 10) || (new Date().getMonth() + 1);
+          const year = parseInt(q.year, 10) || new Date().getFullYear();
+          const prefix = `${year}-${String(month).padStart(2, '0')}`;
+          const days = (prof.attendance || []).filter(d => String(d.date || '').startsWith(prefix));
+          return json(res, 200, {
+            ok: true, has_staff: prof.has_staff, month, year, days,
+            summary: { present: days.filter(d => d.status === 'present').length, recorded: days.length },
+          });
+        }
+        if (p === '/api/v1/staff/hr/clock' && req.method === 'POST') {
+          return send(await staffApi.submitClock(store, sid, rec, await readBody(req)));
+        }
+        if (p === '/api/v1/staff/hr/leave' && req.method === 'GET') {
+          const prof = await staffApi.staffProfile(store, sid, rec);
+          return json(res, 200, { ok: true, has_staff: prof.has_staff, requests: prof.leave_requests || [] });
+        }
+        if (p === '/api/v1/staff/hr/leave' && req.method === 'POST') {
+          return send(await staffApi.submitLeave(store, sid, rec, await readBody(req)));
+        }
+        if (p === '/api/v1/staff/hr/payslips' && req.method === 'GET') {
+          const prof = await staffApi.staffProfile(store, sid, rec);
+          const year = parseInt(q.year, 10) || null;
+          const slips = year ? (prof.payslips || []).filter(x => x.year === year) : (prof.payslips || []);
+          return json(res, 200, { ok: true, has_staff: prof.has_staff, payslips: slips });
+        }
+
+        if (p === '/api/v1/staff/messages' && req.method === 'GET') {
+          return send(await staffApi.staffThreads(store, sid, rec));
+        }
+        if (p === '/api/v1/staff/messages' && req.method === 'POST') {
+          return send(await staffApi.submitMessage(store, sid, rec, await readBody(req)));
+        }
+        if (p.startsWith('/api/v1/staff/messages/') && req.method === 'GET') {
+          return send(await staffApi.staffThread(store, sid, rec, p.split('/').pop()));
+        }
+
+        if (p === '/api/v1/staff/announcements' && req.method === 'GET') {
+          return send(await staffApi.announcements(store, sid, rec));
+        }
+        if (p === '/api/v1/staff/announcements' && req.method === 'POST') {
+          return send(await staffApi.submitAnnouncement(store, sid, rec, await readBody(req)));
         }
 
         // Changing your own password. No permission gate: an account is not a
