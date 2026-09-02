@@ -471,6 +471,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
         SET status = 'denied', decided_by = ?, decided_at = datetime('now'), decision_note = ?
         WHERE id = ?
       `).run(actorUserId, String(note || '').slice(0, 500) || null, requestId);
+      projectResetClaim(db, requestId);
       return { ok: true, approved: false };
     }
 
@@ -490,6 +491,9 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       `).run(req.user_id, actorUserId, `Password reset approved for ${req.username}`);
     } catch (_) {}
 
+    // So the code also works from the phone app: the cloud can verify a hash
+    // it has been given, but it can never approve one on its own.
+    projectResetClaim(db, requestId);
     return { ok: true, approved: true, code, username: req.username, expiresInHours: RESET_CLAIM_TTL_HOURS };
   });
 
@@ -525,6 +529,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     if (!req) return { ok: false, error: 'No approved request for that username. Ask an Administrator to approve one.' };
     if (req.claim_expires_at && new Date(req.claim_expires_at.replace(' ', 'T') + 'Z') < new Date()) {
       db.prepare("UPDATE password_reset_requests SET status = 'cancelled' WHERE id = ?").run(req.id);
+      projectResetClaim(db, req.id);
       return { ok: false, error: 'That approval has expired. Please ask for a new one.' };
     }
 
@@ -543,6 +548,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     const hash = bcrypt().hashSync(String(newPassword), 10);
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, req.user_id);
     db.prepare("UPDATE password_reset_requests SET status = 'used', used_at = datetime('now') WHERE id = ?").run(req.id);
+    projectResetClaim(db, req.id);
     clearLoginFailures(uname);
 
     try {
@@ -604,6 +610,12 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 // or a teacher working off-LAN keeps the access they had last night. Cheap and
 // safe to call on every user mutation: the outbox collapses repeats onto one
 // queued row per account.
+// An approved claim is projected so the same six-digit code works from the
+// phone app; withdrawn again the moment it is spent, denied or expired.
+function projectResetClaim(db, requestId) {
+  try { require('../server/sync/staff_projection').enqueueResetClaim(db, requestId); } catch (_) {}
+}
+
 function projectStaff(db, userId) {
   try {
     const sp = require('../server/sync/staff_projection');
