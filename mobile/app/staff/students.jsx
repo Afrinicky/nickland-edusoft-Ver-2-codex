@@ -1,45 +1,118 @@
-// Staff students roster (permission-gated on the host).
-import React, { useCallback, useState } from 'react';
-import { Text, RefreshControl } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+// The roll — every pupil this teacher may see, searchable.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// The first version was a flat, unsearchable, untappable list of names. A
+// teacher looking up one pupil in a school of six hundred scrolled. This one
+// filters by class, searches by name or index number, and opens a record.
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { View, Text, RefreshControl } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
-import { Screen, Card, Muted, Row, Loading, ErrorNote } from '../../src/ui';
+import {
+  Screen, Card, Section, Muted, Micro, Badge, SearchField, Select,
+  ErrorNote, Skeleton, EmptyState, ListRow, Grid, StatCard, Avatar,
+} from '../../src/ui';
+import { useClasses } from '../../src/pickers';
+import { useLayout } from '../../src/responsive';
+import { colors, spacing, type } from '../../src/theme';
 
 function StudentsScreen() {
   const { token } = useAuth();
+  const router = useRouter();
+  const layout = useLayout();
+  const { classes } = useClasses(token);
+
+  const [classId, setClassId] = useState(null);
   const [rows, setRows] = useState(null);
+  const [q, setQ] = useState('');
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
-    try { const r = await api.students(token); setRows(r.students || []); }
+    try { const r = await api.students(token, classId); setRows(r.students || []); }
     catch (e) { setError(e.message); setRows([]); }
-  }, [token]);
+  }, [token, classId]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
-  if (rows === null) return <Loading />;
+  useEffect(() => { load(); }, [load]);
+
+  // Filtered here rather than round-tripped: the roll a teacher may see is at
+  // most a few hundred rows, and typing should not wait on the network.
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows || [];
+    return (rows || []).filter(s =>
+      `${s.surname || ''} ${s.first_name || ''} ${s.index_number || ''}`.toLowerCase().includes(needle));
+  }, [rows, q]);
+
+  const byClass = useMemo(() => {
+    const map = new Map();
+    for (const s of filtered) {
+      const k = s.class_name || 'No class';
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(s);
+    }
+    return [...map.entries()];
+  }, [filtered]);
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
       <ErrorNote message={error} />
+
       <Card>
-        {rows.length === 0 && !error && <Muted>No students to show for your access.</Muted>}
-        {rows.map(s => (
-          <Row key={s.id}
-            left={<><Text style={{ fontWeight: '600' }}>{s.surname} {s.first_name}</Text><Muted>{s.index_number}</Muted></>}
-            right={<Muted>{s.class_name || ''}</Muted>} />
-        ))}
+        <SearchField value={q} onChangeText={setQ} placeholder="Search by name or index number" />
+        {classes && classes.length > 1 ? (
+          <View style={{ marginTop: spacing.md }}>
+            <Select
+              label="Class" value={classId} onChange={v => setClassId(v === classId ? null : v)}
+              options={[{ value: null, label: 'All my classes' }, ...classes.map(c => ({
+                value: c.id, label: c.name, note: c.is_class_teacher ? 'Class teacher' : undefined,
+              }))]}
+            />
+          </View>
+        ) : null}
       </Card>
+
+      {rows === null ? <Card><Skeleton rows={6} height={56} /></Card> : (
+        <>
+          <Grid min={150}>
+            <StatCard label="Pupils you can see" value={rows.length} icon="users" />
+            {q ? <StatCard label="Matching" value={filtered.length} tone="data" icon="search" /> : null}
+            <StatCard label="Classes" value={(classes || []).length} icon="grid" />
+          </Grid>
+
+          {filtered.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon="users"
+                title={q ? 'Nobody matches that' : 'Nothing on your roll'}
+                message={q
+                  ? 'Try part of a surname, or an index number.'
+                  : 'No classes are assigned to you yet. Ask the school office to set your teaching assignments.'}
+              />
+            </Card>
+          ) : byClass.map(([className, pupils]) => (
+            <Section key={className} title={className} icon="users" subtitle={`${pupils.length} pupil${pupils.length === 1 ? '' : 's'}`}>
+              {pupils.map(s => (
+                <ListRow
+                  key={s.id}
+                  title={`${s.surname || ''} ${s.first_name || ''}`.trim()}
+                  subtitle={s.index_number}
+                  right={s.gender ? <Badge tone="neutral" label={s.gender} /> : null}
+                  onPress={() => router.push(`/staff/student/${s.id}`)}
+                  icon="user"
+                />
+              ))}
+            </Section>
+          ))}
+        </>
+      )}
     </Screen>
   );
 }
 
-// Reachable by URL in the browser build, so the screen guards itself rather
-// than relying on the tab bar having hidden it. The server checks the same
-// permissions on every request regardless.
 export default function Students() {
   return (
     <RequireModule modules={[['students', 'view']]}>

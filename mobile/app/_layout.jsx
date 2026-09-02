@@ -1,3 +1,9 @@
+// Nickland Edusoft — the root of the phone app and the browser app.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// The signed-in areas draw their own chrome (src/shell.jsx), which is how one
+// build fits a handset and a desktop browser, so the navigator's own header is
+// off everywhere. What is left here is the session provider and the status bar.
 import React from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -11,16 +17,15 @@ export default function RootLayout() {
       <AuthProvider>
         <StatusBar style="light" />
         <Stack screenOptions={{
-          headerStyle: { backgroundColor: colors.primary },
-          headerTintColor: '#fff',
-          headerTitleStyle: { fontWeight: '700' },
+          headerShown: false,
           contentStyle: { backgroundColor: colors.bg },
+          animation: 'fade',
         }}>
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="connect" options={{ title: 'Connect to school' }} />
-          <Stack.Screen name="login" options={{ title: 'Sign in' }} />
-          <Stack.Screen name="parent" options={{ headerShown: false }} />
-          <Stack.Screen name="staff" options={{ headerShown: false }} />
+          <Stack.Screen name="index" />
+          <Stack.Screen name="connect" />
+          <Stack.Screen name="login" />
+          <Stack.Screen name="parent" />
+          <Stack.Screen name="staff" />
         </Stack>
       </AuthProvider>
     </SafeAreaProvider>

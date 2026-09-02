@@ -1,85 +1,214 @@
-// Staff dashboard — term metrics + quick actions scoped by the user's permissions.
+// The teacher's overview — what today needs, before anything else.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// Ordered by what a teacher actually opens the app for: today's lessons and the
+// register, then the work waiting, then the school's numbers. The numbers were
+// at the top in the first version, which put the least useful thing on the
+// screen a teacher sees fifty times a week.
 import React, { useCallback, useState } from 'react';
 import { View, Text, TouchableOpacity, RefreshControl } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { api, money } from '../../src/api';
-import { Screen, Card, H2, Muted, Loading, ErrorNote } from '../../src/ui';
-import { colors } from '../../src/theme';
+import {
+  Screen, Card, Section, Grid, StatCard, Heading, Title, Body, Muted, Micro,
+  Button, Badge, ErrorNote, Skeleton, IconTile, Gradient, EmptyState, ListRow, Divider,
+} from '../../src/ui';
+import { Icon } from '../../src/icons';
+import { visibleNav, STAFF_NAV } from '../../src/nav';
+import { useLayout } from '../../src/responsive';
+import { colors, palette, gradients, spacing, radius, shadow, type } from '../../src/theme';
 
-// Does the signed-in staff member have `action` on `module`? Admins can do all.
-function allowed(profile, module, action) {
-  if (!profile) return false;
-  if (profile.is_admin) return true;
-  const p = profile.permissions?.[module];
-  if (!p) return false;
-  const map = { view: 'canView', create: 'canCreate', edit: 'canEdit', delete: 'canDelete' };
-  return !!p[map[action] || 'canView'];
+const DAY = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
 }
 
 export default function Dashboard() {
-  const { token, profile } = useAuth();
+  const { token, profile, mode } = useAuth();
   const router = useRouter();
+  const layout = useLayout();
   const [data, setData] = useState(null);
+  const [timetable, setTimetable] = useState(null);
+  const [hr, setHr] = useState(null);
+  const [notices, setNotices] = useState(null);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [clocking, setClocking] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
-    try { setData(await api.dashboard(token)); }
-    catch (e) { setError(e.message); setData({ metrics: {} }); }
+    // Each panel fails on its own. One refused module must not blank the
+    // whole screen — a teacher without fees still has a register to take.
+    const settle = (p, fallback) => p.then(r => r).catch(() => fallback);
+    const [d, t, h, n] = await Promise.all([
+      settle(api.dashboard(token), { metrics: {}, denied: true }),
+      settle(api.myTimetable(token), { days: [], today: null }),
+      settle(api.hrMe(token), { has_staff: false }),
+      settle(api.announcements(token), { announcements: [], denied: true }),
+    ]);
+    setData(d); setTimetable(t); setHr(h); setNotices(n.announcements || []);
   }, [token]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
-  if (data === null) return <Loading />;
+
+  async function punch(direction) {
+    setClocking(true);
+    try {
+      await api.clock(token, direction);
+      setHr(await api.hrMe(token).catch(() => hr));
+    } catch (e) { setError(e.message); }
+    finally { setClocking(false); }
+  }
+
+  if (data === null) {
+    return <Screen><Skeleton rows={2} height={92} /><Skeleton rows={4} height={64} /></Screen>;
+  }
 
   const m = data.metrics || {};
-  const actions = [
-    { key: 'attendance', label: 'Take Attendance', emoji: '📝', show: allowed(profile, 'students', 'edit') || allowed(profile, 'academics', 'edit') },
-    { key: 'scores', label: 'Enter Scores', emoji: '✍️', show: allowed(profile, 'academics', 'edit') },
-    { key: 'canteen', label: 'Collect Canteen', emoji: '🍽️', show: allowed(profile, 'canteen', 'create') },
-    { key: 'timetable', label: 'My Timetable', emoji: '📅', show: true },
-    { key: 'homework', label: 'Set Homework', emoji: '📚', show: allowed(profile, 'academics', 'edit') },
-  ].filter(a => a.show);
+  const nav = visibleNav(STAFF_NAV, profile).filter(i => !['dashboard', 'account', 'me'].includes(i.key));
+  const today = timetable?.today;
+  const lessons = (today?.periods || []).filter(p => !p.is_break);
+  const clockedIn = hr?.today?.attendance?.clock_in;
+  const clockedOut = hr?.today?.attendance?.clock_out;
+  const now = new Date();
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
-      <Card>
-        <H2>{profile?.user?.full_name || 'Staff'}</H2>
-        <Muted>{profile?.designation || ''}{data.term ? ` · ${data.term.label}` : ''}</Muted>
-      </Card>
       <ErrorNote message={error} />
 
-      {actions.length > 0 && (
-        <Card>
-          <H2>Quick actions</H2>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
-            {actions.map(a => (
-              <TouchableOpacity key={a.key} onPress={() => router.push(`/staff/${a.key}`)}
-                style={{ flexGrow: 1, minWidth: '45%', backgroundColor: colors.primary, borderRadius: 12, padding: 16, alignItems: 'center' }}>
-                <Text style={{ fontSize: 26 }}>{a.emoji}</Text>
-                <Text style={{ color: '#fff', fontWeight: '700', marginTop: 6, textAlign: 'center' }}>{a.label}</Text>
+      {/* Who, where, when — and the one action that belongs to arriving. */}
+      <Gradient colors={gradients.brand} angle={130} style={[styles.hero, shadow.raised]}>
+        <View style={{ flexDirection: layout.isPhone ? 'column' : 'row', alignItems: layout.isPhone ? 'flex-start' : 'center', gap: spacing.lg }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12.5, fontWeight: '700', letterSpacing: 0.4 }}>
+              {greeting().toUpperCase()}
+            </Text>
+            <Text numberOfLines={1} style={{ color: '#fff', fontSize: layout.isPhone ? 23 : 28, fontWeight: '800', letterSpacing: -0.6, marginTop: 2 }}>
+              {profile?.user?.full_name || 'Teacher'}
+            </Text>
+            <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 13.5, fontWeight: '600', marginTop: 4 }}>
+              {[profile?.designation, data.term?.label, `${DAY[now.getDay()]} ${now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}`]
+                .filter(Boolean).join(' · ')}
+            </Text>
+          </View>
+
+          {hr?.has_staff ? (
+            <View style={styles.clock}>
+              <Micro style={{ color: 'rgba(255,255,255,0.65)' }}>{clockedIn ? 'On duty since' : 'Not clocked in'}</Micro>
+              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 20, marginTop: 2, fontVariant: ['tabular-nums'] }}>
+                {clockedIn ? String(clockedIn).slice(0, 5) : '—:—'}
+              </Text>
+              {clockedOut ? (
+                <Muted style={{ color: 'rgba(255,255,255,0.6)', marginTop: 2 }}>Left at {String(clockedOut).slice(0, 5)}</Muted>
+              ) : (
+                <Button
+                  size="sm" variant={clockedIn ? 'outline' : 'gold'}
+                  title={clockedIn ? 'Clock out' : 'Clock in'}
+                  busy={clocking}
+                  onPress={() => punch(clockedIn ? 'out' : 'in')}
+                  style={clockedIn ? { borderColor: 'rgba(255,255,255,0.4)', marginTop: 8 } : { marginTop: 8 }}
+                />
+              )}
+            </View>
+          ) : null}
+        </View>
+      </Gradient>
+
+      {/* Today's lessons. The single most-asked question of the school day. */}
+      <Section
+        title="Today's lessons" icon="calendar"
+        subtitle={today ? today.label : 'Not a school day'}
+        action={<Button size="sm" variant="ghost" title="Full week" onPress={() => router.push('/staff/timetable')} full={false} />}
+      >
+        {lessons.length === 0
+          ? <Muted>{timetable?.has_staff === false
+              ? "Your account isn't linked to a staff record, so there's no timetable to show. Ask the school office."
+              : 'No lessons scheduled today.'}</Muted>
+          : lessons.slice(0, 6).map((p, i) => (
+              <ListRow
+                key={i}
+                icon="clock" iconTone="primary"
+                title={p.subject_name || 'Lesson'}
+                subtitle={[p.class_name, p.period_label].filter(Boolean).join(' · ')}
+                right={<Text style={{ ...type.small, fontWeight: '700', color: colors.textSoft, fontVariant: ['tabular-nums'] }}>
+                  {p.start_time}–{p.end_time}
+                </Text>}
+              />
+            ))}
+      </Section>
+
+      {/* Everything the account may do, as one grid rather than five taps. */}
+      {/* On a desktop the sidebar already lists every screen, so this would be
+          the same list twice. It earns its place where navigation is a bottom
+          bar of five and a More sheet. */}
+      {nav.length > 0 && !layout.isDesktop && (
+        <Section title="Jump to" icon="grid">
+          <Grid min={132} columns={layout.isDesktop ? 5 : layout.isTablet ? 4 : 2}>
+            {nav.map(a => (
+              <TouchableOpacity key={a.key} onPress={() => router.push(a.href)} activeOpacity={0.82} style={styles.action}>
+                <IconTile name={a.icon} size={40} tone="primary" />
+                <Text numberOfLines={2} style={{ ...type.small, fontWeight: '700', color: colors.text, textAlign: 'center' }}>
+                  {a.label}
+                </Text>
               </TouchableOpacity>
             ))}
-          </View>
-        </Card>
+          </Grid>
+        </Section>
       )}
 
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-        <Metric label="Active students" value={m.students ?? '—'} />
-        <Metric label="Active staff" value={m.staff ?? '—'} />
-        <Metric label="Fees collected" value={m.fees_collected != null ? money(m.fees_collected) : '—'} tone="success" />
-        <Metric label="Fees outstanding" value={m.fees_outstanding != null ? money(m.fees_outstanding) : '—'} tone="danger" />
-      </View>
+      {/* The school's numbers, last — and only the ones this account may see. */}
+      {!data.denied && (
+        <Grid min={150}>
+          <StatCard label="Active pupils" value={m.students ?? '—'} icon="users" />
+          <StatCard label="Active staff" value={m.staff ?? '—'} icon="badge" />
+          {m.fees_collected != null && <StatCard label="Fees collected" value={money(m.fees_collected)} tone="success" icon="wallet" />}
+          {m.fees_outstanding != null && <StatCard label="Fees outstanding" value={money(m.fees_outstanding)} tone="danger" icon="alert" />}
+        </Grid>
+      )}
+
+      {notices && notices.length > 0 && (
+        <Section
+          title="Notices" icon="bell"
+          action={<Button size="sm" variant="ghost" title="All notices" onPress={() => router.push('/staff/notices')} full={false} />}
+        >
+          {notices.slice(0, 3).map((a, i) => (
+            <View key={a.id ?? i} style={{ paddingVertical: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={{ ...type.body, fontWeight: '700', color: colors.text, flexShrink: 1 }}>{a.title}</Text>
+                {a.pending ? <Badge tone="data" label="Waiting to sync" /> : null}
+              </View>
+              <Muted numberOfLines={2} style={{ marginTop: 2 }}>{a.body}</Muted>
+              {i < 2 && <Divider />}
+            </View>
+          ))}
+        </Section>
+      )}
+
+      {mode === 'cloud' && (
+        <Muted style={{ textAlign: 'center', paddingVertical: spacing.sm }}>
+          Signed in over the internet. Figures are the school's last sync; anything you write is
+          queued and applied when its computer next connects.
+        </Muted>
+      )}
     </Screen>
   );
 }
 
-function Metric({ label, value, tone }) {
-  return (
-    <View style={{ flexGrow: 1, minWidth: '45%', backgroundColor: colors.card, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: colors.border }}>
-      <Muted>{label}</Muted>
-      <Text style={{ fontSize: 20, fontWeight: '800', marginTop: 4, color: tone === 'success' ? colors.success : tone === 'danger' ? colors.danger : colors.text }}>{value}</Text>
-    </View>
-  );
-}
+const styles = {
+  hero: { borderRadius: radius.lg, padding: spacing.xl },
+  clock: {
+    backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: radius.md,
+    padding: spacing.md, minWidth: 150,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)',
+  },
+  action: {
+    alignItems: 'center', gap: 8, paddingVertical: spacing.md, paddingHorizontal: 6,
+    borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderSoft,
+    backgroundColor: colors.surfaceAlt,
+  },
+};

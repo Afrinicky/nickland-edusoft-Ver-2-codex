@@ -132,6 +132,49 @@ export const api = {
       : request('/auth/login', { method: 'POST', body: { username, password, device } }),
   parentRegister: (data) => request('/auth/parent/register', { method: 'POST', body: data }),
 
+  // ── One sign-in box ──
+  // The credential decides which surface this is, not a tab the person had to
+  // press first. The server matches a staff username, then a parent's phone or
+  // email, and says which it found.
+  //
+  // The fallback matters in the field: a school that has not yet updated its
+  // desktop answers 404 here, and a teacher must not be locked out by that.
+  // In that case the app does the same two-step itself — staff first, then
+  // parent — which is exactly what the endpoint does server-side.
+  signIn: async (identifier, password, device) => {
+    const id = String(identifier || '').trim();
+    try {
+      const r = MODE === 'cloud'
+        ? await request('/signin', { method: 'POST', body: { school_id: SCHOOL_ID, identifier: id, password } })
+        : await request('/auth/signin', { method: 'POST', body: { identifier: id, password, device } });
+      return r;
+    } catch (e) {
+      if (e.status !== 404) throw e;
+    }
+
+    let staffError = null;
+    try {
+      const r = await api.staffLogin(id, password, device);
+      return { ...r, role: 'staff' };
+    } catch (e) {
+      // A 401 here only means "not a staff account with that password"; a
+      // parent may still match. Anything else — rate limited, server down —
+      // is the real answer and stops the attempt.
+      if (e.status && e.status !== 401) throw e;
+      staffError = e;
+    }
+    try {
+      const r = await api.parentLogin(id, password, device);
+      return { ...r, role: 'parent' };
+    } catch (e) {
+      if (e.status && e.status !== 401) throw e;
+      const err = new Error('Those details did not match an account. Check and try again.');
+      err.status = 401;
+      err.cause = staffError;
+      throw err;
+    }
+  },
+
   // ── Passwords ──
   // Available on both connections. Approving a reset is on neither: an
   // Administrator does that at the school, face to face, and hands over a
@@ -295,6 +338,88 @@ export const api = {
   canteenStudent: (token, studentId) => request(staffPath(`/canteen/student/${studentId}`), { token }),
   canteenCollect: (token, { student_id, amount, payment_method, notes }) =>
     request(staffPath('/canteen/collect'), { method: 'POST', token, body: { student_id, amount, payment_method, notes } }),
+
+  // ── Staff — a pupil's record ──
+  student: (token, id) => request(staffPath(`/students/${id}`), { token }),
+  studentParents: (token, id) => request(staffPath(`/students/${id}/parents`), { token }),
+
+  // ── Staff — reference data ──
+  subjects: (token, classId) => request(staffPath(`/subjects${classId ? `?classId=${classId}` : ''}`), { token }),
+  // Past terms are a desktop read; over the internet the projection carries the
+  // current term only, so the picker is not offered rather than offered empty.
+  terms: (token) => (MODE === 'cloud' ? Promise.resolve({ ok: true, terms: [] }) : request('/terms', { token })),
+
+  // ── Staff — register history ──
+  attendanceHistory: (token, classId, days = 30) =>
+    request(staffPath(`/attendance/history?classId=${classId}&days=${days}`), { token }),
+
+  // ── Staff — continuous assessment ──
+  assessments: (token, classId, subjectId) =>
+    request(staffPath(`/assessments?classId=${classId}&subjectId=${subjectId}`), { token }),
+  saveAssessments: (token, { classId, subjectId, marks }) =>
+    request(staffPath('/assessments'), { method: 'POST', token, body: { classId, subjectId, marks } }),
+  // The desktop numbers a new column, so this is host-only by design: marks
+  // queued against an id invented off-LAN would arrive pointing at nothing.
+  addAssessmentColumn: (token, { classId, subjectId, assessmentType, maxMarks }) =>
+    request(staffPath('/assessments/column'), { method: 'POST', token, body: { classId, subjectId, assessmentType, maxMarks } }),
+
+  // ── Staff — results ──
+  results: (token, classId, termId) =>
+    request(staffPath(`/results?classId=${classId}${termId ? `&termId=${termId}` : ''}`), { token }),
+  studentReport: (token, id, termId) =>
+    request(staffPath(`/results/student/${id}${termId ? `?termId=${termId}` : ''}`), { token }),
+  saveRemarks: (token, body) => request(staffPath('/results/remarks'), { method: 'POST', token, body }),
+
+  // ── Staff — lesson notes ──
+  lessonNotes: (token, { status, classId } = {}) => {
+    const q = [status ? `status=${encodeURIComponent(status)}` : '', classId ? `classId=${classId}` : '']
+      .filter(Boolean).join('&');
+    return request(staffPath(`/lesson-notes${q ? `?${q}` : ''}`), { token });
+  },
+  lessonNote: (token, id) => request(staffPath(`/lesson-notes/${id}`), { token }),
+  saveLessonNote: (token, body) => request(staffPath('/lesson-notes'), { method: 'POST', token, body }),
+  deleteLessonNote: (token, id) =>
+    MODE === 'cloud'
+      ? hostOnly('Deleting a lesson note')()
+      : request(`/lesson-notes/${id}`, { method: 'DELETE', token }),
+
+  // ── Staff — the teacher's own employment ──
+  hrMe: (token) => request(staffPath('/hr/me'), { token }),
+  clock: (token, direction) => request(staffPath('/hr/clock'), { method: 'POST', token, body: { direction } }),
+  hrAttendance: (token, month, year) => {
+    const q = [month ? `month=${month}` : '', year ? `year=${year}` : ''].filter(Boolean).join('&');
+    return request(staffPath(`/hr/attendance${q ? `?${q}` : ''}`), { token });
+  },
+  leaveRequests: (token) => request(staffPath('/hr/leave'), { token }),
+  requestLeave: (token, body) => request(staffPath('/hr/leave'), { method: 'POST', token, body }),
+  payslips: (token, year) => request(staffPath(`/hr/payslips${year ? `?year=${year}` : ''}`), { token }),
+
+  // ── Staff — messages and notices ──
+  staffThreads: (token) => request(staffPath('/messages'), { token }),
+  // The desktop knows a thread by its row id, the cloud by its uuid. Both are
+  // opaque to the screen, which passes back whatever the list gave it.
+  staffThread: (token, id) => request(staffPath(`/messages/${id}`), { token }),
+  staffSendMessage: (token, { threadId, threadUuid, parentId, studentId, subject, body }) =>
+    request(staffPath('/messages'), {
+      method: 'POST', token,
+      body: MODE === 'cloud'
+        ? { threadUuid: threadUuid || threadId, parentId, studentId, subject, body }
+        : { threadId, parentId, studentId, subject, body },
+    }),
+  announcements: (token) => request(staffPath('/announcements'), { token }),
+  postAnnouncement: (token, body) => request(staffPath('/announcements'), { method: 'POST', token, body }),
+
+  // ── Staff — canteen sheet and class timetable ──
+  canteenClass: (token, classId) => request(staffPath(`/canteen/class?classId=${classId}`), { token }),
+  classTimetable: (token, classId) =>
+    MODE === 'cloud'
+      ? hostOnly('A class timetable')()
+      : request(`/timetable/class/${classId}`, { token }),
+
+  // Withdrawing an assignment removes marks with it, so it stays on the
+  // desktop where the teacher can see what that costs.
+  deleteHomework: (token, id) =>
+    MODE === 'cloud' ? hostOnly('Withdrawing homework')() : request(`/homework/${id}`, { method: 'DELETE', token }),
 
   // Staff — how much of this teacher's work has not reached the school yet.
   // Only meaningful over the internet; on the desktop a write has landed by

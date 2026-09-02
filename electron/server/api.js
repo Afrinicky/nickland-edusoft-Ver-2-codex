@@ -280,6 +280,10 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, {
       ok: true, role: 'staff', user: ctx.user, designation: ctx.designation,
       is_admin: ctx.is_admin, permissions: ctx.permissions,
+      // The app's chrome names the school. Without this the browser build
+      // headed a teacher's screen "Nickland Edusoft" rather than their own
+      // school, which the cloud's /staff/me has always returned.
+      school: { name: getSetting(db, 'school_name', 'School') },
       // So the phone insists on a new password before anything else, the same
       // way the desktop's login screen does.
       must_change_password: !!ctx.user.must_change_password,

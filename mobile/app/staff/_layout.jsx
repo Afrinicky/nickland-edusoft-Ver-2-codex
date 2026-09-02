@@ -1,62 +1,49 @@
-import React from 'react';
-import { Tabs, Redirect } from 'expo-router';
-import { Text } from 'react-native';
-import { colors } from '../../src/theme';
+// The staff area — one shell, every screen inside it.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// This used to be expo-router's `Tabs`, which draws a bottom bar and nothing
+// else: on a teacher's laptop the app showed five of its screens along the
+// bottom edge of a 1920px window and hid the rest. AppShell decides from the
+// window width whether that is a sidebar, a rail or a bottom bar, so the same
+// build fits a 320px handset and a desktop monitor.
+//
+// Routes are unchanged: every screen still has its own URL, still guards itself
+// (see src/guard.jsx), and the server still checks the same permissions on
+// every request regardless of what the app chose to draw.
+import React, { useCallback, useState } from 'react';
+import { Redirect, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { Loading } from '../../src/ui';
+import { AppShell } from '../../src/shell';
+import { STAFF_NAV, STAFF_PRIMARY } from '../../src/nav';
+import { api } from '../../src/api';
 
-function Icon({ emoji }) { return <Text style={{ fontSize: 20 }}>{emoji}</Text>; }
-
-// What you cannot open, you do not see. A tab that leads to "Access denied" is
-// worse than no tab: it advertises a part of the school's system to somebody
-// who has been told they may not have it, and invites them to keep tapping.
-// The same permission map the server enforces decides what is drawn here, so
-// the tab bar and the API can never disagree.
-function canView(profile, module) {
-  if (!profile) return false;
-  if (profile.is_admin) return true;
-  return !!(profile.permissions || {})[module]?.canView;
-}
-// `href: null` keeps a screen routable — the dashboard's quick actions and any
-// bookmarked URL still reach it — while leaving it out of the tab bar. Hiding
-// one that is not permitted has to REMOVE it, so hidden means unreachable.
-const hidden = { href: null };
+const NAV = { title: 'Staff', items: STAFF_NAV, primary: STAFF_PRIMARY, accountHref: '/staff/account' };
 
 export default function StaffLayout() {
-  const { ready, token, profile } = useAuth();
+  const { ready, token, profile, mode } = useAuth();
+  const [pending, setPending] = useState(0);
 
-  // See the note in ../parent/_layout.jsx: on the web a reload or a bookmarked
-  // link mounts a screen before the stored session has been read back.
+  // How much of this teacher's work has not reached the school yet. Only
+  // meaningful over the internet — on the school Wi-Fi a write has landed by
+  // the time the request returns — so it costs a request there and nothing here.
+  const poll = useCallback(() => {
+    let cancelled = false;
+    if (token && mode === 'cloud') {
+      api.staffPending(token)
+        .then(r => { if (!cancelled) setPending(r.pending || 0); })
+        .catch(() => {});
+    }
+    return () => { cancelled = true; };
+  }, [token, mode]);
+  useFocusEffect(poll);
+
+  // On the web a reload or a bookmarked link mounts a screen before the stored
+  // session has been read back, so the shell waits rather than bouncing the
+  // teacher to the sign-in page and losing where they were going.
   if (!ready) return <Loading label="Starting…" />;
   if (!token || !profile) return <Redirect href="/" />;
   if (profile.role === 'parent') return <Redirect href="/parent" />;
 
-  return (
-    <Tabs screenOptions={{
-      headerStyle: { backgroundColor: colors.primary },
-      headerTintColor: '#fff',
-      tabBarActiveTintColor: colors.primary,
-    }}>
-      <Tabs.Screen name="index" options={{
-        title: 'Dashboard', tabBarIcon: () => <Icon emoji="📊" />,
-        // The dashboard is the landing screen, so it stays reachable even
-        // without the module: it shows only what the account may see.
-      }} />
-      <Tabs.Screen name="students" options={canView(profile, 'students')
-        ? { title: 'Students', tabBarIcon: () => <Icon emoji="🧑‍🎓" /> }
-        : hidden} />
-      <Tabs.Screen name="debtors" options={canView(profile, 'fees')
-        ? { title: 'Debtors', tabBarIcon: () => <Icon emoji="💰" /> }
-        : hidden} />
-      {/* Your own account is not a module — everybody has one. */}
-      <Tabs.Screen name="account" options={{ title: 'Account', tabBarIcon: () => <Icon emoji="⚙️" /> }} />
-      {/* Task screens reached from the dashboard quick actions — never tab bar
-          items, and only listed at all where the account may use them. */}
-      <Tabs.Screen name="attendance" options={{ ...hidden, title: 'Attendance' }} />
-      <Tabs.Screen name="scores" options={{ ...hidden, title: 'Enter Scores' }} />
-      <Tabs.Screen name="canteen" options={{ ...hidden, title: 'Canteen' }} />
-      <Tabs.Screen name="timetable" options={{ ...hidden, title: 'My Timetable' }} />
-      <Tabs.Screen name="homework" options={{ ...hidden, title: 'Set Homework' }} />
-    </Tabs>
-  );
+  return <AppShell nav={NAV} school={profile?.school?.name} pending={pending} />;
 }
