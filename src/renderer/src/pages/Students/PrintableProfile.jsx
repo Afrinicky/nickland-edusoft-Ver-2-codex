@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useStore } from '../../store/index.js';
 import { fullName, fmtDate, displayAge } from '../../lib/format.js';
 import { previewStudentProfile, previewAttestation } from '../../lib/printHelpers.js';
+import { mediaUrl } from '../../lib/media.js';
 
 export default function PrintableProfile() {
   const { id } = useParams();
@@ -20,7 +21,7 @@ export default function PrintableProfile() {
   const branding = settings.branding || {};
   const sigs = settings.signatures || {};
   const logoPath = branding.school_logo_path;
-  const logoSrc = logoPath ? `file://${logoPath}` : null;
+  const logoSrc = logoPath ? mediaUrl(logoPath) : null;
 
   useEffect(() => {
     (async () => {
@@ -97,7 +98,7 @@ export default function PrintableProfile() {
         <div className="print-identity-block">
           <div className="print-photo">
             {student.photo_path
-              ? <img src={`file://${student.photo_path}`} alt="" />
+              ? <img src={mediaUrl(student.photo_path)} alt="" />
               : <div className="print-photo-placeholder">
                   <span>Photo</span>
                 </div>
@@ -203,7 +204,7 @@ function SignatureBlock({ label, name, signature }) {
   return (
     <div className="signature-block">
       {signature?.path
-        ? <img src={`file://${signature.path}`} alt="" className="signature-image" />
+        ? <img src={mediaUrl(signature.path)} alt="" className="signature-image" />
         : <div className="signature-spacer"></div>
       }
       <div className="signature-line"></div>

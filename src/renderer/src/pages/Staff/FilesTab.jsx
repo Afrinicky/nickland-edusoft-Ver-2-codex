@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { fullName, initials, fmtDate } from '../../lib/format.js';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StaffFilesTab() {
   const [staff, setStaff] = useState([]);
@@ -41,7 +42,7 @@ export default function StaffFilesTab() {
                 className={'files-staff-item' + (staffId === s.id ? ' active' : '')}
                 onClick={() => setStaffId(s.id)}
               >
-                <div className="avatar avatar-sm">{initials(s)}</div>
+                <Avatar person={s} size="sm" />
                 <div className="files-staff-info">
                   <div className="files-staff-name">{s.surname} {s.first_name}</div>
                   <div className="files-staff-meta">{s.role}</div>
@@ -84,7 +85,7 @@ function StaffFilePanels({ staffId }) {
   return (
     <div className="staff-files-panels">
       <div className="card files-header-card">
-        <div className="avatar avatar-lg">{initials(staff)}</div>
+        <Avatar person={staff} size="lg" />
         <div>
           <div className="files-staff-name-lg">{fullName(staff)}</div>
           <div className="text-sm text-muted">

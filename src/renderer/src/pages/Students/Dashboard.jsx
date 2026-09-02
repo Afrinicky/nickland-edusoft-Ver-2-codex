@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/index.js';
 import { initials } from '../../lib/format.js';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StudentsDashboard({ onSwitchTab }) {
   const classes = useStore(s => s.classes);
@@ -150,7 +151,7 @@ export default function StudentsDashboard({ onSwitchTab }) {
           : <div className="recent-admissions">
               {recent.map(s => (
                 <div key={s.id} className="admission-row" onClick={() => navigate(`/students/${s.id}`)}>
-                  <div className="avatar">{initials(s)}</div>
+                  <Avatar person={s} />
                   <div className="admission-info">
                     <div className="admission-name">{s.surname} {s.first_name}</div>
                     <div className="admission-meta">

@@ -28,6 +28,7 @@ import NotificationsIndex from './pages/Notifications/Index.jsx';
 import MessagesIndex from './pages/Messages/Index.jsx';
 import SettingsIndex from './pages/Settings/Index.jsx';
 import RequirePermission from './components/RequirePermission.jsx';
+import { mediaUrl } from './lib/media.js';
 
 // ── App state phases ──────────────────────────────────────
 // 'loading'    → checking bootstrap + settings
@@ -114,7 +115,7 @@ function HomepageShell() {
   const school = settings.school || {};
   const branding = settings.branding || {};
   const logoPath = branding.school_logo_path;
-  const logoSrc = logoPath ? `file://${logoPath}` : null;
+  const logoSrc = logoPath ? mediaUrl(logoPath) : null;
   const schoolName = school.school_name || 'Your School Name';
   const schoolMotto = school.school_motto || '';
 

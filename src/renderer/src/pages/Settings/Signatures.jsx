@@ -4,6 +4,7 @@
 // user can embed their own signature on documents
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
+import { mediaUrl } from '../../lib/media.js';
 
 export default function Signatures() {
   const { settings, loadSettings } = useStore();
@@ -277,7 +278,7 @@ function SignatureSection({ role, label, description, sigPath, name, userId, emb
       <div className="signature-row">
         <div className="signature-preview">
           {sigPath
-            ? <img src={`file://${sigPath}?v=${Date.now()}`} alt="" />
+            ? <img src={mediaUrl(sigPath, Date.now())} alt="" />
             : <div className="signature-preview-empty">
                 <span>No signature uploaded</span>
               </div>

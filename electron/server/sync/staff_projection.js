@@ -45,6 +45,35 @@ function fullName(s) {
 // what the desktop would. Permissions are resolved here rather than in the
 // cloud because designation defaults, per-user overrides and the module list
 // all live on the desktop — projecting the *answer* keeps one implementation.
+// The teaching scope, flattened for the cloud: plain arrays, because a Set
+// does not survive JSON and the cloud has no database to resolve ids against.
+function teachingScope(db, u) {
+  const unrestricted = ['Proprietor', 'Administrator', 'Head Teacher'].includes(u.designation);
+  const scope = {
+    unrestricted,
+    whole_classes: [], class_subjects: {}, any_class_subjects: [], class_teacher_of: [],
+  };
+  if (unrestricted || !u.staff_id) return scope;
+
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT class_group_id, subject_id, is_class_teacher
+      FROM staff_assignments WHERE staff_id = ?
+    `).all(u.staff_id);
+  } catch (_) { return scope; }
+
+  for (const r of rows) {
+    const cid = r.class_group_id == null ? null : Number(r.class_group_id);
+    const sid = r.subject_id == null ? null : Number(r.subject_id);
+    if (cid && !sid) scope.whole_classes.push(cid);
+    else if (cid && sid) (scope.class_subjects[cid] ||= []).push(sid);
+    else if (!cid && sid) scope.any_class_subjects.push(sid);
+    if (cid && r.is_class_teacher) scope.class_teacher_of.push(cid);
+  }
+  return scope;
+}
+
 function enqueueStaffAuth(db, userId) {
   try {
     if (!syncEnabled(db)) return null;
@@ -79,6 +108,11 @@ function enqueueStaffAuth(db, userId) {
         // Set when an administrator chose the password. The phone app asks for
         // a new one before it will go any further, exactly as the desktop does.
         must_change_password: !!u.must_change_password,
+        // Which classes and subjects this account may reach. Without it the
+        // cloud served every class in the school to every teacher — the same
+        // rule the desktop enforces, ignored the moment they picked up a
+        // phone. Shape matches electron/ipc/_scope.js.
+        scope: teachingScope(db, u),
         permissions,
       },
     });

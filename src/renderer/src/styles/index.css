@@ -732,6 +732,15 @@ tr:hover td { background: var(--surface-2); }
 }
 .avatar-sm { width: 26px; height: 26px; font-size: 11px; }
 .avatar-lg { width: 48px; height: 48px; font-size: 18px; }
+/* The same circle as an initials avatar, filled with the person's photo.
+   Uploads are already cropped to passport proportions, so `cover` trims the
+   sides of the portrait rather than distorting the face. */
+.avatar-photo {
+  object-fit: cover;
+  object-position: center top;
+  background: var(--surface-2);
+  display: block;
+}
 
 /* Section header with "View all" link */
 .section-header {

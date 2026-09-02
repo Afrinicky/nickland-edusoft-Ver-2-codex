@@ -4,6 +4,7 @@ import { useStore } from '../../store/index.js';
 import { fullName, initials, fmtDate, fmtCedi } from '../../lib/format.js';
 import Modal from '../../components/Modal.jsx';
 import StaffForm from './Form.jsx';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StaffDetail() {
   const { id } = useParams();
@@ -28,7 +29,7 @@ export default function StaffDetail() {
       <button className="btn btn-ghost btn-sm mb-3" onClick={() => navigate('/staff')}>← Back to Staff</button>
       <div className="card">
         <div className="row gap-4" style={{ alignItems: 'flex-start' }}>
-          <div className="avatar avatar-lg">{initials(staff)}</div>
+          <Avatar person={staff} size="lg" />
           <div className="flex-1">
             <h2 style={{ margin: 0, fontSize: 22 }}>{fullName(staff)}</h2>
             <div className="text-muted text-sm mt-1">

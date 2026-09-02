@@ -393,26 +393,114 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     `).all(u.staff_id);
   });
 
+  // Who may decide what a teacher teaches. Deliberately its own check rather
+  // than `settings.edit`: a Head Teacher runs the timetable and the staffing,
+  // but has settings.view only, so the permission that fits the job is the
+  // designation, not a settings flag.
+  const ASSIGNERS = ['Administrator', 'Proprietor', 'Head Teacher'];
+  function mayAssign() {
+    const actorId = security.getCurrentUserId();
+    if (!actorId) return false;
+    const row = db.prepare(`
+      SELECT d.name AS designation FROM users u
+      LEFT JOIN designations d ON d.id = u.designation_id
+      WHERE u.id = ? AND u.is_active = 1
+    `).get(actorId);
+    return !!(row && ASSIGNERS.includes(row.designation));
+  }
+
+  // Three shapes, and all three are real:
+  //
+  //   class, no subject   the whole class — every subject taught in it
+  //   class + subject     that subject in that class only
+  //   subject, no class   that subject wherever it is taught, for a
+  //                       specialist who takes French across the school
+  //
+  // Only the first two could be expressed before: a class was required, so a
+  // subject specialist had to be given a row per class and any class added
+  // later silently left them out.
   ipcMain.handle('auth:add-user-assignment', (_e, { userId, classGroupId, subjectId, termId, isClassTeacher }) => {
-    if (!security.checkPermission(db, 'settings', 'edit')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+    if (!mayAssign()) {
+      return { ok: false, error: 'Only an Administrator, Proprietor or Head Teacher can set teaching assignments.' };
+    }
+
+    const cid = classGroupId ? parseInt(classGroupId, 10) : null;
+    const sid = subjectId ? parseInt(subjectId, 10) : null;
+    if (!cid && !sid) return { ok: false, error: 'Choose a class, a subject, or both.' };
+    if (!cid && isClassTeacher) {
+      return { ok: false, error: 'A class teacher has to be the teacher of a particular class.' };
     }
 
     const u = db.prepare('SELECT staff_id FROM users WHERE id = ?').get(userId);
     if (!u?.staff_id) return { ok: false, error: 'User must be linked to a staff record before assignments can be added.' };
+
+    // One class, one class teacher. The register, the canteen sheet and the
+    // end-of-term summary all hang off this, and "who is answerable for Basic
+    // 5" cannot have two answers.
+    if (cid && isClassTeacher) {
+      const held = db.prepare(`
+        SELECT s.surname, s.first_name FROM staff_assignments sa
+        JOIN staff s ON s.id = sa.staff_id
+        WHERE sa.class_group_id = ? AND sa.is_class_teacher = 1 AND sa.staff_id != ?
+        LIMIT 1
+      `).get(cid, u.staff_id);
+      if (held) {
+        return {
+          ok: false,
+          error: `${held.surname} ${held.first_name} is already the class teacher for that class. `
+               + 'Remove that assignment first.',
+        };
+      }
+    }
+
+    // Adding the same thing twice is a no-op rather than a second row.
+    const dup = db.prepare(`
+      SELECT id FROM staff_assignments
+      WHERE staff_id = ? AND IFNULL(class_group_id, -1) = IFNULL(?, -1)
+        AND IFNULL(subject_id, -1) = IFNULL(?, -1)
+    `).get(u.staff_id, cid, sid);
+    if (dup) {
+      if (isClassTeacher) {
+        db.prepare('UPDATE staff_assignments SET is_class_teacher = 1 WHERE id = ?').run(dup.id);
+      }
+      projectStaff(db, userId);
+      return { ok: true, id: dup.id, existing: true };
+    }
+
     const r = db.prepare(`
       INSERT INTO staff_assignments (staff_id, class_group_id, subject_id, term_id, is_class_teacher)
       VALUES (?, ?, ?, ?, ?)
-    `).run(u.staff_id, classGroupId || null, subjectId || null, termId || null, isClassTeacher ? 1 : 0);
+    `).run(u.staff_id, cid, sid, termId || null, isClassTeacher ? 1 : 0);
+    // What a teacher may reach changes with this, so the cloud has to be told
+    // — otherwise they keep last night's classes on the phone.
+    projectStaff(db, userId);
     return { ok: true, id: r.lastInsertRowid };
   });
 
-  ipcMain.handle('auth:remove-user-assignment', (_e, assignmentId) => {
-    if (!security.checkPermission(db, 'settings', 'delete')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
-    }
+  // Every class, and who is answerable for it. Drives the Settings screen that
+  // shows a school which classes still have nobody.
+  ipcMain.handle('auth:class-teachers', () => {
+    return db.prepare(`
+      SELECT c.id AS class_id, c.name AS class_name, c.level_order,
+             s.id AS staff_id, s.surname, s.first_name, u.id AS user_id
+      FROM class_groups c
+      LEFT JOIN staff_assignments sa ON sa.class_group_id = c.id AND sa.is_class_teacher = 1
+      LEFT JOIN staff s ON s.id = sa.staff_id
+      LEFT JOIN users u ON u.staff_id = s.id
+      ORDER BY c.level_order, c.name
+    `).all();
+  });
 
+  ipcMain.handle('auth:remove-user-assignment', (_e, assignmentId) => {
+    if (!mayAssign()) {
+      return { ok: false, error: 'Only an Administrator, Proprietor or Head Teacher can set teaching assignments.' };
+    }
+    const row = db.prepare(`
+      SELECT u.id AS user_id FROM staff_assignments sa
+      LEFT JOIN users u ON u.staff_id = sa.staff_id WHERE sa.id = ?
+    `).get(assignmentId);
     db.prepare('DELETE FROM staff_assignments WHERE id = ?').run(assignmentId);
+    if (row && row.user_id) projectStaff(db, row.user_id);
     return { ok: true };
   });
 };

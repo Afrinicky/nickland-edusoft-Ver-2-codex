@@ -4,6 +4,7 @@ import { useStore } from '../../store/index.js';
 import { fullName, initials, fmtCedi } from '../../lib/format.js';
 import Modal from '../../components/Modal.jsx';
 import StaffForm from './Form.jsx';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StaffStatusTab() {
   const showToast = useStore(s => s.showToast);
@@ -64,7 +65,7 @@ export default function StaffStatusTab() {
           <tbody>
             {staff.map(s => (
               <tr key={s.id} onClick={() => navigate(`/staff/${s.id}`)}>
-                <td><div className="avatar">{initials(s)}</div></td>
+                <td><Avatar person={s} /></td>
                 <td className="bold">{s.staff_number}</td>
                 <td>{fullName(s)}</td>
                 <td>{s.role}</td>

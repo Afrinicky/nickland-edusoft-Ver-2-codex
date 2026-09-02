@@ -7,6 +7,7 @@ import { sanitizeForForm } from '../../lib/formSafe.js';
 import PhotoUploader from '../../components/PhotoUploader.jsx';
 import Modal from '../../components/Modal.jsx';
 import UserAssignmentsModal from './UserAssignmentsModal.jsx';
+import { mediaUrl } from '../../lib/media.js';
 
 export default function Users() {
   const showToast = useStore(s => s.showToast);
@@ -145,7 +146,7 @@ export default function Users() {
                       <tr key={u.id}>
                         <td style={{ width: 50 }}>
                           {u.photo_path
-                            ? <img src={`file://${u.photo_path}`} alt="" style={{
+                            ? <img src={mediaUrl(u.photo_path)} alt="" style={{
                                 width: 36, height: 36, borderRadius: '50%',
                                 objectFit: 'cover', border: '1px solid var(--border)',
                               }} />

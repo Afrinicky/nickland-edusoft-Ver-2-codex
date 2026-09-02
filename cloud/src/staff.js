@@ -72,6 +72,50 @@ async function findStaffByUsername(store, school_id, username) {
     .find(p => p && p.is_active && String(p.username || '').toLowerCase() === u) || null;
 }
 
+// ── teaching scope ──────────────────────────────────────────────────────────
+// Permissions say whether a teacher may edit scores at all; this says whose.
+// The desktop resolves it (electron/ipc/_scope.js) and projects the answer, so
+// there is one implementation of "which classes are mine" rather than two that
+// drift. Without it the cloud served every class in the school to every
+// teacher — the desktop's rule, ignored the moment they picked up a phone.
+function scopeOf(rec) {
+  const s = (rec && rec.scope) || {};
+  return {
+    unrestricted: !!s.unrestricted || !!(rec && rec.is_admin),
+    wholeClasses: new Set((s.whole_classes || []).map(Number)),
+    classSubjects: new Map(Object.entries(s.class_subjects || {})
+      .map(([k, v]) => [Number(k), new Set((v || []).map(Number))])),
+    anyClassSubjects: new Set((s.any_class_subjects || []).map(Number)),
+    classTeacherOf: new Set((s.class_teacher_of || []).map(Number)),
+  };
+}
+
+function inScopeClass(rec, classId) {
+  const sc = scopeOf(rec);
+  if (sc.unrestricted) return true;
+  const cid = Number(classId);
+  if (!cid) return false;
+  return sc.wholeClasses.has(cid) || sc.classSubjects.has(cid) || sc.anyClassSubjects.size > 0;
+}
+
+function inScopeSubject(rec, classId, subjectId) {
+  const sc = scopeOf(rec);
+  if (sc.unrestricted) return true;
+  const cid = Number(classId); const sid = Number(subjectId);
+  if (!cid || !sid) return false;
+  if (sc.wholeClasses.has(cid)) return true;
+  if (sc.anyClassSubjects.has(sid)) return true;
+  const set = sc.classSubjects.get(cid);
+  return !!(set && set.has(sid));
+}
+
+// The register and the canteen sheet belong to the one teacher answerable for
+// the class, not to everyone who takes a subject in it.
+function isClassTeacherOf(rec, classId) {
+  const sc = scopeOf(rec);
+  return sc.unrestricted || sc.classTeacherOf.has(Number(classId));
+}
+
 const ACTION_KEY = { view: 'canView', create: 'canCreate', edit: 'canEdit', delete: 'canDelete' };
 
 function can(rec, module, action) {
@@ -100,13 +144,21 @@ async function snapshotPayload(store, school_id, type, key) {
   return hit ? hit.payload : null;
 }
 
-async function allRosters(store, school_id) {
+// `rec` filters the result to the teacher's own classes. Every staff read is
+// built on this, so one filter here covers the class list, the students list,
+// the registers and the score sheets alike.
+async function allRosters(store, school_id, rec) {
   const rows = await store.listSnapshots(school_id, 'class_roster');
-  return rows.map(r => r.payload).filter(Boolean)
-    .sort((a, b) => (a.level_order || 0) - (b.level_order || 0) || String(a.name).localeCompare(String(b.name)));
+  let out = rows.map(r => r.payload).filter(Boolean);
+  if (rec) out = out.filter(r => inScopeClass(rec, r.class_id));
+  return out.sort((a, b) => (a.level_order || 0) - (b.level_order || 0) || String(a.name).localeCompare(String(b.name)));
 }
 
-async function roster(store, school_id, classId) {
+// `rec` given, a class outside the teacher's scope resolves to nothing at all
+// — the same answer as a class that does not exist, which is the answer a
+// teacher who may not see it should get.
+async function roster(store, school_id, classId, rec) {
+  if (rec && !inScopeClass(rec, classId)) return null;
   return snapshotPayload(store, school_id, 'class_roster', `class:${classId}`);
 }
 
@@ -132,8 +184,8 @@ async function dashboard(store, school_id, rec) {
   return { ok: true, term: m.term || null, metrics, updated_at: m.updated_at || null };
 }
 
-async function students(store, school_id, classId) {
-  const rosters = await allRosters(store, school_id);
+async function students(store, school_id, classId, rec) {
+  const rosters = await allRosters(store, school_id, rec);
   const wanted = classId ? rosters.filter(r => String(r.class_id) === String(classId)) : rosters;
   const out = [];
   for (const r of wanted) {
@@ -155,15 +207,15 @@ async function debtors(store, school_id) {
   return { ok: true, debtors: (d && d.debtors) || [], updated_at: d ? d.updated_at : null };
 }
 
-async function classes(store, school_id) {
-  const rosters = await allRosters(store, school_id);
+async function classes(store, school_id, rec) {
+  const rosters = await allRosters(store, school_id, rec);
   return { ok: true, classes: rosters.map(r => ({ id: r.class_id, name: r.name, short_code: r.short_code })) };
 }
 
 // The register for a class on a date: what the desktop last projected, with
 // anything this school has queued since merged over the top.
-async function attendanceSheet(store, school_id, classId, date) {
-  const r = await roster(store, school_id, classId);
+async function attendanceSheet(store, school_id, classId, date, rec) {
+  const r = await roster(store, school_id, classId, rec);
   if (!r) return { ok: true, students: [] };
 
   const marked = { ...(((r.attendance || {})[date]) || {}) };
@@ -188,13 +240,19 @@ async function attendanceSheet(store, school_id, classId, date) {
   };
 }
 
-async function scoreSubjects(store, school_id, classId) {
-  const r = await roster(store, school_id, classId);
-  return { ok: true, subjects: (r && r.subjects) || [] };
+async function scoreSubjects(store, school_id, classId, rec) {
+  const r = await roster(store, school_id, classId, rec);
+  let subjects = (r && r.subjects) || [];
+  // A teacher who visits a class for one subject is offered that subject and
+  // no other — being shown the rest and refused on choosing one is exactly
+  // what the school asked us to stop doing.
+  if (rec) subjects = subjects.filter(sub => inScopeSubject(rec, classId, sub.id));
+  return { ok: true, subjects };
 }
 
-async function scoreSheet(store, school_id, classId, subjectId) {
-  const r = await roster(store, school_id, classId);
+async function scoreSheet(store, school_id, classId, subjectId, rec) {
+  if (rec && !inScopeSubject(rec, classId, subjectId)) return { ok: true, term: null, students: [] };
+  const r = await roster(store, school_id, classId, rec);
   if (!r) return { ok: true, term: null, students: [] };
 
   const marks = { ...(((r.scores || {})[subjectId]) || {}) };
@@ -224,9 +282,16 @@ async function scoreSheet(store, school_id, classId, subjectId) {
 
 // Canteen reads come from the parent-side student snapshot, which already
 // carries the unpaid-day count — there is no second projection to keep in step.
-async function canteenStudent(store, school_id, studentId) {
+async function canteenStudent(store, school_id, studentId, rec) {
   const s = await snapshotPayload(store, school_id, 'student_snapshot', `student:${studentId}`);
   if (!s) return { ok: false, status: 404, error: 'Student not found.' };
+  // Taking canteen money is the class teacher's job, so a pupil outside their
+  // class is not theirs to collect from. Answered as not-found rather than
+  // forbidden: which pupils exist in another class is not their business
+  // either.
+  if (rec && s.class_id && !isClassTeacherOf(rec, s.class_id)) {
+    return { ok: false, status: 404, error: 'Student not found.' };
+  }
   const c = s.canteen || { unpaid_days: 0, amount_owed: 0 };
   const rate = c.unpaid_days ? (c.amount_owed / c.unpaid_days) : null;
   return {
@@ -246,8 +311,8 @@ async function timetableMine(store, school_id, rec) {
   return { ok: true, has_staff: !!t.has_staff, days: t.days || [], today };
 }
 
-async function homeworkForClass(store, school_id, classId) {
-  const r = await roster(store, school_id, classId);
+async function homeworkForClass(store, school_id, classId, rec) {
+  const r = await roster(store, school_id, classId, rec);
   const set = [...((r && r.homework) || [])];
   for (const ch of await pending(store, school_id, ['homework_create'])) {
     const p = ch.payload || {};
@@ -270,7 +335,12 @@ function newRef() {
   catch (_) { return 'ref_' + crypto.randomBytes(16).toString('hex'); }
 }
 
-async function submitAttendance(store, school_id, rec, { date, marks }) {
+async function submitAttendance(store, school_id, rec, { date, marks, classId }) {
+  // The register belongs to the class teacher. Queueing a write the desktop
+  // will drop tells the teacher their work is safe when it is not.
+  if (classId && !isClassTeacherOf(rec, classId)) {
+    return { ok: false, status: 403, error: 'That register belongs to another class teacher.' };
+  }
   if (!date || !Array.isArray(marks) || !marks.length) {
     return { ok: false, status: 400, error: 'date and marks[] are required.' };
   }
@@ -285,7 +355,10 @@ async function submitAttendance(store, school_id, rec, { date, marks }) {
   return { ok: true, saved: clean.length, queued: true };
 }
 
-async function submitScores(store, school_id, rec, { subjectId, marks }) {
+async function submitScores(store, school_id, rec, { subjectId, marks, classId }) {
+  if (classId && !inScopeSubject(rec, classId, subjectId)) {
+    return { ok: false, status: 403, error: 'That subject is not one of yours in that class.' };
+  }
   const sid = parseInt(subjectId, 10);
   if (!sid || !Array.isArray(marks)) return { ok: false, status: 400, error: 'subjectId and marks[] are required.' };
   const clean = [];
@@ -329,6 +402,9 @@ async function submitCanteen(store, school_id, rec, body) {
 
 async function submitHomework(store, school_id, rec, body) {
   const classId = parseInt(body.classId, 10);
+  if (classId && !inScopeClass(rec, classId)) {
+    return { ok: false, status: 403, error: 'That class is not one of yours.' };
+  }
   if (!classId || !body.title || !String(body.title).trim()) {
     return { ok: false, status: 400, error: 'Class and title are required.' };
   }
@@ -478,4 +554,5 @@ module.exports = {
   canteenStudent, timetableMine, homeworkForClass,
   submitAttendance, submitScores, submitCanteen, submitHomework, pendingSummary,
   changePassword, requestPasswordReset, completePasswordReset,
+  inScopeClass, inScopeSubject, isClassTeacherOf,
 };

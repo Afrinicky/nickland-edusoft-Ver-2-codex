@@ -5,6 +5,7 @@ import { fullName, initials, fmtDate, fmtCedi, displayAge } from '../../lib/form
 import Modal from '../../components/Modal.jsx';
 import ConfirmDialog from '../../components/ConfirmDialog.jsx';
 import StudentForm from './Form.jsx';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function StudentDetail() {
   const { id } = useParams();
@@ -47,7 +48,7 @@ export default function StudentDetail() {
 
       <div className="card">
         <div className="row gap-4" style={{ alignItems: 'flex-start' }}>
-          <div className="avatar avatar-lg">{initials(student)}</div>
+          <Avatar person={student} size="lg" />
           <div className="flex-1">
             <h2 style={{ margin: 0, fontSize: 22 }}>{fullName(student)}</h2>
             <div className="text-muted text-sm mt-1">

@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/index.js';
 import { fmtCedi, fmtDate, initials } from '../../lib/format.js';
+import Avatar from '../../components/Avatar.jsx';
 
 export default function FeesDashboard({ onSwitchTab }) {
   const { currentTerm } = useStore();
@@ -150,7 +151,7 @@ export default function FeesDashboard({ onSwitchTab }) {
             : <div className="debtors-list">
                 {data.top_debtors.slice(0, 7).map(d => (
                   <div key={d.student_id} className="debtor-row" onClick={() => { setProfileStudentId(d.student_id); loadProfile(d.student_id); }}>
-                    <div className="avatar avatar-sm">{initials(d)}</div>
+                    <Avatar person={d} size="sm" />
                     <div className="debtor-info">
                       <div className="debtor-id">{d.index_number}</div>
                       <div className="debtor-name">{d.surname} {d.first_name}</div>
@@ -227,7 +228,7 @@ function StudentFinProfileView({ profile, onSwitchTab }) {
   return (
     <div className="fin-profile">
       <div className="fin-profile-header">
-        <div className="avatar avatar-lg">{initials(student)}</div>
+        <Avatar person={student} size="lg" />
         <div className="fin-profile-meta">
           <div className="fin-profile-name">{student.surname} {student.first_name}</div>
           <div className="text-sm text-muted">

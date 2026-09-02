@@ -10,12 +10,17 @@ const GOLD = '#C9961A';
 // `embedded` renders without the standalone page heading, for use as a tab
 // inside Academics (its natural home) while the component stays reusable.
 export default function TimetableIndex({ embedded = false }) {
-  const { classes, subjects, showToast, can } = useStore();
-  const canEdit = can('academics', 'edit');
+  const { classes, subjects, showToast, can, isClassTeacherOf } = useStore();
 
   const [periods, setPeriods] = useState([]);
   const [staff, setStaff] = useState([]);
   const [classId, setClassId] = useState(null);
+  // A timetable is one class's week, and the person answerable for that class
+  // is its class teacher. academics.edit alone was letting any teacher rewrite
+  // any class's grid — including classes they have nothing to do with — which
+  // is what the school saw. Reading one stays open to anyone who may view
+  // academics; the main process refuses the write either way.
+  const canEdit = can('academics', 'edit') && isClassTeacherOf(classId);
   const [grid, setGrid] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -76,6 +81,10 @@ export default function TimetableIndex({ embedded = false }) {
 }
 
 function ExportButtons({ classId, className, showToast }) {
+  // Exporting a timetable is reading it. Anyone who may not see the class must
+  // not be able to lift its week out to a file either.
+  const canExport = useStore(st => st.can)('academics', 'view')
+    && useStore(st => st.isAssignedToClass)(classId);
   const [busy, setBusy] = useState(null);
   async function run(format) {
     if (!classId) return;
@@ -99,8 +108,8 @@ function ExportButtons({ classId, className, showToast }) {
   }
   return (
     <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-      <button onClick={() => run('excel')} disabled={!!busy} style={ghostBtn}>{busy === 'excel' ? 'Exporting…' : 'Export Excel'}</button>
-      <button onClick={() => run('pdf')} disabled={!!busy} style={ghostBtn}>{busy === 'pdf' ? 'Exporting…' : 'Export PDF'}</button>
+      {canExport && <button onClick={() => run('excel')} disabled={!!busy} style={ghostBtn}>{busy === 'excel' ? 'Exporting…' : 'Export Excel'}</button>}
+      {canExport && <button onClick={() => run('pdf')} disabled={!!busy} style={ghostBtn}>{busy === 'pdf' ? 'Exporting…' : 'Export PDF'}</button>}
     </div>
   );
 }

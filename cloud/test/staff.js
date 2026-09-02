@@ -85,6 +85,16 @@ function makeDesktop() {
 
   db.prepare("INSERT INTO class_groups (name, short_code, level_category, level_order) VALUES ('Basic 5', 'B5', 'Primary', 5)").run();
   const classId = db.prepare("SELECT id FROM class_groups WHERE name = 'Basic 5'").get().id;
+
+  // Mr Owusu is the class teacher of Basic 5. A teacher assigned to nothing
+  // now reaches nothing — the desktop's rule, and the cloud enforces the same
+  // one — so a teacher who is meant to work has to be given their class, which
+  // is what a school actually does.
+  db.prepare(`INSERT INTO staff (id, surname, first_name, role, status, staff_number)
+              VALUES (1, 'OWUSU', 'Kwabena', 'Teaching', 'Active', 'STAFF/0001')`).run();
+  db.prepare('UPDATE users SET staff_id = 1 WHERE id = ?').run(userId);
+  db.prepare(`INSERT INTO staff_assignments (staff_id, class_group_id, subject_id, is_class_teacher)
+              VALUES (1, ?, NULL, 1)`).run(classId);
   db.prepare("INSERT INTO subjects (name, code, is_active) VALUES ('Mathematics', 'MTH', 1)").run();
   const subjectId = db.prepare("SELECT id FROM subjects WHERE code = 'MTH'").get().id;
   db.exec("INSERT INTO academic_years (id, label, is_current) VALUES (1, '2025/2026', 1)");
@@ -260,6 +270,35 @@ function makeDesktop() {
   r = await req(base, 'GET', `/api/v1/staff/attendance?classId=${classId}&date=${today}`, { token });
   ck('and the register now reads from the school itself, not the queue',
     r.json.students.every(s => s.status !== null) && r.json.students.every(s => s.pending === undefined));
+
+  // ── a teacher reaches their own classes and no others ──
+  // The rule the school asked for, enforced over the internet as well: what
+  // you are not assigned to, you cannot see. Without this the cloud served
+  // every class in the school to every teacher — the desktop's rule ignored
+  // the moment they picked up a phone.
+  db.prepare("INSERT INTO class_groups (name, short_code, level_category, level_order) VALUES ('Basic 6', 'B6', 'Primary', 6)").run();
+  const otherClassId = db.prepare("SELECT id FROM class_groups WHERE name = 'Basic 6'").get().id;
+  db.prepare(`INSERT INTO students (index_number, surname, first_name, current_class_id, status)
+              VALUES ('AVE/099', 'OTHER', 'Pupil', ?, 'Active')`).run(otherClassId);
+  staffProjection.enqueueClassRoster(db, otherClassId);
+  staffProjection.enqueueStaffAuth(db, userId);
+  await syncClient.push(db);
+
+  r = await req(base, 'GET', '/api/v1/staff/classes', { token });
+  ck('the class list holds only the teacher’s own class',
+    r.json.ok && r.json.classes.length === 1 && r.json.classes[0].id === classId);
+
+  r = await req(base, 'GET', `/api/v1/staff/attendance?classId=${otherClassId}&date=${today}`, { token });
+  ck('another class’s register is empty, not served', r.json.ok && r.json.students.length === 0);
+
+  r = await req(base, 'GET', '/api/v1/staff/students', { token });
+  ck('the roll holds nobody from a class they do not teach',
+    r.json.ok && !r.json.students.some(s => s.surname === 'OTHER'));
+
+  r = await req(base, 'POST', '/api/v1/staff/attendance', {
+    token, body: { classId: otherClassId, date: today, marks: [{ student_id: 999, status: 'present' }] },
+  });
+  ck('marking another class’s register is refused outright', r.status === 403);
 
   // ── revoking an account cuts the session off ──
   db.prepare('UPDATE users SET is_active = 0 WHERE id = ?').run(userId);

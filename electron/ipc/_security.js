@@ -3,7 +3,14 @@
 // by anyone who opens DevTools. These checks run on the Node side and
 // cannot be circumvented from the renderer.
 
-const { resolveEffectivePermissions } = require('./auth');
+// Required lazily, and deliberately. auth.js requires this module back, so a
+// top-level require here is a cycle: whichever of the two loads second gets a
+// half-built copy of the other, and `resolveEffectivePermissions` comes out
+// undefined. Node was already warning about it. Resolving the reference at
+// call time costs nothing and removes the ordering trap.
+function resolveEffectivePermissions(db, userId) {
+  return require('./auth').resolveEffectivePermissions(db, userId);
+}
 
 // Tracks the currently authenticated user. Set by auth:login.
 // Single-user desktop app, so a module-level variable is fine.

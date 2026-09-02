@@ -12,6 +12,7 @@
 // already the right shape and size.
 import React, { useState } from 'react';
 import { useStore } from '../store/index.js';
+import { mediaUrl } from '../lib/media.js';
 
 export default function PhotoUploader({
   entityType,        // 'students' | 'staff' | 'users'
@@ -74,7 +75,7 @@ export default function PhotoUploader({
 
   const radius = shape === 'circle' ? '50%' : '8px';
   const hasPhoto = !!currentPath;
-  const src = hasPhoto ? `file://${currentPath}?v=${version}` : null;
+  const src = hasPhoto ? mediaUrl(currentPath, version) : null;
 
   return (
     <div className="photo-uploader" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>

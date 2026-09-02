@@ -52,17 +52,65 @@ export const useStore = create((set, get) => ({
     return get().can(module, level);
   },
 
-  // Has this teacher been assigned to this class? (used to gate class-specific data)
+  // ── Assignment scope ──────────────────────────────────
+  // Mirrors electron/ipc/_scope.js. That file is the enforcement; this is so
+  // the screens do not offer what it would refuse. The two must agree, so the
+  // shape of the rules is deliberately identical:
+  //
+  //   class only     → the whole class, every subject in it
+  //   class+subject  → that subject in that class, nothing else in it
+  //   subject only   → that subject wherever it is taught
+  //
+  // and they combine, because a teacher can hold a class AND take a subject
+  // in two others.
+  //
+  // Proprietor, Administrator and Head Teacher are unrestricted: a head who
+  // could see only their own class could not check anybody's marks.
+  isUnrestricted: () => {
+    const d = get().currentUser?.designation;
+    return ['Proprietor', 'Administrator', 'Head Teacher'].includes(d);
+  },
+
+  // Has this teacher been assigned to this class — as its teacher, or by
+  // taking a subject in it?
   isAssignedToClass: (classGroupId) => {
-    if (!classGroupId) return false;
-    return (get().assignments || []).some(a => a.class_group_id === classGroupId);
+    if (get().isUnrestricted()) return true;
+    const cid = Number(classGroupId);
+    if (!cid) return false;
+    return (get().assignments || []).some(a =>
+      Number(a.class_group_id) === cid || (a.class_group_id == null && a.subject_id != null)
+    );
   },
 
   // Has this teacher been assigned to this subject in this class?
   isAssignedToSubject: (classGroupId, subjectId) => {
+    if (get().isUnrestricted()) return true;
+    const cid = Number(classGroupId);
+    const sid = Number(subjectId);
+    if (!cid || !sid) return false;
+    const rows = get().assignments || [];
+    // The class held outright carries every subject in it.
+    if (rows.some(a => Number(a.class_group_id) === cid && a.subject_id == null)) return true;
+    // A subject taught across the school.
+    if (rows.some(a => a.class_group_id == null && Number(a.subject_id) === sid)) return true;
+    return rows.some(a => Number(a.class_group_id) === cid && Number(a.subject_id) === sid);
+  },
+
+  // The one member of staff answerable for a class: the register, the canteen
+  // sheet, the end-of-term summary.
+  isClassTeacherOf: (classGroupId) => {
+    if (get().isUnrestricted()) return true;
+    const cid = Number(classGroupId);
     return (get().assignments || []).some(a =>
-      a.class_group_id === classGroupId && a.subject_id === subjectId
+      Number(a.class_group_id) === cid && a.is_class_teacher
     );
+  },
+
+  // Does this account hold any class outright? Used to decide whether to show
+  // whole-class tools at all.
+  hasAnyClassTeacherRole: () => {
+    if (get().isUnrestricted()) return true;
+    return (get().assignments || []).some(a => a.is_class_teacher);
   },
 
   // ── Settings & Theme ─────────────────────────────────

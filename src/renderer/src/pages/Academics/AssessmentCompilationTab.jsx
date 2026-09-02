@@ -27,6 +27,10 @@ const isEditable = col => col && (col.type === 'number' || col.type === 'text');
 const exportLabel = col => (col.subLabel ? `${col.label} ${col.subLabel}` : col.label);
 
 export default function AssessmentCompilationTab() {
+  const can = useStore(s => s.can);
+  const canView = can('academics', 'view');
+  const canEdit = can('academics', 'edit');
+
   const { classes, currentTerm } = useStore();
   const showToast = useStore(s => s.showToast);
   const [terms, setTerms] = useState([]);
@@ -559,8 +563,16 @@ export default function AssessmentCompilationTab() {
           <div className="text-sm text-muted">Excel-like foundation sheet for the selected class and term — select, copy, paste, delete and edit cells just like a spreadsheet. Use Import / Export for bulk Excel transfer.</div>
         </div>
         <div className="row gap-2">
-          <button className="btn btn-outline" disabled={!sheet || loading} onClick={handleExport}>📥 Export Excel</button>
-          <button className="btn btn-outline" disabled={!sheet || loading} onClick={handleImport}>📤 Import Excel</button>
+          {/* Import writes every mark on the sheet and export lifts them out —
+              the same acts as the grid itself, so they answer to the same
+              permissions. Offered to anyone, Excel was a way straight round
+              an account that had been refused academics.edit. */}
+          {canView && (
+            <button className="btn btn-outline" disabled={!sheet || loading} onClick={handleExport}>📥 Export Excel</button>
+          )}
+          {canEdit && (
+            <button className="btn btn-outline" disabled={!sheet || loading} onClick={handleImport}>📤 Import Excel</button>
+          )}
           <button className={'btn ' + (hasDirty ? 'btn-success' : 'btn-ghost')} disabled={!hasDirty || saving} onClick={saveChanges}>{saving ? 'Saving…' : hasDirty ? '💾 Save Changes' : 'All Saved'}</button>
         </div>
       </div>

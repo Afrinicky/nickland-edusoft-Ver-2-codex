@@ -17,6 +17,7 @@ const api = {
     effectivePermissions:      (userId) => ipcRenderer.invoke('auth:effective-permissions', userId),
     userOverrides:             (userId) => ipcRenderer.invoke('auth:user-overrides', userId),
     listUserAssignments:       (userId) => ipcRenderer.invoke('auth:list-user-assignments', userId),
+    classTeachers:             ()      => ipcRenderer.invoke('auth:class-teachers'),
     addUserAssignment:         (data)   => ipcRenderer.invoke('auth:add-user-assignment', data),
     removeUserAssignment:      (id)     => ipcRenderer.invoke('auth:remove-user-assignment', id),
     setPermissionOverride:     (data)  => ipcRenderer.invoke('auth:set-permission-override', data),

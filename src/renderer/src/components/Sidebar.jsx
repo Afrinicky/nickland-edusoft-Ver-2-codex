@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/index.js';
 import ChangePasswordModal from './ChangePasswordModal.jsx';
+import { mediaUrl } from '../lib/media.js';
 
 const NAV_ITEMS = [
   { to: '/',              icon: 'home',      label: 'Home',                  module: null         },
@@ -56,7 +57,7 @@ export default function Sidebar() {
   const features = settings.features || {};
   const branding = settings.branding || {};
   const logoPath = branding.school_logo_path;
-  const logoSrc = logoPath ? `file://${logoPath}` : null;
+  const logoSrc = logoPath ? mediaUrl(logoPath) : null;
   const schoolName = school.school_name || 'Your School Name';
 
   const now = new Date();
