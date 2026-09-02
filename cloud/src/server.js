@@ -171,7 +171,7 @@ function createServer(store) {
 
         if (p === '/api/v1/staff/students' && req.method === 'GET') {
           if (!staffApi.can(rec, 'students', 'view')) return deny();
-          return send(await staffApi.students(store, sid, q.classId));
+          return send(await staffApi.students(store, sid, q.classId, rec));
         }
 
         if (p === '/api/v1/staff/debtors' && req.method === 'GET') {
@@ -181,13 +181,13 @@ function createServer(store) {
 
         if (p === '/api/v1/staff/classes' && req.method === 'GET') {
           if (!staffApi.canAny(rec, [['students', 'view'], ['academics', 'view'], ['canteen', 'view']])) return deny();
-          return send(await staffApi.classes(store, sid));
+          return send(await staffApi.classes(store, sid, rec));
         }
 
         if (p === '/api/v1/staff/attendance' && req.method === 'GET') {
           if (!staffApi.canAny(rec, [['students', 'view'], ['academics', 'view']])) return deny();
           if (!q.classId || !q.date) return json(res, 400, { ok: false, error: 'classId and date are required.' });
-          return send(await staffApi.attendanceSheet(store, sid, q.classId, q.date));
+          return send(await staffApi.attendanceSheet(store, sid, q.classId, q.date, rec));
         }
         if (p === '/api/v1/staff/attendance' && req.method === 'POST') {
           if (!staffApi.canAny(rec, [['students', 'edit'], ['academics', 'edit']])) return deny();
@@ -197,12 +197,12 @@ function createServer(store) {
         if (p === '/api/v1/staff/scores/subjects' && req.method === 'GET') {
           if (!staffApi.can(rec, 'academics', 'view')) return deny();
           if (!q.classId) return json(res, 400, { ok: false, error: 'classId is required.' });
-          return send(await staffApi.scoreSubjects(store, sid, q.classId));
+          return send(await staffApi.scoreSubjects(store, sid, q.classId, rec));
         }
         if (p === '/api/v1/staff/scores' && req.method === 'GET') {
           if (!staffApi.can(rec, 'academics', 'view')) return deny();
           if (!q.classId || !q.subjectId) return json(res, 400, { ok: false, error: 'classId and subjectId are required.' });
-          return send(await staffApi.scoreSheet(store, sid, q.classId, q.subjectId));
+          return send(await staffApi.scoreSheet(store, sid, q.classId, q.subjectId, rec));
         }
         if (p === '/api/v1/staff/scores' && req.method === 'POST') {
           if (!staffApi.can(rec, 'academics', 'edit')) return deny();
@@ -211,7 +211,7 @@ function createServer(store) {
 
         if (p.startsWith('/api/v1/staff/canteen/student/') && req.method === 'GET') {
           if (!staffApi.can(rec, 'canteen', 'view')) return deny();
-          return send(await staffApi.canteenStudent(store, sid, p.split('/').pop()));
+          return send(await staffApi.canteenStudent(store, sid, p.split('/').pop(), rec));
         }
         if (p === '/api/v1/staff/canteen/collect' && req.method === 'POST') {
           if (!staffApi.can(rec, 'canteen', 'create')) return deny();
@@ -225,7 +225,7 @@ function createServer(store) {
         if (p === '/api/v1/staff/homework' && req.method === 'GET') {
           if (!staffApi.can(rec, 'academics', 'view')) return deny();
           if (!q.classId) return json(res, 400, { ok: false, error: 'classId is required.' });
-          return send(await staffApi.homeworkForClass(store, sid, q.classId));
+          return send(await staffApi.homeworkForClass(store, sid, q.classId, rec));
         }
         if (p === '/api/v1/staff/homework' && req.method === 'POST') {
           if (!staffApi.can(rec, 'academics', 'edit')) return deny();
