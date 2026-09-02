@@ -18,7 +18,7 @@ The **desktop (PC host) is genuinely strong** — it already exceeds many commer
 
 The **two mobile/web pillars are the weak points**, and one of them is weak *against your own description*:
 
-- ~~**The mobile teacher app is read-only.**~~ Teachers now mark attendance, enter scores, collect canteen money and set homework from the app — **and can do it over the internet with the school's computer switched off**, which is the case that matters for marking after hours. Lesson notes remain unbuilt.
+- ~~**The mobile teacher app is read-only.**~~ ~~Teachers now mark attendance, enter scores, collect canteen money and set homework.~~ **Closed.** The teacher app now carries the desktop's whole teacher surface — including the two that were still outstanding, lesson notes and continuous assessment — and it works over the internet with the school's computer switched off.
 - **The mobile app and the cloud portal speak different API contracts** (`/api/v1/parent/*` vs `/api/v1/portal/*`), so the same mobile app cannot currently talk to the hosted cloud — only to the desktop host (directly or via a tunnel).
 
 > **Update (this review branch):** the "results & attendance not in the cloud" gap that appeared in the first draft of this document was already closed in the codebase (commit `f410af3`): the `student_snapshot` read model carries the current-term attendance summary and academic report, and both cloud portal twins render them. This branch adds an end-to-end test that locks that round-trip in. The remaining cloud gap is therefore the **contract mismatch** above, plus read-model *depth* (single current term, summary-level only), not the presence of the data.
@@ -42,21 +42,34 @@ Implemented and solid:
 
 Gaps at the desktop layer are **feature-breadth** items covered in §3.
 
-### 2.2 Mobile app — teacher side — **Weak (est. 25%)** ⚠️ biggest gap vs. your vision
+### 2.2 Mobile app — teacher side — **Strong (est. 90%)** ✅ *closed on this branch*
 
-The teacher app has exactly four tabs: **Dashboard, Students, Debtors, Account** — all read-only.
+**Teachers do not get the desktop at all**, so this pillar is not a companion
+to the product — for a teacher it *is* the product. It is now built that way:
+fifteen screens where there were seven, and the desktop's teacher surface
+reproduced rather than sampled.
 
-| Core teacher duty | On desktop | On mobile |
+| Core teacher duty | On desktop | On mobile / web |
 |---|---|---|
-| Take/mark class attendance | ✅ | ❌ (host endpoint `POST /attendance` exists but **no screen calls it**) |
-| Enter / submit scores & grades | ✅ | ❌ (**no endpoint, no screen**) |
-| Write / submit lesson notes | ✅ | ❌ |
-| View class roster | ✅ | ✅ (read-only) |
-| View their timetable / schedule | ❌ (no module) | ❌ |
-| Message / notify parents | ✅ (broadcast) | ❌ |
-| Request leave / view payslip | ✅ | ❌ |
+| Take/mark class attendance | ✅ | ✅ + whole-class marking and 30 days of history |
+| Enter exam scores | ✅ | ✅ |
+| Enter continuous assessment (class work) | ✅ | ✅ — the half of a mark the report card actually carries |
+| Broadsheet + report cards | ✅ | ✅ |
+| End-of-term conduct & remarks | ✅ | ✅ (class teacher only) |
+| Set homework | ✅ | ✅ |
+| **Mark** homework | ✅ | ✅ on the school's own system; needs an assignment the desktop created |
+| Write / submit lesson notes | ✅ | ✅ — the full form |
+| A pupil's record + guardian contacts | ✅ | ✅ |
+| Class roster | ✅ | ✅ searchable, and it opens a record |
+| Their timetable, and a class grid | ✅ | ✅ |
+| Canteen: collect, and the class sheet | ✅ | ✅ |
+| Message parents | ✅ | ✅ two-way, mirrored to SMS/email |
+| Post notices | ✅ | ✅ |
+| Clock in/out, leave, payslips | ✅ | ✅ |
 
-**This is the headline gap.** The endpoint plumbing for attendance already exists on the host but is unused; scores have no plumbing at all.
+Remaining: taking a fee payment (receipt numbering) and structural
+configuration (roles, terms, subjects, fee templates) stay on the desktop by
+design.
 
 ### 2.3 Mobile app — parent side — **Good over LAN (est. 70%), thin over internet**
 
@@ -110,13 +123,17 @@ Modules where you **match or beat** the standard: payroll with statutory PAYE/SS
 - **Security posture is reasonable** (bearer tokens hashed at rest, per-device revocation, HMAC webhooks, HTTPS-only cloud, rate-limited auth). Worth a formal review of: token/session expiry on the desktop, parent self-registration matching rules (impersonation risk), and RLS enforcement on the Neon tenant tables.
 - **Multi-school / SaaS** is designed (per-tenant `school_id`, API keys) but the hosted product (billing, per-school onboarding, tenant admin) isn't built yet.
 - **Accessibility & localisation** — single language/currency (GHS) assumed; fine for now, a ceiling for expansion.
+- **One interface across three device classes** — the browser build lays itself
+  out from the window width (bottom bar / rail / sidebar), so a 320px handset
+  and a 24-inch monitor are the same bundle. Verified in Chromium at 390, 834
+  and 1440 pixels: no console errors and no horizontal overflow on any screen.
 
 ---
 
 ## 5. Recommendations (prioritised)
 
 ### P0 — Make the pillars deliver what they promise
-1. **Turn the teacher app into a working tool.** ✅ **Done on this branch.** Mobile screens + host endpoints now cover **attendance register**, **score entry**, and **canteen collection**, each permission-gated and reusing the desktop's own logic. (Lesson-note submission is the remaining nice-to-have.)
+1. **Turn the teacher app into a working tool.** ✅ **Done.** Mobile and browser screens plus host and cloud endpoints now cover the whole teacher day: register and history, continuous assessment, exam marks, the broadsheet and report cards, homework set and marked, lesson notes, the canteen sheet, messages, notices, and the teacher's own clock-in, leave and payslips — each permission-gated, scope-gated, and reusing the desktop's own logic.
 2. **Put results & attendance in the cloud read-model.** ✅ **Already in the codebase** (commit `f410af3`); this branch adds the end-to-end test that guards the round-trip. The web portal shows a child's results and attendance off-LAN today.
 3. **Unify the client↔cloud contract.** ✅ **Done on this branch (cloud mode).** The mobile app now has two connection modes chosen at *Connect* time: **School Wi-Fi** (LAN/tunnel → the desktop host's `/parent/*` + `/staff` API, full features incl. payments) and **Over the internet** (pick a school → the hosted portal's `/portal/*` API, parent-only read + notices). The API client normalises the cloud `student_snapshot` into the same shapes the parent screens already use, so one build serves both. Staff and payments stay host-only by design (the cloud is a thin read model).
 
