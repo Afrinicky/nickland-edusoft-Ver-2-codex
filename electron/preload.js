@@ -306,6 +306,9 @@ const api = {
   photos: {
     upload:            (data)                => ipcRenderer.invoke('photos:upload', data),
     remove:            (data)                => ipcRenderer.invoke('photos:remove', data),
+    // A photo can be chosen before the record exists; these bind or bin it.
+    attach:            (data)                => ipcRenderer.invoke('photos:attach', data),
+    discard:           (data)                => ipcRenderer.invoke('photos:discard', data),
   },
 
   // ── Lesson Notes ─────────────────────────────────────

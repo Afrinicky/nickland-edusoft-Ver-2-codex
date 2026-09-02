@@ -27,6 +27,13 @@ export default function StaffForm({ staff, onSaved, onCancel }) {
     } else {
       const res = await window.api.staff.create(data);
       id = res.id;
+      // A photo added before this record existed was staged under a random
+      // name. Rename it onto the new id so the file is identifiable, and so a
+      // sweep of leftover `staged_` files can never take a photo in use.
+      if (id && data.photo_path && /[\\/]staged_/.test(data.photo_path)) {
+        try { await window.api.photos.attach({ entityType: 'staff', entityId: id, stagedPath: data.photo_path }); }
+        catch (_) { /* the record already carries the staged path — nothing is lost */ }
+      }
     }
     setSaving(false);
     onSaved(id);

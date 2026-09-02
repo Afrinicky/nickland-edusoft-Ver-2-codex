@@ -54,8 +54,8 @@ function registerStaffHandlers(ipcMain, db, userDataPath) {
         staff_number, surname, first_name, other_names, gender, date_of_birth,
         phone, email, address, role, status, qualification, specialization,
         bank_account, bank_name, ssnit_number, ssnit_enrolled, hire_date,
-        base_salary, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        base_salary, notes, photo_path
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       staffNumber, data.surname || '', data.first_name || '', data.other_names || '',
       data.gender || '', data.date_of_birth || null, data.phone || '', data.email || '',
@@ -64,7 +64,10 @@ function registerStaffHandlers(ipcMain, db, userDataPath) {
       data.bank_account || '', data.bank_name || '',
       data.ssnit_number || '', data.ssnit_enrolled ? 1 : 0,
       data.hire_date || new Date().toISOString().slice(0, 10),
-      data.base_salary || 0, data.notes || ''
+      data.base_salary || 0, data.notes || '',
+      // A photo chosen before the record existed was staged on disk; the path
+      // travels with the form so the face is there from the first save.
+      data.photo_path || null
     );
     return { ok: true, id: result.lastInsertRowid, staff_number: staffNumber };
   });
@@ -75,6 +78,7 @@ function registerStaffHandlers(ipcMain, db, userDataPath) {
       'phone', 'email', 'address', 'role', 'status', 'qualification',
       'specialization', 'bank_account', 'bank_name', 'ssnit_number',
       'ssnit_enrolled', 'hire_date', 'stop_date', 'base_salary', 'notes',
+      'photo_path',
     ];
     const setClauses = [];
     const params = [];
