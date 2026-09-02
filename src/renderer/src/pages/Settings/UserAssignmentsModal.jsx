@@ -29,21 +29,25 @@ export default function UserAssignmentsModal({ user, onClose }) {
   useEffect(() => { refresh(); }, [user.id]);
 
   async function add() {
-    if (!classGroupId) {
-      showToast('Pick a class', 'warning');
+    if (!classGroupId && !subjectId) {
+      showToast('Pick a class, a subject, or both', 'warning');
+      return;
+    }
+    if (!classGroupId && isClassTeacher) {
+      showToast('A class teacher has to be the teacher of a particular class', 'warning');
       return;
     }
     setSaving(true);
     const res = await window.api.auth.addUserAssignment({
       userId: user.id,
-      classGroupId: parseInt(classGroupId),
+      classGroupId: classGroupId ? parseInt(classGroupId) : null,
       subjectId: subjectId ? parseInt(subjectId) : null,
       termId: currentTerm?.id || null,
       isClassTeacher,
     });
     setSaving(false);
     if (res.ok) {
-      showToast('Assignment added', 'success');
+      showToast(res.existing ? 'That assignment was already there' : 'Assignment added', 'success');
       setClassGroupId(''); setSubjectId(''); setIsClassTeacher(false);
       refresh();
     } else {
@@ -64,7 +68,7 @@ export default function UserAssignmentsModal({ user, onClose }) {
           <div>
             <div className="modal-title">Class & Subject Assignments — {user.full_name}</div>
             <div className="text-sm text-muted">
-              Determines which classes / subjects this teacher has access to.
+              What this teacher can open. Everything else is hidden from them.
             </div>
           </div>
           <button className="modal-close" onClick={onClose}>×</button>
@@ -82,23 +86,36 @@ export default function UserAssignmentsModal({ user, onClose }) {
 
         {user.staff_id && (
           <>
+            <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)', marginBottom: 14 }}>
+              <div className="text-sm" style={{ lineHeight: 1.7 }}>
+                <strong>Class only</strong> — the whole class, every subject in it.<br />
+                <strong>Class and subject</strong> — that subject in that class, nothing else in it.<br />
+                <strong>Subject only</strong> — that subject in every class that teaches it.<br />
+                These add up: a teacher can hold Basic 5 outright <em>and</em> take Mathematics in
+                Basic 4 and Basic 6. Mark them <strong>class teacher</strong> of the one class they
+                are answerable for — the register, the canteen sheet and the end-of-term report.
+                A class has one.
+              </div>
+            </div>
+
             <div className="card" style={{ marginBottom: 14 }}>
               <div className="section-title" style={{ marginBottom: 10 }}>Add Assignment</div>
               <div className="form-row">
                 <div className="form-group">
-                  <label>Class <span className="text-danger">*</span></label>
+                  <label>Class</label>
                   <select value={classGroupId} onChange={e => setClassGroupId(e.target.value)}>
-                    <option value="">— Select Class —</option>
+                    <option value="">— Every class (subject specialist) —</option>
                     {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
+                  <div className="form-hint">Leave blank to give them one subject across the whole school</div>
                 </div>
                 <div className="form-group">
-                  <label>Subject (optional)</label>
+                  <label>Subject</label>
                   <select value={subjectId} onChange={e => setSubjectId(e.target.value)}>
-                    <option value="">— All subjects in class —</option>
+                    <option value="">— All subjects in the class —</option>
                     {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
-                  <div className="form-hint">Leave blank to assign all subjects in the class</div>
+                  <div className="form-hint">Leave blank to give them the whole class</div>
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 6 }}>
@@ -108,7 +125,7 @@ export default function UserAssignmentsModal({ user, onClose }) {
                   <span>Is class teacher (responsible for the whole class)</span>
                 </label>
                 <div style={{ flex: 1 }} />
-                <button className="btn btn-primary" onClick={add} disabled={saving || !classGroupId}>
+                <button className="btn btn-primary" onClick={add} disabled={saving || (!classGroupId && !subjectId)}>
                   {saving ? 'Adding…' : '+ Add Assignment'}
                 </button>
               </div>
@@ -135,7 +152,11 @@ export default function UserAssignmentsModal({ user, onClose }) {
                       <tbody>
                         {assignments.map(a => (
                           <tr key={a.id}>
-                            <td><strong>{a.class_name || '—'}</strong></td>
+                            <td>
+                              {a.class_name
+                                ? <strong>{a.class_name}</strong>
+                                : <span className="text-muted">Every class</span>}
+                            </td>
                             <td>{a.subject_name || <span className="text-muted">All subjects</span>}</td>
                             <td className="text-sm text-muted">{a.term_label || '—'}</td>
                             <td>

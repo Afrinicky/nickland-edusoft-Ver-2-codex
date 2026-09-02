@@ -222,7 +222,49 @@ as(head);
 ck('a head teacher is not confined to one class',
   scopes.scopeFor(db, head.userId).unrestricted);
 
-// ══ 11. denials are recorded ══
+// ══ 11. assignment rules ══
+// The IPC is registered on the real ipcMain in the app (auth channels are how
+// a person signs in), so the rules are exercised through the module directly.
+{
+  const ipc2 = fakeIpcMain();
+  require(path.join(ROOT, 'electron/ipc/auth.js'))(ipc2, db);
+  const authCall = (ch, ...a) => ipc2.handlers.get(ch)({}, ...a);
+
+  as(justice);   // a Class Teacher, not an assigner
+  ck('a class teacher cannot hand themselves another class',
+    !authCall('auth:add-user-assignment', { userId: justice.userId, classGroupId: B4 }).ok);
+
+  as(head);      // Head Teacher — settings.view only, but this is their job
+  const r1 = authCall('auth:add-user-assignment', { userId: ama.userId, classGroupId: B4, subjectId: MATHS });
+  ck('a head teacher can set assignments despite having no settings.edit', r1.ok);
+
+  // Three shapes, and the third could not be expressed at all before.
+  const r2 = authCall('auth:add-user-assignment', { userId: ama.userId, subjectId: FRENCH });
+  ck('a subject can be assigned across every class', r2.ok);
+  ck('...and neither a class nor a subject is refused',
+    !authCall('auth:add-user-assignment', { userId: ama.userId }).ok);
+  ck('...and a class teacher of no class in particular is refused',
+    !authCall('auth:add-user-assignment', { userId: ama.userId, subjectId: MATHS, isClassTeacher: true }).ok);
+
+  // One class, one class teacher: "who is answerable for Basic 5" cannot have
+  // two answers, because the register and the canteen hang off it.
+  const clash = authCall('auth:add-user-assignment',
+    { userId: ama.userId, classGroupId: B5, isClassTeacher: true });
+  ck('a second class teacher for the same class is refused', !clash.ok);
+  ck('...and the refusal names who already holds it', /JUSTICE/i.test(clash.error || ''));
+
+  // Adding the same row twice should not double it.
+  const again = authCall('auth:add-user-assignment', { userId: ama.userId, classGroupId: B4, subjectId: MATHS });
+  ck('adding the same assignment twice is a no-op', again.ok && again.existing);
+
+  const listed = authCall('auth:class-teachers');
+  ck('every class is listed with whoever is answerable for it',
+    Array.isArray(listed) && listed.some(c => c.class_id === B5 && /JUSTICE/i.test(c.surname || '')));
+  ck('...and a class with nobody shows as unstaffed',
+    listed.some(c => c.class_id === B4 && !c.staff_id));
+}
+
+// ══ 12. denials are recorded ══
 const denials = db.prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'permission_denied'").get().c;
 ck('every refusal is written to the audit log', denials > 0);
 

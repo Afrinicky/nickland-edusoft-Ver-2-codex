@@ -42,7 +42,7 @@ function fmtDayLabel(iso) {
 const INITIAL_EXPORT_DATES = weekDates(getWeekStart(fmtISO(new Date())));
 
 export default function AttendanceRegister() {
-  const { classes, currentTerm, currentUser } = useStore();
+  const { classes, currentTerm, currentUser, can, isClassTeacherOf } = useStore();
   const showToast = useStore(s => s.showToast);
   const [classId, setClassId] = useState('');
   const [anchorDate, setAnchorDate] = useState(fmtISO(new Date()));
@@ -266,6 +266,11 @@ export default function AttendanceRegister() {
             <label>Export To</label>
             <input type="date" value={exportEndDate} onChange={e => setExportEndDate(e.target.value)} />
           </div>
+          {/* Exporting the register lifts a class's whole attendance record out
+              to a file. It is the same reading act as the sheet, held to the
+              same permission — offered unconditionally it was a way to take
+              data an account had been refused on screen. */}
+          {can('students', 'view') && (
           <div className="form-group">
             <label>Export</label>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -285,6 +290,7 @@ export default function AttendanceRegister() {
               </button>
             </div>
           </div>
+          )}
         </div>
         {classId && rows.length > 0 && (
           <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
