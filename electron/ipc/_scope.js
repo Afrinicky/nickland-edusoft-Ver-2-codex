@@ -31,15 +31,28 @@
 
 const UNRESTRICTED_DESIGNATIONS = ['Proprietor', 'Administrator', 'Head Teacher'];
 
+// Two sources, and both matter. The database is the truth, but an account
+// whose designation_id was never set — a database restored from an old
+// version, or a bootstrap that ran before the designations existed — reads
+// back as null there. Falling back to the designation captured at sign-in
+// stops that turning an administrator into somebody with access to nothing.
 function designationOf(db, userId) {
+  let fromDb = null;
   try {
     const row = db.prepare(`
       SELECT d.name AS designation FROM users u
       LEFT JOIN designations d ON d.id = u.designation_id
       WHERE u.id = ?
     `).get(userId);
-    return (row && row.designation) || null;
-  } catch (_) { return null; }
+    fromDb = (row && row.designation) || null;
+  } catch (_) { fromDb = null; }
+  if (fromDb) return fromDb;
+
+  try {
+    const security = require('./_security');
+    if (security.getCurrentUserId() === userId) return security.getCurrentDesignation() || null;
+  } catch (_) { /* the session is a fallback, never a requirement */ }
+  return null;
 }
 
 // Build the scope for a user. Cheap enough to call per request: a handful of

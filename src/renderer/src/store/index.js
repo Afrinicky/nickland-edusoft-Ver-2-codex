@@ -17,6 +17,11 @@ export const useStore = create((set, get) => ({
       assigns = await window.api.auth.listUserAssignments(user.id);
     } catch (e) { /* default to nothing */ }
     set({ currentUser: user, isAuthenticated: true, permissions: perms, assignments: assigns });
+    // The class list is fetched once at start-up, before anybody has signed
+    // in, so it is the whole school's. Now that we know who this is, read it
+    // again: a teacher's pickers should hold their own classes, and an
+    // administrator's should hold all of them.
+    try { await get().loadClassesAndTerms(); } catch (_) { /* keep the start-up list */ }
   },
   logout: () => {
     const user = get().currentUser;
@@ -24,6 +29,8 @@ export const useStore = create((set, get) => ({
       try { window.api.auth.logout(user.id); } catch (e) {}
     }
     set({ currentUser: null, isAuthenticated: false, permissions: {}, assignments: [] });
+    // Whoever signs in next gets their own list rather than the last person's.
+    get().loadClassesAndTerms().catch(() => {});
   },
 
   // Reload permissions (after an admin changes them) without re-logging in
@@ -40,6 +47,12 @@ export const useStore = create((set, get) => ({
   // can('payroll', 'view') | can('finance', 'edit')
   // Levels: view < create < edit < delete (each implies all lower? No — they are independent)
   can: (module, action = 'view') => {
+    // An administrator or proprietor runs the school and is held back nowhere.
+    // Checked before the map is consulted, so a permission set that came back
+    // empty — a failed load, an account whose designation row went missing —
+    // cannot hide the app from the person who owns it.
+    const designation = get().currentUser?.designation;
+    if (['Proprietor', 'Administrator'].includes(designation)) return true;
     const perms = get().permissions || {};
     const p = perms[module];
     if (!p) return false;

@@ -129,8 +129,15 @@ function registerSettingsHandlers(ipcMain, db, getResourcePath) {
     const security = require('./_security');
     const scopes = require('./_scope');
     const userId = security.getCurrentUserId();
-    if (!userId) return [];
+    // Nobody signed in yet. The app loads the class list once at start-up,
+    // BEFORE the login screen, and caches it for the session — so returning
+    // nothing here emptied every class dropdown in the product for everybody,
+    // administrators included. The list is reference data, not a record; the
+    // handlers that read actual pupils are the ones that enforce scope, and
+    // the renderer reloads this the moment somebody signs in.
+    if (!userId) return rows;
     const only = scopes.visibleClassIds(db, scopes.scopeFor(db, userId));
+    // null means unrestricted — an administrator, proprietor or head teacher.
     if (!only) return rows;
     return rows.filter(r => only.has(Number(r.id)));
   });
