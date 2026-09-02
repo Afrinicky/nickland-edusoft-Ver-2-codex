@@ -3,10 +3,11 @@ import React, { useCallback, useState } from 'react';
 import { Text, RefreshControl } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/auth';
+import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import { Screen, Card, Muted, Row, Loading, ErrorNote } from '../../src/ui';
 
-export default function Students() {
+function StudentsScreen() {
   const { token } = useAuth();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
@@ -33,5 +34,16 @@ export default function Students() {
         ))}
       </Card>
     </Screen>
+  );
+}
+
+// Reachable by URL in the browser build, so the screen guards itself rather
+// than relying on the tab bar having hidden it. The server checks the same
+// permissions on every request regardless.
+export default function Students() {
+  return (
+    <RequireModule modules={[['students', 'view']]}>
+      <StudentsScreen />
+    </RequireModule>
   );
 }

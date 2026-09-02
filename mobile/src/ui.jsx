@@ -73,6 +73,12 @@ export function ErrorNote({ message }) {
   return <View style={styles.errorBox}><Text style={{ color: colors.danger }}>{message}</Text></View>;
 }
 
+// The neutral counterpart to ErrorNote: progress and instructions, not failure.
+export function InfoNote({ message }) {
+  if (!message) return null;
+  return <View style={styles.infoBox}><Text style={{ color: colors.text }}>{message}</Text></View>;
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   screenContent: { padding: spacing.lg, gap: spacing.md },
@@ -87,4 +93,5 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   errorBox: { backgroundColor: '#FEF2F2', borderRadius: radius.sm, padding: spacing.md, borderWidth: 1, borderColor: '#FECACA' },
+  infoBox: { backgroundColor: '#EFF6FF', borderRadius: radius.sm, padding: spacing.md, borderWidth: 1, borderColor: '#BFDBFE' },
 });

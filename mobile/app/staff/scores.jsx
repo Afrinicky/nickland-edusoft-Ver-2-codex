@@ -5,12 +5,13 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView } from 'react-native';
 import { Stack } from 'expo-router';
 import { useAuth } from '../../src/auth';
+import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import { Screen, Card, H2, Muted, Button, Loading, ErrorNote } from '../../src/ui';
 import { colors, radius } from '../../src/theme';
 import { ClassPicker } from './attendance';
 
-export default function Scores() {
+function ScoresScreen() {
   const { token } = useAuth();
   const [classes, setClasses] = useState(null);
   const [classId, setClassId] = useState(null);
@@ -122,5 +123,16 @@ export default function Scores() {
         </>
       )}
     </Screen>
+  );
+}
+
+// Reachable by URL in the browser build, so the screen guards itself rather
+// than relying on the tab bar having hidden it. The server checks the same
+// permissions on every request regardless.
+export default function Scores() {
+  return (
+    <RequireModule modules={[['academics', 'view']]}>
+      <ScoresScreen />
+    </RequireModule>
   );
 }

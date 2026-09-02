@@ -20,6 +20,9 @@ let BASE = null;
 let MODE = 'host';          // 'host' | 'cloud'
 let SCHOOL_ID = null;       // required in cloud mode (chosen at connect time)
 let ROLE = null;            // 'parent' | 'staff' — which surface this session is on
+// Stamped on password requests so the Administrator approving one can see
+// whether it came from a phone or a browser.
+const SOURCE = (typeof navigator !== 'undefined' && navigator.product !== 'ReactNative') ? 'web' : 'mobile';
 
 export function setConnection({ baseUrl, mode = 'host', schoolId = null, role = null } = {}) {
   BASE = baseUrl ? baseUrl.replace(/\/+$/, '') : null;
@@ -128,6 +131,39 @@ export const api = {
       ? request('/staff/login', { method: 'POST', body: { school_id: SCHOOL_ID, username, password } })
       : request('/auth/login', { method: 'POST', body: { username, password, device } }),
   parentRegister: (data) => request('/auth/parent/register', { method: 'POST', body: data }),
+
+  // ── Passwords ──
+  // Available on both connections. Approving a reset is on neither: an
+  // Administrator does that at the school, face to face, and hands over a
+  // six-digit code. Everything here either raises a request or spends one.
+  requestPasswordReset: ({ username, reason }) =>
+    MODE === 'cloud'
+      ? request('/staff/password-reset/request', {
+          method: 'POST',
+          body: { school_id: SCHOOL_ID, username, reason, source: SOURCE },
+        })
+      : request('/auth/password-reset/request', { method: 'POST', body: { username, reason, source: SOURCE } }),
+
+  // Only the desktop can be asked whether a request has been decided; over the
+  // internet the claim shows up when the school next syncs, so the app tells
+  // the user to come back with their code rather than polling for nothing.
+  passwordResetStatus: ({ username }) =>
+    MODE === 'cloud'
+      ? Promise.resolve({ ok: true, status: 'unknown' })
+      : request('/auth/password-reset/status', { method: 'POST', body: { username } }),
+
+  completePasswordReset: ({ username, code, newPassword }) =>
+    MODE === 'cloud'
+      ? request('/staff/password-reset/complete', {
+          method: 'POST',
+          body: { school_id: SCHOOL_ID, username, code, newPassword, source: SOURCE },
+        })
+      : request('/auth/password-reset/complete', { method: 'POST', body: { username, code, newPassword } }),
+
+  changePassword: (token, { currentPassword, newPassword }) =>
+    request(MODE === 'cloud' ? '/staff/password' : '/auth/password', {
+      method: 'POST', token, body: { currentPassword, newPassword, source: SOURCE },
+    }),
 
   parentLogin: (identifier, password, device) =>
     MODE === 'cloud'

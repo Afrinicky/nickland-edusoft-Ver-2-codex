@@ -3,11 +3,12 @@ import React, { useCallback, useState } from 'react';
 import { Text, RefreshControl } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/auth';
+import { RequireModule } from '../../src/guard';
 import { api, money } from '../../src/api';
 import { Screen, Card, Muted, Row, Loading, ErrorNote } from '../../src/ui';
 import { colors } from '../../src/theme';
 
-export default function Debtors() {
+function DebtorsScreen() {
   const { token } = useAuth();
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
@@ -37,5 +38,16 @@ export default function Debtors() {
         ))}
       </Card>
     </Screen>
+  );
+}
+
+// Reachable by URL in the browser build, so the screen guards itself rather
+// than relying on the tab bar having hidden it. The server checks the same
+// permissions on every request regardless.
+export default function Debtors() {
+  return (
+    <RequireModule modules={[['fees', 'view']]}>
+      <DebtorsScreen />
+    </RequireModule>
   );
 }
