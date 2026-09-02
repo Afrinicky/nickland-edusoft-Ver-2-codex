@@ -203,12 +203,22 @@ ck('...not a subject teacher’s in a class they visit', denied(call('scores:sav
 ck('a teacher cannot rebuild the period structure', denied(call('timetable:save-period', {})));
 ck('...nor put an entry in another class’s timetable', denied(call('timetable:save-entry', B4, { classId: B4 })));
 
-// ══ 9. an unlisted channel is closed, not open ══
-guarded.handle('something:new', () => ({ ok: true, ran: true }));
+// ══ 9. a channel nobody listed is still governed ══
+// The policy table does not name all 380 channels, and refusing everything it
+// misses locked every non-admin account out of screens nobody had got round
+// to listing. An unlisted channel now takes the module and action derived
+// from its own name, so it is checked like any other rather than refused for
+// not being written down.
+guarded.handle('payroll:list-something', () => ({ ok: true, ran: true }));
+guarded.handle('students:invent-a-pupil', () => ({ ok: true, ran: true }));
 as(justice);
-ck('a handler nobody wrote a rule for is denied to a teacher', denied(call('something:new')));
+ck('an unlisted payroll channel is refused to a teacher with no payroll access',
+  denied(call('payroll:list-something')));
+ck('an unlisted students channel with an unrecognised verb is treated as a change',
+  denied(call('students:invent-a-pupil')));
 as(admin);
-ck('...and still answers the administrator', ran(call('something:new')));
+ck('...and both answer the administrator',
+  ran(call('payroll:list-something')) && ran(call('students:invent-a-pupil')));
 
 // ══ 10. the people who run the school are not scoped ══
 ck('the administrator reaches every class', ran(call('scores:class-sheet', { classId: B4, subjectId: FRENCH })));
@@ -264,7 +274,109 @@ ck('a head teacher is not confined to one class',
     listed.some(c => c.class_id === B4 && !c.staff_id));
 }
 
-// ══ 12. denials are recorded ══
+// ══ 12. the administrator is not restricted anywhere ══
+// The rule the school stated outright. Nothing below — a missing table entry,
+// an unknown channel, an account whose designation row went missing in an old
+// restore — may hold an administrator back.
+{
+  as(admin);
+  guarded.handle('anything:at-all', () => ({ ok: true, ran: true }));
+  ck('an administrator passes a channel with no rule and no known module',
+    ran(call('anything:at-all')));
+  ck('...reaches every class', ran(call('scores:class-sheet', { classId: B4, subjectId: FRENCH })));
+  ck('...takes any class’s canteen', ran(call('canteen:class-roster-for-date', { classId: B6 })));
+  ck('...and rebuilds the period structure', ran(call('timetable:save-period', {})));
+
+  // An administrator whose designation_id never got set — an old restore, or a
+  // bootstrap that ran before the designations existed — still has to be able
+  // to run the school. The session they signed in with says who they are.
+  const orphan = makeUser({ username: 'orphan', designation: 'Administrator', staffName: 'ORPHAN' });
+  db.prepare('UPDATE users SET designation_id = NULL WHERE id = ?').run(orphan.userId);
+  as(orphan);
+  ck('an administrator with no designation row on file is still not locked out',
+    ran(call('students:create', { surname: 'X' })));
+}
+
+// ══ 13. every channel the app registers resolves to something sensible ══
+// The regression this exists to stop: the first version of the policy refused
+// any channel it did not name, and the table named 98 of 381. Every non-admin
+// account broke on the other 283. A rule derived from the channel's own name
+// now covers them, and this checks the derivation over the REAL channel list
+// rather than a sample, so a future rename cannot quietly reopen the hole.
+{
+  const { execSync } = require('child_process');
+  const { POLICY, ALWAYS_ALLOWED, fallbackRule } = require(path.join(ROOT, 'electron/ipc/_policy.js'));
+  const channels = execSync(
+    `grep -rhno "ipcMain.handle('[^']*'" ${path.join(ROOT, 'electron/ipc')}/*.js | sed "s/.*handle('//; s/'$//"`,
+    { shell: '/bin/bash' }
+  ).toString().trim().split('\n').filter(Boolean);
+
+  ck('the channel list was actually found', channels.length > 300);
+
+  const unresolved = channels.filter(c =>
+    !POLICY[c] && !ALWAYS_ALLOWED.has(c) && !fallbackRule(c) && !c.startsWith('auth:'));
+  ck('every channel resolves to a module, or is auth (which guards itself)',
+    unresolved.length === 0);
+
+  // A channel that only reads but is named after what it produces would ask
+  // for edit and lock out a legitimate viewer. These are named in POLICY; the
+  // check is that none has been missed.
+  const readShaped = /(^|-)(list|get|export|print|preview|summary|report|sheet|stats|status|dashboard|history|detail|search|find)(-|$)/;
+  const misread = channels.filter(c => {
+    if (POLICY[c] || ALWAYS_ALLOWED.has(c)) return false;
+    const r = fallbackRule(c);
+    return r && r[1] !== 'view' && readShaped.test(c.split(':')[1] || '');
+  });
+  ck('no read-only channel is derived as a change', misread.length === 0);
+
+  // And the reverse, which is the one that matters for safety: nothing that
+  // plainly writes may come out as a view. Applied to DERIVED rules only —
+  // a POLICY entry is a reviewed decision, and some of them read despite the
+  // name (workbook:import-history lists past imports, it does not run one).
+  const writeShaped = /^(create|add|save|update|delete|remove|import|mark|record|void|reverse|reset|revoke)/;
+  const misWritten = channels.filter(c => {
+    if (POLICY[c] || ALWAYS_ALLOWED.has(c) || c.startsWith('auth:')) return false;
+    const r = fallbackRule(c);
+    return r && r[1] === 'view' && writeShaped.test(c.split(':')[1] || '');
+  });
+  ck('nothing that plainly writes is derived as a read', misWritten.length === 0);
+}
+
+// ══ 14. the class list survives the app's own start-up order ══
+// The regression the school hit: the app reads the class list ONCE at
+// start-up, before the login screen, and caches it for the session. Filtering
+// it by the signed-in user meant returning nothing to a caller who had not
+// signed in yet — so every class dropdown in the product came up empty, for
+// everybody, administrators included.
+{
+  const ipc3 = fakeIpcMain();
+  const guarded3 = guardedIpcMain(ipc3, db);
+  require(path.join(ROOT, 'electron/ipc/settings.js'))(guarded3, db, () => '');
+  const listClasses = () => ipc3.handlers.get('settings:list-classes')({});
+
+  security.clearCurrentUser();
+  const atStartup = listClasses();
+  ck('the class list is served before anybody signs in',
+    Array.isArray(atStartup) && atStartup.length > 0);
+
+  as(admin);
+  const forAdmin = listClasses();
+  ck('an administrator sees every class', forAdmin.length === atStartup.length);
+
+  as(head);
+  ck('a head teacher sees every class', listClasses().length === atStartup.length);
+
+  as(justice);
+  const forTeacher = listClasses();
+  ck('a class teacher sees only their own classes',
+    forTeacher.length > 0 && forTeacher.length < atStartup.length);
+  ck('...and their own class is among them',
+    forTeacher.some(c => Number(c.id) === B5));
+  ck('...and a class they have nothing to do with is not',
+    !forTeacher.some(c => Number(c.id) === B4));
+}
+
+// ══ 15. denials are recorded ══
 const denials = db.prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'permission_denied'").get().c;
 ck('every refusal is written to the audit log', denials > 0);
 

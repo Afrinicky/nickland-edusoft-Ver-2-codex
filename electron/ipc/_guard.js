@@ -19,7 +19,7 @@
 
 const security = require('./_security');
 const scopes = require('./_scope');
-const { POLICY, ALWAYS_ALLOWED } = require('./_policy');
+const { POLICY, ALWAYS_ALLOWED, fallbackRule } = require('./_policy');
 
 const ACTION_LABEL = {
   view: 'view', create: 'add to', edit: 'change', delete: 'delete from',
@@ -73,20 +73,26 @@ function guardedIpcMain(ipcMain, db) {
             : deny(db, channel, 'Please sign in.');
         }
 
-        const scope = scopes.scopeFor(db, userId);
-        // The people who run the school are not scoped, and their permissions
-        // are checked by checkPermission as before.
         if (ALWAYS_ALLOWED.has(channel)) return handler(event, ...args);
 
-        const rule = POLICY[channel];
-        if (!rule) {
-          // Unlisted. Anyone unrestricted carries on — the handlers outside
-          // the policy are the office-side ones they already own. Everybody
-          // else is refused, so a handler added later is closed by default
-          // instead of quietly open.
-          if (scope.unrestricted) return handler(event, ...args);
-          return deny(db, channel, 'Access denied. Ask an Administrator if you need this.');
-        }
+        // An administrator or proprietor runs the school and is held back
+        // nowhere. Checked first and on its own, so no later rule — a missing
+        // table entry, an unrecognised channel, a designation row that went
+        // missing in an old restore — can lock them out of their own system.
+        //
+        // A Head Teacher is NOT included: they are unrestricted as to WHICH
+        // class (see the scope check below, which they pass), but payroll and
+        // finance are still theirs only if the school granted them.
+        if (security.isElevated(db, userId)) return handler(event, ...args);
+
+        const scope = scopes.scopeFor(db, userId);
+
+        // Listed channels use their declared rule; anything else has one
+        // derived from its name (see _policy.js). Refusing unlisted channels
+        // outright, which is what this did at first, broke every non-admin
+        // account on screens nobody had got round to listing.
+        const rule = POLICY[channel] || fallbackRule(channel);
+        if (!rule) return handler(event, ...args);
 
         const [module, action, scopeRule] = rule;
         if (!security.checkPermission(db, module, action)) {

@@ -569,8 +569,20 @@ function resolveEffectivePermissions(db, userId) {
     }
   }
 
-  // 3. Proprietor + Administrator always get full access (safety net)
-  if (['Proprietor', 'Administrator'].includes(user.designation_name)) {
+  // 3. Proprietor + Administrator always get full access (safety net).
+  // The designation is read from the account, and falls back to the one
+  // captured at sign-in when the row carries none — an old restore, or a
+  // bootstrap that ran before the designations existed, leaves designation_id
+  // null, and an administrator with no permissions at all is not a state this
+  // app should ever put a school in.
+  let designation = user.designation_name;
+  if (!designation) {
+    try {
+      const security = require('./_security');
+      if (security.getCurrentUserId() === userId) designation = security.getCurrentDesignation();
+    } catch (_) { /* the session is a fallback, never a requirement */ }
+  }
+  if (['Proprietor', 'Administrator'].includes(designation)) {
     for (const m of modules) {
       result[m] = { canView: true, canCreate: true, canEdit: true, canDelete: true };
     }

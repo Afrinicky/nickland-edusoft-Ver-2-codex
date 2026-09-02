@@ -162,6 +162,23 @@ const POLICY = {
   'homework:save-marks':                ['academics', 'edit'],
   'homework:student-report':            ['academics', 'view', STUDENT('studentId', 'student_id')],
 
+  // ── reads whose names do not look like reads ──────────────────────────────
+  // The derived rule treats an unrecognised verb as a change, on purpose. That
+  // is the safe way round, and it costs exactly these: channels that only read
+  // but are named after what they produce. Naming them here is the fix the
+  // fallback's comment points at — better than loosening the rule for
+  // everybody so that these ten can through.
+  'books:class-payment-sheet':          ['fees', 'view'],
+  'fees:bulk-pay-sheet':                ['fees', 'view'],
+  'workbook:import-history':            ['finance', 'view'],
+  'payroll:paid-summary':               ['payroll', 'view'],
+  'payroll:bulk-preview':               ['payroll', 'view'],
+  'reports:generate-report-cards':      ['academics', 'view'],
+  'reports:class-list':                 ['academics', 'view'],
+  'session:migration-preview':          ['settings', 'view'],
+  'staff:payroll-summary':              ['payroll', 'view'],
+  'staff:clockin-status':               ['staff', 'view'],
+
   // ── canteen ──
   // Taking canteen money for a class is the class teacher's job — one person
   // answerable for one class, which is what the school asked for.
@@ -199,4 +216,63 @@ const ALWAYS_ALLOWED = new Set([
   'photos:upload', 'photos:remove', 'photos:attach', 'photos:discard',
 ]);
 
-module.exports = { POLICY, ALWAYS_ALLOWED };
+// ── the fallback ────────────────────────────────────────────────────────────
+// The table above covers the modules the school reported problems in. It does
+// not cover all 380 channels, and the first version of this file refused
+// anything unlisted outright. That was too blunt by far: a Bursar opening a
+// fee screen, a Secretary printing a report — every one of them hit a denial
+// for a channel nobody had got round to listing yet, and the only account that
+// still worked was the administrator.
+//
+// So an unlisted channel is not refused. Its module and action are derived
+// from its own name and checked exactly as a listed one would be. That keeps
+// the guarantee — nothing runs without a permission behind it — without
+// turning "not yet written down" into "broken".
+const PREFIX_MODULE = {
+  students: 'students', student: 'students',
+  scores: 'academics', exams: 'academics', academics: 'academics',
+  timetable: 'academics', homework: 'academics', 'lesson-notes': 'academics',
+  reports: 'academics',
+  fees: 'fees', receipts: 'fees', discounts: 'fees', books: 'fees',
+  payments: 'fees', bills: 'fees',
+  canteen: 'canteen',
+  staff: 'staff', 'staff-activities': 'staff',
+  payroll: 'payroll',
+  finance: 'finance', workbook: 'finance', inventory: 'finance', transport: 'finance',
+  notifications: 'notifications', messages: 'notifications', announcements: 'notifications',
+  settings: 'settings', access: 'settings', backup: 'settings', cloud: 'settings',
+  mobile: 'settings', 'mobile-sync': 'settings', session: 'settings',
+  dashboard: 'dashboard',
+};
+
+// Drawn from the verbs the app's own channels actually use, and read the safe
+// way round: a channel is a READ only if it says so. Anything unrecognised is
+// treated as a change, so a write with an unusual name cannot slip through on
+// somebody's view permission. The cost is that an oddly-named read may ask for
+// edit — visible, reportable, and fixable by naming it in POLICY, which a
+// silent write-through would not be.
+const READ_VERBS = new RegExp('^(' + [
+  'list', 'get', 'read', 'view', 'show', 'find', 'search', 'fetch',
+  'export', 'print', 'preview', 'render', 'render', 'download',
+  'dashboard', 'summary', 'stats', 'status', 'report', 'sheet', 'rank',
+  'debtors', 'pending', 'today', 'weekly', 'available', 'expected',
+  'effective', 'catalogue', 'categories', 'template', 'paper', 'payslip',
+  'ytd', 'copyable', 'reveal', 'log', 'compute', 'calculate', 'match',
+].join('|') + ')(\\b|-|_|$)');
+
+const DELETE_VERBS = /^(delete|remove|destroy|void|reverse|clear|drop|revoke|reject|unassign)/;
+const CREATE_VERBS = /^(create|add|new|register|generate|issue|import|record|send|seed|setup|run|post|admit|upload|submit|start|clockin|clock)/;
+
+function fallbackRule(channel) {
+  const [prefixRaw, actionRaw = ''] = String(channel).split(':');
+  const module = PREFIX_MODULE[prefixRaw];
+  if (!module) return null;
+  const verb = actionRaw.toLowerCase();
+  const action = DELETE_VERBS.test(verb) ? 'delete'
+    : CREATE_VERBS.test(verb) ? 'create'
+    : READ_VERBS.test(verb) ? 'view'
+    : 'edit';
+  return [module, action, null];
+}
+
+module.exports = { POLICY, ALWAYS_ALLOWED, fallbackRule };
