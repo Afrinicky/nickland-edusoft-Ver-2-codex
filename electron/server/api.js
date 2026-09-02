@@ -13,6 +13,7 @@ const url = require('url');
 const tokens = require('./tokens');
 const webapp = require('./webapp');
 const parents = require('./parents');
+const passwords = require('./passwords');
 const payments = require('./payments_service');
 const { getSetting } = require('../utils/idgen');
 // Required at call-time (not destructured at load) to avoid a load-order
@@ -82,7 +83,8 @@ function subjectContext(db, subject) {
     return { role: 'parent', parent: p, student_ids: parents.studentIdsForParent(db, p.id) };
   }
   const u = db.prepare(`
-    SELECT u.id, u.full_name, u.username, u.staff_id, d.name AS designation
+    SELECT u.id, u.full_name, u.username, u.staff_id, u.must_change_password,
+           d.name AS designation
     FROM users u LEFT JOIN designations d ON d.id = u.designation_id
     WHERE u.id = ? AND u.is_active = 1
   `).get(subject.subject_id);
@@ -172,6 +174,31 @@ function createApiServer(db, opts = {}) {
       user: { id: u.id, full_name: u.full_name, designation: u.designation, role: 'staff' } });
   }, { public: true });
 
+  // Passwords, for a phone on the school Wi-Fi. The same module the desktop's
+  // own screens use (electron/server/passwords.js), so a rule cannot hold in
+  // one place and not the other. Raising a request and redeeming a code both
+  // happen before sign-in, so neither can require a token; approving is not
+  // here at all, because an Administrator does that on the desktop.
+  add('POST', `${API}/auth/password-reset/request`, async (ctx, req, res, params, body, ip) => {
+    if (rateLimited(ip, body.username)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+    return json(res, 200, passwords.requestReset(db, {
+      username: body.username, reason: body.reason, source: body.source || 'mobile',
+    }));
+  }, { public: true });
+
+  add('POST', `${API}/auth/password-reset/status`, async (ctx, req, res, params, body, ip) => {
+    if (rateLimited(ip, body.username)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+    return json(res, 200, passwords.resetStatus(db, { username: body.username }));
+  }, { public: true });
+
+  add('POST', `${API}/auth/password-reset/complete`, async (ctx, req, res, params, body, ip) => {
+    if (rateLimited(ip, body.username)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+    const r = passwords.completeReset(db, {
+      username: body.username, code: body.code, newPassword: body.newPassword,
+    });
+    return json(res, r.ok ? 200 : 400, r);
+  }, { public: true });
+
   add('POST', `${API}/auth/parent/register`, async (ctx, req, res, params, body, ip) => {
     if (rateLimited(ip, body.phone || body.email)) return json(res, 429, { ok: false, error: 'Too many attempts.' });
     if (getSetting(db, 'mobile_parent_self_register', 'true') !== 'true') {
@@ -194,7 +221,26 @@ function createApiServer(db, opts = {}) {
   // ── Authed ──
   add('GET', `${API}/me`, async (ctx, req, res) => {
     if (ctx.role === 'parent') return json(res, 200, { ok: true, role: 'parent', parent: ctx.parent, children: ctx.student_ids.length });
-    return json(res, 200, { ok: true, role: 'staff', user: ctx.user, designation: ctx.designation, is_admin: ctx.is_admin, permissions: ctx.permissions });
+    return json(res, 200, {
+      ok: true, role: 'staff', user: ctx.user, designation: ctx.designation,
+      is_admin: ctx.is_admin, permissions: ctx.permissions,
+      // So the phone insists on a new password before anything else, the same
+      // way the desktop's login screen does.
+      must_change_password: !!ctx.user.must_change_password,
+    });
+  });
+
+  add('POST', `${API}/auth/password`, async (ctx, req, res, params, body) => {
+    // Staff only: a parent's password lives in the parents table and has its
+    // own route. `ctx.user` is whoever the bearer token resolved to, so this
+    // can never be pointed at somebody else's account.
+    if (!ctx || ctx.role !== 'staff') return json(res, 403, { ok: false, error: 'Access denied.' });
+    const r = passwords.changeOwnPassword(db, ctx.user.id, {
+      oldPassword: body.currentPassword ?? body.oldPassword,
+      newPassword: body.newPassword,
+      source: body.source || 'mobile',
+    });
+    return json(res, r.ok ? 200 : 400, r);
   });
 
   add('POST', `${API}/auth/logout`, async (ctx, req, res, params, body, ip, tokenId) => {
