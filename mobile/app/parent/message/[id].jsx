@@ -1,11 +1,12 @@
 // A single parent↔school conversation.
 import React, { useCallback, useState } from 'react';
 import { View, Text } from 'react-native';
-import { Stack, useLocalSearchParams, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../../src/auth';
 import { api } from '../../../src/api';
 import { Screen, Card, Muted, Field, Button, Loading, ErrorNote } from '../../../src/ui';
 import { colors } from '../../../src/theme';
+import { useScreenTitle } from '../../../src/shell';
 
 export default function Conversation() {
   const { id } = useLocalSearchParams();
@@ -15,6 +16,8 @@ export default function Conversation() {
   const [error, setError] = useState(null);
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
+
+  useScreenTitle(data?.thread?.subject || 'Conversation');
 
   const load = useCallback(async () => {
     setError(null);
@@ -40,7 +43,6 @@ export default function Conversation() {
   const t = data?.thread || {};
   return (
     <Screen>
-      <Stack.Screen options={{ title: t.subject || 'Conversation' }} />
       <ErrorNote message={error} />
       <Card>
         {(data.messages || []).length === 0 && <Muted>No messages yet.</Muted>}

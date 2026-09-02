@@ -16,6 +16,8 @@ const parents = require('./parents');
 const passwords = require('./passwords');
 const payments = require('./payments_service');
 const { getSetting } = require('../utils/idgen');
+const scopeLib = require('../ipc/_scope');
+const { registerStaffRoutes } = require('./staff_api');
 // Required at call-time (not destructured at load) to avoid a load-order
 // circular-dependency warning: auth.js attaches resolveEffectivePermissions
 // to module.exports after its main export.
@@ -103,6 +105,11 @@ function can(ctx, module, action = 'view') {
   return !!p[map[action] || 'canView'];
 }
 
+// Permissions say whether an account may touch a module at all. This says
+// WHOSE class — the rule the desktop enforces through `_scope.js`, which this
+// server was ignoring: a Subject Teacher signing in over the Wi-Fi was handed
+// every class in the school. One resolver, both surfaces.
+
 // ── data helpers (read straight from the canonical DB) ──
 function childSummary(db, studentId) {
   const s = db.prepare(`
@@ -148,6 +155,11 @@ function createApiServer(db, opts = {}) {
     }
     return params;
   };
+
+  // The signed-in teacher's class/subject scope. Cheap enough per request —
+  // a handful of rows — and always re-read, so an assignment changed in the
+  // office takes effect on the next tap rather than the next sign-in.
+  const scopeOf = (ctx) => scopeLib.scopeFor(db, ctx.user.id);
 
   // ── Public ──
   add('GET', `${API}/health`, async (ctx, req, res) => json(res, 200, { ok: true, name: getSetting(db, 'school_name', 'School'), api: 'v1' }), { public: true });
@@ -218,12 +230,65 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, token: t.token, expires_at: t.expires_at, parent: r.parent });
   }, { public: true });
 
+  // ── One sign-in box ──
+  // The app used to ask "are you a parent or a member of staff?" before it
+  // asked who you were. Nobody has ever had to answer that at the school gate,
+  // and getting it wrong reads as a wrong password. The credential decides:
+  // a staff username is matched first, then a parent's phone or email, and the
+  // reply says which surface it belongs to.
+  //
+  // Order matters. Usernames and phone numbers live in different tables and a
+  // school could conceivably issue a username that looks like a phone number,
+  // so staff are tried first and a match ends it — an account is never
+  // authenticated twice against two different passwords.
+  add('POST', `${API}/auth/signin`, async (ctx, req, res, params, body, ip) => {
+    const identifier = String(body.identifier || body.username || '').trim();
+    if (rateLimited(ip, identifier)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+    if (!identifier || !body.password) return json(res, 400, { ok: false, error: 'Enter your username or phone, and your password.' });
+
+    let bcrypt = null;
+    try { bcrypt = require('bcryptjs'); } catch (_) {}
+    if (bcrypt) {
+      const u = db.prepare(`
+        SELECT u.*, d.name AS designation FROM users u LEFT JOIN designations d ON d.id = u.designation_id
+        WHERE u.username = ? AND u.is_active = 1
+      `).get(identifier);
+      if (u && u.password_hash && bcrypt.compareSync(String(body.password), u.password_hash)) {
+        const t = tokens.issueToken(db, 'user', u.id, { deviceName: body.device, platform: body.platform });
+        return json(res, 200, {
+          ok: true, role: 'staff', token: t.token, expires_at: t.expires_at,
+          user: { id: u.id, full_name: u.full_name, designation: u.designation, role: 'staff' },
+        });
+      }
+    }
+
+    const r = parents.loginParent(db, { identifier, password: body.password });
+    if (r.ok) {
+      const t = tokens.issueToken(db, 'parent', r.parent.id, { deviceName: body.device, platform: body.platform });
+      return json(res, 200, { ok: true, role: 'parent', token: t.token, expires_at: t.expires_at, parent: r.parent });
+    }
+
+    // Deliberately one message for both tables. Saying "that username exists
+    // but the password is wrong" tells an outsider which of the school's
+    // accounts are real.
+    return json(res, 401, { ok: false, error: 'Those details did not match an account. Check and try again.' });
+  }, { public: true });
+
   // ── Authed ──
   add('GET', `${API}/me`, async (ctx, req, res) => {
-    if (ctx.role === 'parent') return json(res, 200, { ok: true, role: 'parent', parent: ctx.parent, children: ctx.student_ids.length });
+    if (ctx.role === 'parent') {
+      return json(res, 200, {
+        ok: true, role: 'parent', parent: ctx.parent, children: ctx.student_ids.length,
+        school: { name: getSetting(db, 'school_name', 'School') },
+      });
+    }
     return json(res, 200, {
       ok: true, role: 'staff', user: ctx.user, designation: ctx.designation,
       is_admin: ctx.is_admin, permissions: ctx.permissions,
+      // The app's chrome names the school. Without this the browser build
+      // headed a teacher's screen "Nickland Edusoft" rather than their own
+      // school, which the cloud's /staff/me has always returned.
+      school: { name: getSetting(db, 'school_name', 'School') },
       // So the phone insists on a new password before anything else, the same
       // way the desktop's login screen does.
       must_change_password: !!ctx.user.must_change_password,
@@ -407,10 +472,25 @@ function createApiServer(db, opts = {}) {
 
   add('GET', `${API}/students`, async (ctx, req, res, params, body, ip, tokenId, query) => {
     if (!can(ctx, 'students', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
-    let sql = `SELECT s.id, s.index_number, s.surname, s.first_name, s.gender, c.name AS class_name
+    let sql = `SELECT s.id, s.index_number, s.surname, s.first_name, s.gender, s.photo_path,
+                      s.current_class_id, c.name AS class_name
                FROM students s LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.status='Active'`;
     const p = [];
     if (query.classId) { sql += ' AND s.current_class_id = ?'; p.push(query.classId); }
+    // The roll a teacher may read is the roll of the classes that are theirs.
+    // Filtering in SQL rather than after the LIMIT, so a teacher of one class
+    // is not handed the first 500 pupils in the school and then shown four.
+    const visible = scopeLib.visibleClassIds(db, scopeOf(ctx));
+    if (visible) {
+      if (visible.size === 0) return json(res, 200, { ok: true, students: [] });
+      sql += ` AND s.current_class_id IN (${[...visible].map(() => '?').join(',')})`;
+      p.push(...visible);
+    }
+    if (query.q) {
+      sql += ' AND (s.surname LIKE ? OR s.first_name LIKE ? OR s.other_names LIKE ? OR s.index_number LIKE ?)';
+      const like = `%${String(query.q).slice(0, 60)}%`;
+      p.push(like, like, like, like);
+    }
     sql += ' ORDER BY s.surname, s.first_name LIMIT 500';
     return json(res, 200, { ok: true, students: db.prepare(sql).all(...p) });
   });
@@ -435,8 +515,16 @@ function createApiServer(db, opts = {}) {
     if (!can(ctx, 'students', 'view') && !can(ctx, 'academics', 'view') && !can(ctx, 'canteen', 'view')) {
       return json(res, 403, { ok: false, error: 'Access denied.' });
     }
-    const classes = db.prepare('SELECT id, name, short_code FROM class_groups ORDER BY level_order, name').all();
-    return json(res, 200, { ok: true, classes });
+    const scope = scopeOf(ctx);
+    const visible = scopeLib.visibleClassIds(db, scope);
+    let classes = db.prepare('SELECT id, name, short_code FROM class_groups ORDER BY level_order, name').all();
+    // A teacher is not offered Basic 6 and then told access denied on choosing
+    // it. `null` means unrestricted — a head teacher sees the whole school.
+    if (visible) classes = classes.filter(c => visible.has(Number(c.id)));
+    return json(res, 200, {
+      ok: true,
+      classes: classes.map(c => ({ ...c, is_class_teacher: scopeLib.isClassTeacherOf(scope, c.id) })),
+    });
   });
 
   // ── Attendance register: roster for a class on a date, with any marks set ──
@@ -445,6 +533,9 @@ function createApiServer(db, opts = {}) {
     const classId = parseInt(query.classId, 10);
     const date = query.date;
     if (!classId || !date) return json(res, 400, { ok: false, error: 'classId and date are required.' });
+    // The register belongs to the class teacher; a subject teacher who takes
+    // one lesson in the class does not mark who is in school that day.
+    if (!scopeLib.canAccessClass(scopeOf(ctx), classId)) return json(res, 403, { ok: false, error: 'That class is not yours.' });
     const students = db.prepare(`
       SELECT id, index_number, surname, first_name, other_names
       FROM students WHERE current_class_id = ? AND status = 'Active'
@@ -471,6 +562,18 @@ function createApiServer(db, opts = {}) {
     if (!can(ctx, 'students', 'edit') && !can(ctx, 'academics', 'edit')) return json(res, 403, { ok: false, error: 'Access denied.' });
     const { date, marks } = body; // marks: [{ student_id, status, notes }]
     if (!date || !Array.isArray(marks)) return json(res, 400, { ok: false, error: 'date and marks[] required.' });
+    // A mark carries a pupil id and nothing else, so the class has to be
+    // resolved from the pupil before it can be checked. Refuse the whole batch
+    // rather than silently dropping the rows that fall outside: a register
+    // that saves "some of it" is worse than one that says no.
+    {
+      const scope = scopeOf(ctx);
+      for (const m of marks) {
+        if (!scopeLib.canAccessStudent(db, scope, parseInt(m.student_id, 10))) {
+          return json(res, 403, { ok: false, error: 'That class is not yours.' });
+        }
+      }
+    }
     const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
     const up = db.prepare(`
       INSERT INTO student_attendance (student_id, date, status, marked_by, term_id, notes)
@@ -503,12 +606,16 @@ function createApiServer(db, opts = {}) {
     if (!can(ctx, 'academics', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
     const classId = parseInt(query.classId, 10);
     if (!classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+    if (!scopeLib.canAccessClass(scopeOf(ctx), classId)) return json(res, 403, { ok: false, error: 'That class is not yours.' });
     let subjects = db.prepare(`
       SELECT s.id, s.name, s.code FROM subjects s
       JOIN class_subjects cs ON cs.subject_id = s.id
       WHERE cs.class_group_id = ? AND s.is_active = 1 ORDER BY s.name
     `).all(classId);
     if (subjects.length === 0) subjects = db.prepare('SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name').all();
+    // A subject teacher visiting a class sees their subject and no other.
+    const allowed = scopeLib.visibleSubjectIds(db, scopeOf(ctx), classId);
+    if (allowed) subjects = subjects.filter(s => allowed.has(Number(s.id)));
     return json(res, 200, { ok: true, subjects });
   });
 
@@ -518,6 +625,9 @@ function createApiServer(db, opts = {}) {
     const classId = parseInt(query.classId, 10);
     const subjectId = parseInt(query.subjectId, 10);
     if (!classId || !subjectId) return json(res, 400, { ok: false, error: 'classId and subjectId are required.' });
+    if (!scopeLib.canAccessSubject(scopeOf(ctx), classId, subjectId)) {
+      return json(res, 403, { ok: false, error: 'That subject is not yours in this class.' });
+    }
     const term = db.prepare('SELECT id, label FROM terms WHERE is_current = 1').get();
     if (!term) return json(res, 200, { ok: true, term: null, students: [] });
     const students = db.prepare(`
@@ -548,6 +658,15 @@ function createApiServer(db, opts = {}) {
     if (!subjectId || !Array.isArray(marks)) return json(res, 400, { ok: false, error: 'subjectId and marks[] required.' });
     const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
     if (!term) return json(res, 400, { ok: false, error: 'No current term is set.' });
+    {
+      const scope = scopeOf(ctx);
+      for (const m of marks) {
+        const cid = scopeLib.classOfStudent(db, parseInt(m.student_id, 10));
+        if (!cid || !scopeLib.canAccessSubject(scope, cid, subjectId)) {
+          return json(res, 403, { ok: false, error: 'That subject is not yours in this class.' });
+        }
+      }
+    }
     const { saveExamMark } = require('../ipc/scores');
     let n = 0;
     try {
@@ -576,6 +695,9 @@ function createApiServer(db, opts = {}) {
       WHERE s.id = ? AND s.status = 'Active'
     `).get(sid);
     if (!s) return json(res, 404, { ok: false, error: 'Student not found.' });
+    // Which pupils are in another class is not this teacher's to learn either,
+    // so an out-of-scope lookup answers not-found rather than forbidden.
+    if (!scopeLib.canAccessStudent(db, scopeOf(ctx), sid)) return json(res, 404, { ok: false, error: 'Student not found.' });
     const term = db.prepare('SELECT id, label FROM terms WHERE is_current = 1').get();
     const rate = parseFloat(getSetting(db, 'canteen_daily_rate', '5'));
     const unpaidDays = term ? db.prepare(`
@@ -596,6 +718,7 @@ function createApiServer(db, opts = {}) {
     if (!can(ctx, 'canteen', 'create')) return json(res, 403, { ok: false, error: 'Access denied.' });
     const sid = parseInt(body.student_id, 10);
     if (!sid) return json(res, 400, { ok: false, error: 'student_id is required.' });
+    if (!scopeLib.canAccessStudent(db, scopeOf(ctx), sid)) return json(res, 404, { ok: false, error: 'Student not found.' });
     const { recordCanteenPayment } = require('../ipc/canteen');
     let result;
     try {
@@ -630,8 +753,10 @@ function createApiServer(db, opts = {}) {
     if (ctx.role !== 'staff' || (!can(ctx, 'academics', 'view') && !can(ctx, 'students', 'view'))) {
       return json(res, 403, { ok: false, error: 'Access denied.' });
     }
+    const classId = parseInt(params.id, 10);
+    if (!scopeLib.canAccessClass(scopeOf(ctx), classId)) return json(res, 403, { ok: false, error: 'That class is not yours.' });
     const tt = require('../ipc/timetable');
-    return json(res, 200, { ok: true, ...tt.getClassTimetable(db, parseInt(params.id, 10)) });
+    return json(res, 200, { ok: true, ...tt.getClassTimetable(db, classId) });
   });
 
   // ── Timetable: a parent's child's class grid ──
@@ -650,6 +775,7 @@ function createApiServer(db, opts = {}) {
     if (ctx.role !== 'staff' || !can(ctx, 'academics', 'view')) return json(res, 403, { ok: false, error: 'Access denied.' });
     const classId = parseInt(query.classId, 10);
     if (!classId) return json(res, 400, { ok: false, error: 'classId is required.' });
+    if (!scopeLib.canAccessClass(scopeOf(ctx), classId)) return json(res, 403, { ok: false, error: 'That class is not yours.' });
     const hw = require('../ipc/homework');
     return json(res, 200, { ok: true, homework: hw.listForClass(db, classId, { all: query.all === '1' }) });
   });
@@ -658,6 +784,10 @@ function createApiServer(db, opts = {}) {
   add('POST', `${API}/homework`, async (ctx, req, res, params, body) => {
     if (ctx.role !== 'staff' || !can(ctx, 'academics', 'edit')) return json(res, 403, { ok: false, error: 'Access denied.' });
     const hw = require('../ipc/homework');
+    if (!scopeLib.canAccessSubject(scopeOf(ctx), parseInt(body.classId, 10), parseInt(body.subjectId, 10))
+        && !scopeLib.canAccessClass(scopeOf(ctx), parseInt(body.classId, 10))) {
+      return json(res, 403, { ok: false, error: 'That class is not yours.' });
+    }
     const r = hw.saveHomework(db, {
       classId: parseInt(body.classId, 10), subjectId: body.subjectId || null,
       teacherId: ctx.user.staff_id || null, title: body.title,
@@ -675,6 +805,8 @@ function createApiServer(db, opts = {}) {
     const hw = require('../ipc/homework');
     const sheet = hw.getSheet(db, parseInt(params.id, 10));
     if (!sheet) return json(res, 404, { ok: false, error: 'Homework not found.' });
+    const cid = sheet.homework && sheet.homework.class_group_id;
+    if (cid && !scopeLib.canAccessClass(scopeOf(ctx), cid)) return json(res, 404, { ok: false, error: 'Homework not found.' });
     return json(res, 200, { ok: true, ...sheet });
   });
 
@@ -703,6 +835,13 @@ function createApiServer(db, opts = {}) {
     const tr = require('../ipc/transport');
     return json(res, 200, { ok: true, transport: tr.transportForStudent(db, sid) });
   });
+
+  // Everything a teacher does that the desktop offers and this server did not:
+  // a pupil's record, register history, continuous assessment, the broadsheet
+  // and the terminal report, lesson notes, messages, notices, the canteen
+  // sheet, and their own clock-in, leave and payslips. Kept in its own module
+  // so this one stays the router rather than the whole school.
+  registerStaffRoutes({ add, db, json, can, API, getSetting });
 
   function readRaw(req) {
     return new Promise((resolve) => {

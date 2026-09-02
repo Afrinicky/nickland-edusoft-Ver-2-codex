@@ -1,125 +1,164 @@
-// Score entry — pick a class + subject, enter each student's raw exam mark
-// (0–100) for the current term. The host converts + totals it using the same
-// WHONET weighting the desktop uses (POST /scores → saveExamMark).
-import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView } from 'react-native';
-import { Stack } from 'expo-router';
+// Exam marks — the raw paper score, out of 100, for a class and subject.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// The school weights this against the class work (see Class work) using the
+// same figures the desktop does, so the screen shows what the weighting will
+// make of a mark rather than leaving a teacher to wonder why 80 became 48.
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { View, Text, TextInput, RefreshControl } from 'react-native';
 import { useAuth } from '../../src/auth';
 import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
-import { Screen, Card, H2, Muted, Button, Loading, ErrorNote } from '../../src/ui';
-import { colors, radius } from '../../src/theme';
-import { ClassPicker } from './attendance';
+import {
+  Screen, Card, Section, Heading, Muted, Micro, Button, Badge, Grid, StatCard,
+  ErrorNote, SuccessNote, Skeleton, EmptyState, PendingBadge,
+} from '../../src/ui';
+import { ClassPicker, SubjectPicker, useClasses, useSubjects } from '../../src/pickers';
+import { useLayout } from '../../src/responsive';
+import { colors, spacing, radius, type } from '../../src/theme';
 
 function ScoresScreen() {
-  const { token } = useAuth();
-  const [classes, setClasses] = useState(null);
+  const { token, mode } = useAuth();
+  const layout = useLayout();
+  const { classes, error: classError } = useClasses(token);
+
   const [classId, setClassId] = useState(null);
-  const [subjects, setSubjects] = useState([]);
   const [subjectId, setSubjectId] = useState(null);
-  const [term, setTerm] = useState(null);
-  const [rows, setRows] = useState(null);
-  const [values, setValues] = useState({}); // { studentId: '85' }
+  const subjects = useSubjects(token, classId);
+
+  const [sheet, setSheet] = useState(null);
+  const [values, setValues] = useState({});
+  const [dirty, setDirty] = useState(false);
   const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    api.classes(token).then(r => setClasses(r.classes || [])).catch(e => { setError(e.message); setClasses([]); });
-  }, [token]);
+    if (classId == null && classes && classes.length === 1) setClassId(classes[0].id);
+  }, [classes, classId]);
+  useEffect(() => { setSubjectId(null); setSheet(null); }, [classId]);
+  useEffect(() => {
+    if (subjectId == null && subjects && subjects.length === 1) setSubjectId(subjects[0].id);
+  }, [subjects, subjectId]);
 
-  const loadSubjects = useCallback(async (cid) => {
-    setSubjects([]); setSubjectId(null); setRows(null); setSaved(null);
-    try { const r = await api.scoreSubjects(token, cid); setSubjects(r.subjects || []); }
-    catch (e) { setError(e.message); }
-  }, [token]);
-
-  useEffect(() => { if (classId) loadSubjects(classId); }, [classId, loadSubjects]);
-
-  const loadSheet = useCallback(async (cid, sid) => {
-    setRows(null); setError(null); setSaved(null);
+  const load = useCallback(async () => {
+    if (!classId || !subjectId) return;
+    setSheet(null); setError(null); setSaved(null); setDirty(false);
     try {
-      const r = await api.scoreSheet(token, cid, sid);
-      setTerm(r.term);
-      setRows(r.students || []);
-      const init = {};
-      for (const s of (r.students || [])) init[s.id] = s.exam_score == null ? '' : String(s.exam_score);
-      setValues(init);
-    } catch (e) { setError(e.message); setRows([]); }
-  }, [token]);
+      const r = await api.scoreSheet(token, classId, subjectId);
+      setSheet(r);
+      setValues(Object.fromEntries((r.students || []).map(s => [s.id, s.exam_score == null ? '' : String(s.exam_score)])));
+    } catch (e) { setError(e.message); setSheet({ students: [] }); }
+  }, [token, classId, subjectId]);
 
-  useEffect(() => { if (classId && subjectId) loadSheet(classId, subjectId); }, [classId, subjectId, loadSheet]);
+  useEffect(() => { load(); }, [load]);
+
+  const entered = useMemo(() => Object.values(values).filter(v => v !== '' && v != null).length, [values]);
+  const numbers = useMemo(() => Object.values(values).map(Number).filter(n => Number.isFinite(n)), [values]);
+  const average = numbers.length ? Math.round((numbers.reduce((a, b) => a + b, 0) / numbers.length) * 10) / 10 : null;
+
+  // A mark that cannot be saved should say so while the teacher is still
+  // looking at it, not after they press Save on thirty of them.
+  const invalid = useMemo(() => Object.entries(values)
+    .filter(([, v]) => v !== '' && v != null)
+    .filter(([, v]) => { const n = Number(v); return !Number.isFinite(n) || n < 0 || n > 100; })
+    .map(([id]) => id), [values]);
 
   async function save() {
+    if (invalid.length) { setError('Exam marks must be between 0 and 100.'); return; }
     setSaving(true); setError(null); setSaved(null);
     try {
       const marks = Object.entries(values)
         .filter(([, v]) => v !== '' && v != null)
         .map(([student_id, v]) => ({ student_id: Number(student_id), exam_score: Number(v) }));
       const r = await api.saveScores(token, subjectId, marks);
-      setSaved(`Saved ${r.saved} mark(s).`);
+      setSaved(mode === 'cloud'
+        ? `${marks.length} mark${marks.length === 1 ? '' : 's'} saved and queued — they reach the school when its computer next syncs.`
+        : `Saved ${r.saved} mark${r.saved === 1 ? '' : 's'}.`);
+      setDirty(false);
+      if (mode !== 'cloud') load();
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   }
 
-  if (classes === null) return <Loading label="Loading classes…" />;
+  const rows = sheet?.students || [];
 
   return (
-    <Screen>
-      <Stack.Screen options={{ title: 'Enter Scores' }} />
+    <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
+      <ErrorNote message={classError || error} />
+
       <Card>
-        <H2>Class</H2>
         <ClassPicker classes={classes} value={classId} onChange={setClassId} />
-        {classId && (
-          <>
-            <H2 style={{ marginTop: 12 }}>Subject</H2>
-            {subjects.length === 0 ? <Muted>No subjects mapped.</Muted> : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  {subjects.map(s => {
-                    const active = subjectId === s.id;
-                    return (
-                      <TouchableOpacity key={s.id} onPress={() => setSubjectId(s.id)}
-                        style={{ paddingVertical: 8, paddingHorizontal: 14, borderRadius: 999,
-                          backgroundColor: active ? colors.accent : '#fff', borderWidth: 1, borderColor: active ? colors.accent : colors.border }}>
-                        <Text style={{ color: active ? '#fff' : colors.text, fontWeight: '600' }}>{s.name}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </ScrollView>
-            )}
-          </>
-        )}
+        {classId ? <SubjectPicker subjects={subjects} value={subjectId} onChange={setSubjectId} /> : null}
       </Card>
 
-      <ErrorNote message={error} />
-      {saved && <Card><Text style={{ color: colors.success, fontWeight: '700' }}>✓ {saved}</Text></Card>}
-
-      {classId && subjectId && rows === null && <Loading label="Loading students…" />}
-      {rows && rows.length === 0 && subjectId && <Card><Muted>No active students in this class.</Muted></Card>}
-
-      {rows && rows.length > 0 && (
+      {!classId || !subjectId ? (
+        <Card>
+          <EmptyState
+            icon="chart" title="Choose a class and subject"
+            message="Exam marks are entered one subject at a time, for the current term."
+          />
+        </Card>
+      ) : sheet === null ? (
+        <Card><Skeleton rows={7} height={44} /></Card>
+      ) : rows.length === 0 ? (
+        <Card><EmptyState icon="users" title="Nobody on this roll" message="There are no active pupils in this class." /></Card>
+      ) : (
         <>
-          <Card>
-            <H2>Exam marks {term ? `— ${term.label}` : ''}</H2>
-            <Muted>Enter each student's raw exam score out of 100.</Muted>
-            {rows.map(s => (
-              <View key={s.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontWeight: '600' }}>{s.name}</Text>
-                  <Muted>{s.index_number}{s.total_score != null ? ` · total: ${s.total_score}` : ''}</Muted>
+          <SuccessNote message={saved} />
+          <Grid min={150}>
+            <StatCard label="Entered" value={`${entered}/${rows.length}`} icon="check" />
+            <StatCard label="Class average" value={average == null ? '—' : `${average}`} tone="data" icon="chart" />
+            {sheet.term ? <StatCard label="Term" value={sheet.term.label} icon="calendar" /> : null}
+          </Grid>
+
+          <Section
+            title="Exam marks"
+            subtitle="Out of 100. Leave a box empty for a pupil who has not sat the paper."
+            icon="chart"
+            action={dirty ? <Badge tone="warning" label="Unsaved" /> : null}
+          >
+            {rows.map(s => {
+              const bad = invalid.includes(String(s.id));
+              return (
+                <View key={s.id} style={{
+                  flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+                  paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+                }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text }}>{s.name}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Muted>{s.index_number}</Muted>
+                      {s.total_score != null ? <Badge tone="neutral" label={`Total ${s.total_score}`} /> : null}
+                      {s.pending ? <PendingBadge /> : null}
+                    </View>
+                  </View>
+                  <TextInput
+                    accessibilityLabel={`Exam mark for ${s.name}`}
+                    value={values[s.id] ?? ''}
+                    onChangeText={v => { setValues(m => ({ ...m, [s.id]: v.replace(/[^0-9.]/g, '') })); setDirty(true); }}
+                    keyboardType="numeric" placeholder="—" placeholderTextColor={colors.faint}
+                    maxLength={5}
+                    style={{
+                      width: layout.isPhone ? 76 : 92, textAlign: 'center',
+                      backgroundColor: colors.surfaceAlt,
+                      borderWidth: 1, borderColor: bad ? colors.danger : colors.border,
+                      borderRadius: radius.sm, paddingVertical: 10,
+                      fontSize: 16, fontWeight: '700', color: bad ? colors.danger : colors.text,
+                    }}
+                  />
                 </View>
-                <TextInput
-                  value={values[s.id] ?? ''}
-                  onChangeText={v => setValues(m => ({ ...m, [s.id]: v.replace(/[^0-9.]/g, '') }))}
-                  keyboardType="numeric" placeholder="—" placeholderTextColor={colors.muted}
-                  style={{ width: 72, textAlign: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingVertical: 8, fontSize: 15, color: colors.text }}
-                />
-              </View>
-            ))}
-          </Card>
-          <Button title={saving ? 'Saving…' : 'Save scores'} onPress={save} disabled={saving} />
+              );
+            })}
+            <Button
+              title={saving ? 'Saving…' : 'Save exam marks'} onPress={save}
+              busy={saving} disabled={invalid.length > 0} size="lg" style={{ marginTop: spacing.md }}
+            />
+            {invalid.length > 0 ? <Muted style={{ color: colors.danger, marginTop: 6 }}>
+              {invalid.length} mark{invalid.length === 1 ? ' is' : 's are'} outside 0–100.
+            </Muted> : null}
+          </Section>
         </>
       )}
     </Screen>
@@ -127,8 +166,7 @@ function ScoresScreen() {
 }
 
 // Reachable by URL in the browser build, so the screen guards itself rather
-// than relying on the tab bar having hidden it. The server checks the same
-// permissions on every request regardless.
+// than relying on the navigation having hidden it.
 export default function Scores() {
   return (
     <RequireModule modules={[['academics', 'view']]}>

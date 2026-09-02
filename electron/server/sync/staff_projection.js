@@ -210,6 +210,94 @@ function enqueueClassRoster(db, classId) {
       }
     } catch (_) {}
 
+    // Continuous assessment: the columns a class+subject has this term and the
+    // marks already in them. Without this a teacher off-LAN could enter the
+    // end-of-term paper but not the class work weighted alongside it — and the
+    // class score is what the report card actually carries.
+    const assessments = {};
+    try {
+      if (term) {
+        const cols = db.prepare(`
+          SELECT id, subject_id, assessment_type, max_marks, display_order
+          FROM assessment_columns WHERE class_group_id = ? AND term_id = ?
+          ORDER BY display_order, id
+        `).all(classId, term.id);
+        if (cols.length) {
+          const cph = cols.map(() => '?').join(',');
+          const marks = db.prepare(`
+            SELECT assessment_column_id, student_id, marks FROM assessment_scores
+            WHERE assessment_column_id IN (${cph})
+          `).all(...cols.map(c => c.id));
+          const byCol = new Map(cols.map(c => [c.id, c.subject_id]));
+          for (const c of cols) {
+            const bucket = (assessments[c.subject_id] ||= { columns: [], marks: {} });
+            bucket.columns.push({ id: c.id, assessment_type: c.assessment_type, max_marks: c.max_marks, display_order: c.display_order });
+          }
+          for (const m of marks) {
+            const subId = byCol.get(m.assessment_column_id);
+            if (subId == null) continue;
+            const bucket = assessments[subId];
+            ((bucket.marks[m.student_id] ||= {}))[m.assessment_column_id] = m.marks;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // The term summary behind the broadsheet: position, average, conduct and
+    // the class teacher's remark.
+    const summaries = {};
+    try {
+      if (term && ids.length) {
+        for (const r of db.prepare(`
+          SELECT student_id, total_score_all, average_score, class_rank, number_on_roll,
+                 conduct_traits, learner_interests, learner_talents, teacher_remarks
+          FROM student_term_summary WHERE term_id = ? AND student_id IN (${ph})
+        `).all(term.id, ...ids)) summaries[r.student_id] = r;
+      }
+    } catch (_) {}
+
+    // Who to ring about a pupil. A teacher's most common off-LAN question is
+    // "whose number is this" and it is the one thing the app could not answer.
+    const guardians = {};
+    try {
+      if (ids.length) {
+        for (const r of db.prepare(`
+          SELECT id, father_name, father_contact, mother_name, mother_contact, guardian_name, guardian_contact
+          FROM students WHERE id IN (${ph})
+        `).all(...ids)) {
+          guardians[r.id] = [
+            { relation: 'Father', name: r.father_name, contact: r.father_contact },
+            { relation: 'Mother', name: r.mother_name, contact: r.mother_contact },
+            { relation: 'Guardian', name: r.guardian_name, contact: r.guardian_contact },
+          ].filter(g => g.name || g.contact);
+        }
+      }
+    } catch (_) {}
+
+    // The canteen sheet: what each pupil owes, and the rate it is worked out at.
+    const canteen = {};
+    let dailyRate = 0;
+    try {
+      dailyRate = parseFloat(getSetting(db, 'canteen_daily_rate', '5')) || 0;
+      if (term) {
+        const q = db.prepare(`
+          SELECT COUNT(*) c FROM school_calendar sc
+          LEFT JOIN canteen_day_status cds ON cds.date = sc.date AND cds.student_id = ?
+          WHERE sc.term_id = ? AND sc.day_type = 'school_day' AND (cds.status IS NULL OR cds.status = 'unpaid')
+        `);
+        for (const id of ids) {
+          const unpaid = q.get(id, term.id).c;
+          canteen[id] = { unpaid_days: unpaid, amount_owed: unpaid * dailyRate };
+        }
+      }
+    } catch (_) {}
+
+    // How class work and the exam are weighted, and the grade bands — so a
+    // score sheet off-LAN can explain itself the same way the desktop does.
+    let weights = null, gradingBands = [];
+    try { weights = require('../../ipc/scores').readWeights(db); } catch (_) {}
+    try { gradingBands = db.prepare('SELECT min_score, max_score, remark FROM grading_bands ORDER BY display_order, min_score DESC').all(); } catch (_) {}
+
     let homework = [];
     try { homework = require('../../ipc/homework').listForClass(db, classId, { all: false }) || []; } catch (_) {}
 
@@ -225,9 +313,123 @@ function enqueueClassRoster(db, classId) {
       payload: {
         class_id: cls.id, name: cls.name, short_code: cls.short_code, level_order: cls.level_order,
         term: term ? { id: term.id, label: term.label } : null,
-        students: students.map(s => ({ id: s.id, index_number: s.index_number, name: fullName(s) })),
+        students: students.map(s => ({
+          id: s.id, index_number: s.index_number, name: fullName(s),
+          guardians: guardians[s.id] || [],
+        })),
         subjects, scores, attendance, homework, timetable,
+        assessments, summaries, canteen, daily_rate: dailyRate, weights,
+        grading_bands: gradingBands,
         attendance_days: ATTENDANCE_DAYS,
+        updated_at: new Date().toISOString(),
+      },
+    });
+  } catch (_) { return null; }
+}
+
+// ── staff_profile ───────────────────────────────────────────────────────────
+// The teacher's own employment, which the cloud carried nothing of: their staff
+// record and teaching assignments, this term's lesson notes, their leave, their
+// clock-ins, and their payslips.
+//
+// Payslips are the sensitive part, so two rules apply. Only PAID months are
+// projected — an unpaid draft is the school's working figure, not a statement
+// of what anyone is owed — and the record is keyed by user, so the cloud can
+// only ever serve a teacher their own. Nothing employer-side (another person's
+// salary, the payroll run, the PAYE schedule) leaves the desktop.
+const LESSON_NOTE_LIMIT = 60;
+const PAYSLIP_LIMIT = 18;
+
+function enqueueStaffProfile(db, userId) {
+  try {
+    if (!syncEnabled(db)) return null;
+    const u = db.prepare('SELECT id, staff_id, full_name, username FROM users WHERE id = ?').get(userId);
+    if (!u) return null;
+
+    const empty = {
+      user_id: userId, has_staff: false, staff: null, assignments: [],
+      lesson_notes: [], leave: [], attendance: [], payslips: [],
+      updated_at: new Date().toISOString(),
+    };
+    if (!u.staff_id) {
+      return postToOutbox(db, { entity_type: 'staff_profile', entity_key: `profile:user:${userId}`, payload: empty });
+    }
+
+    let staff = null;
+    try {
+      staff = db.prepare(`
+        SELECT s.id, s.staff_number, s.surname, s.first_name, s.other_names, s.gender,
+               s.phone, s.email, s.address, s.role, s.status, s.qualification, s.specialization,
+               s.hire_date, s.photo_path, s.ssnit_number, s.bank_name, d.name AS designation
+        FROM staff s LEFT JOIN designations d ON d.id = s.designation_id WHERE s.id = ?
+      `).get(u.staff_id) || null;
+      if (staff) staff.name = fullName(staff);
+    } catch (_) {}
+
+    let assignments = [];
+    try {
+      assignments = db.prepare(`
+        SELECT sa.class_group_id, sa.subject_id, sa.is_class_teacher,
+               c.name AS class_name, sub.name AS subject_name
+        FROM staff_assignments sa
+        LEFT JOIN class_groups c ON c.id = sa.class_group_id
+        LEFT JOIN subjects sub ON sub.id = sa.subject_id
+        WHERE sa.staff_id = ? ORDER BY c.level_order, c.name, sub.name
+      `).all(u.staff_id);
+    } catch (_) {}
+
+    // Whole notes, not summaries: a teacher off-LAN opens one to read what they
+    // planned, and a list of topics is not a lesson note.
+    let lessonNotes = [];
+    try {
+      lessonNotes = db.prepare(`
+        SELECT ln.*, c.name AS class_name, sub.name AS subject_name
+        FROM lesson_notes ln
+        LEFT JOIN class_groups c ON c.id = ln.class_group_id
+        LEFT JOIN subjects sub ON sub.id = ln.subject_id
+        WHERE ln.staff_id = ?
+        ORDER BY COALESCE(ln.lesson_date, ln.created_at) DESC, ln.id DESC
+        LIMIT ?
+      `).all(u.staff_id, LESSON_NOTE_LIMIT);
+    } catch (_) {}
+
+    let leave = [];
+    try {
+      leave = db.prepare(`
+        SELECT lr.id, lr.leave_type, lr.start_date, lr.end_date, lr.days_requested,
+               lr.justification, lr.status, lr.reviewed_at, lr.reviewer_notes,
+               rv.full_name AS reviewed_by_name
+        FROM leave_requests lr LEFT JOIN users rv ON rv.id = lr.reviewed_by
+        WHERE lr.staff_id = ? ORDER BY lr.created_at DESC LIMIT 40
+      `).all(u.staff_id);
+    } catch (_) {}
+
+    let attendance = [];
+    try {
+      attendance = db.prepare(`
+        SELECT date, clock_in, clock_out, status, notes FROM staff_attendance
+        WHERE staff_id = ? AND date >= date('now', '-70 days') ORDER BY date DESC
+      `).all(u.staff_id);
+    } catch (_) {}
+
+    let payslips = [];
+    try {
+      payslips = db.prepare(`
+        SELECT id, month, year, gross_salary, extra_pay, extra_pay_description,
+               ssnit_worker, paye_tax, other_deductions, other_deductions_description,
+               net_salary, actual_amount_paid, carry_over_to_next,
+               payment_date, payment_method, payment_reference
+        FROM staff_salaries WHERE staff_id = ? AND is_paid = 1
+        ORDER BY year DESC, month DESC LIMIT ?
+      `).all(u.staff_id, PAYSLIP_LIMIT);
+    } catch (_) {}
+
+    return postToOutbox(db, {
+      entity_type: 'staff_profile',
+      entity_key: `profile:user:${userId}`,
+      payload: {
+        user_id: userId, has_staff: true, staff, assignments,
+        lesson_notes: lessonNotes, leave, attendance, payslips,
         updated_at: new Date().toISOString(),
       },
     });
@@ -308,12 +510,13 @@ function enqueueStaffTimetable(db, userId) {
 // Everything a teacher needs, for every class and every account. Called from
 // the outbox backfill and after a change that can move any of it.
 function enqueueAllStaff(db) {
-  const counts = { staff: 0, classes: 0, metrics: 0, debtors: 0, timetables: 0 };
+  const counts = { staff: 0, classes: 0, metrics: 0, debtors: 0, timetables: 0, profiles: 0 };
   if (!syncEnabled(db)) return counts;
   try {
     for (const u of db.prepare('SELECT id FROM users WHERE is_active = 1').all()) {
       if (enqueueStaffAuth(db, u.id)) counts.staff++;
       if (enqueueStaffTimetable(db, u.id)) counts.timetables++;
+      if (enqueueStaffProfile(db, u.id)) counts.profiles++;
     }
   } catch (_) {}
   try {
@@ -345,5 +548,5 @@ function enqueueRostersForStudents(db, studentIds) {
 module.exports = {
   ATTENDANCE_DAYS,
   enqueueStaffAuth, enqueueClassRoster, enqueueSchoolMetrics, enqueueDebtors, enqueueResetClaim,
-  enqueueStaffTimetable, enqueueAllStaff, enqueueRostersForStudents, classOfStudent,
+  enqueueStaffTimetable, enqueueStaffProfile, enqueueAllStaff, enqueueRostersForStudents, classOfStudent,
 };

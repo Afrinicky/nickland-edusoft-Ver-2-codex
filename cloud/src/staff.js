@@ -39,7 +39,11 @@ function bcrypt() {
   return bcryptLib;
 }
 
-const WRITE_TYPES = ['attendance_mark', 'score_entry', 'canteen_collect', 'homework_create'];
+const WRITE_TYPES = [
+  'attendance_mark', 'score_entry', 'assessment_entry', 'term_remarks',
+  'canteen_collect', 'homework_create', 'lesson_note_save',
+  'leave_request', 'staff_clock', 'message_reply', 'announcement_create',
+];
 
 function verifyStaffPassword(password, stored) {
   if (!stored || !String(stored).startsWith('$2')) return false;
@@ -325,6 +329,361 @@ async function homeworkForClass(store, school_id, classId, rec) {
   return { ok: true, homework: set };
 }
 
+// ── a pupil's record ────────────────────────────────────────────────────────
+// Assembled from the two projections that already exist rather than a third:
+// the class roster holds who is in the class and their guardians, and the
+// parent-side student snapshot holds the fees, the canteen, the attendance
+// summary and the report. Nothing new has to be kept in step.
+async function studentProfile(store, school_id, studentId, rec) {
+  const snap = await snapshotPayload(store, school_id, 'student_snapshot', `student:${studentId}`);
+  if (!snap) return { ok: false, status: 404, error: 'Student not found.' };
+  if (rec && !inScopeClass(rec, snap.class_id)) return { ok: false, status: 404, error: 'Student not found.' };
+
+  const r = snap.class_id ? await roster(store, school_id, snap.class_id, rec) : null;
+  const inRoster = r ? (r.students || []).find(s => String(s.id) === String(studentId)) : null;
+  const summary = r && r.summaries ? r.summaries[studentId] : null;
+  const rep = snap.report || null;
+
+  return {
+    ok: true,
+    term: snap.term ? { label: snap.term } : null,
+    student: {
+      id: snap.student_id, index_number: snap.index_number, name: snap.name,
+      class_id: snap.class_id || null, class_name: snap.class_name || (r ? r.name : null),
+    },
+    guardians: (inRoster && inRoster.guardians) || [],
+    attendance: snap.attendance || { present: 0, absent: 0, total: 0 },
+    recent_attendance: [],
+    fees: can(rec, 'fees', 'view') ? (snap.fees || null) : null,
+    canteen: can(rec, 'canteen', 'view') ? (snap.canteen || null) : null,
+    subjects: rep ? (rep.subjects || []).map(x => ({ subject: x.subject, total_score: x.total, grade_remark: x.grade })) : [],
+    summary: summary || (rep ? {
+      average_score: rep.average, class_rank: rep.rank,
+      number_on_roll: rep.number_on_roll, teacher_remarks: rep.remarks,
+    } : null),
+    homework: snap.homework || [],
+    stale: true,
+  };
+}
+
+// ── register history ────────────────────────────────────────────────────────
+// The roster carries a fortnight of registers, which is what the projection
+// deliberately keeps. Anything queued but not yet applied is merged over it, so
+// a teacher who marked yesterday from home sees yesterday marked.
+async function attendanceHistory(store, school_id, classId, days, rec) {
+  const r = await roster(store, school_id, classId, rec);
+  if (!r) return { ok: true, days: [], students: [], marked_days: 0 };
+
+  const byDate = {};
+  for (const [date, marks] of Object.entries(r.attendance || {})) byDate[date] = { ...marks };
+  for (const ch of await pending(store, school_id, ['attendance_mark'])) {
+    const p = ch.payload || {};
+    if (!p.date) continue;
+    const bucket = (byDate[p.date] ||= {});
+    for (const m of p.marks || []) bucket[m.student_id] = { status: m.status, notes: m.notes || null };
+  }
+
+  const perStudent = new Map((r.students || []).map(s => [String(s.id), { present: 0, absent: 0, late: 0, total: 0 }]));
+  const dayRows = [];
+  for (const [date, marks] of Object.entries(byDate)) {
+    const row = { date, present: 0, absent: 0, late: 0, total: 0 };
+    for (const [sid, m] of Object.entries(marks)) {
+      row.total++;
+      const key = m.status === 'absent' ? 'absent' : m.status === 'late' ? 'late' : 'present';
+      row[key]++;
+      const p = perStudent.get(String(sid));
+      if (p) { p.total++; p[key]++; }
+    }
+    dayRows.push(row);
+  }
+  dayRows.sort((a, b) => (a.date < b.date ? 1 : -1));
+  const limited = days ? dayRows.slice(0, days) : dayRows;
+
+  return {
+    ok: true,
+    marked_days: limited.length,
+    window_days: r.attendance_days || null,
+    days: limited,
+    students: (r.students || []).map(s => ({
+      id: s.id, index_number: s.index_number, name: s.name, ...perStudent.get(String(s.id)),
+    })),
+  };
+}
+
+// ── continuous assessment ───────────────────────────────────────────────────
+async function assessmentSheet(store, school_id, classId, subjectId, rec) {
+  if (rec && !inScopeSubject(rec, classId, subjectId)) return { ok: true, term: null, columns: [], students: [] };
+  const r = await roster(store, school_id, classId, rec);
+  if (!r) return { ok: true, term: null, columns: [], students: [] };
+  const bucket = (r.assessments || {})[subjectId] || { columns: [], marks: {} };
+
+  const marks = {};
+  for (const [sid, cols] of Object.entries(bucket.marks || {})) marks[sid] = { ...cols };
+  const queued = new Set();
+  for (const ch of await pending(store, school_id, ['assessment_entry'])) {
+    const p = ch.payload || {};
+    if (String(p.class_id) !== String(classId) || String(p.subject_id) !== String(subjectId)) continue;
+    for (const m of p.marks || []) {
+      const row = (marks[m.student_id] ||= {});
+      if (m.marks === '' || m.marks == null) delete row[m.column_id];
+      else row[m.column_id] = m.marks;
+      queued.add(String(m.student_id));
+    }
+  }
+
+  return {
+    ok: true,
+    term: r.term || null,
+    weights: r.weights || null,
+    // Columns are created on the desktop: a new one has to exist before marks
+    // can hang off it, and inventing an id here would leave the desktop with
+    // marks pointing at nothing.
+    can_add_columns: false,
+    columns: bucket.columns || [],
+    students: (r.students || []).map(s => ({
+      id: s.id, index_number: s.index_number, name: s.name,
+      marks: marks[s.id] || {},
+      pending: queued.has(String(s.id)) || undefined,
+    })),
+  };
+}
+
+// ── the broadsheet ──────────────────────────────────────────────────────────
+async function resultsBroadsheet(store, school_id, classId, rec) {
+  const r = await roster(store, school_id, classId, rec);
+  if (!r) return { ok: true, term: null, subjects: [], students: [] };
+  let subjects = r.subjects || [];
+  if (rec) subjects = subjects.filter(sub => inScopeSubject(rec, classId, sub.id));
+  const summaries = r.summaries || {};
+  const scores = r.scores || {};
+
+  return {
+    ok: true,
+    term: r.term || null,
+    subjects,
+    students: (r.students || []).map(s => {
+      const sum = summaries[s.id] || null;
+      return {
+        id: s.id, index_number: s.index_number, name: s.name,
+        scores: Object.fromEntries(subjects.map(sub => [sub.id, (scores[sub.id] || {})[s.id] || null])),
+        total: sum ? sum.total_score_all : null,
+        average: sum ? sum.average_score : null,
+        rank: sum ? sum.class_rank : null,
+        number_on_roll: sum ? sum.number_on_roll : null,
+      };
+    }),
+    stale: true,
+  };
+}
+
+async function studentReport(store, school_id, studentId, rec) {
+  const p = await studentProfile(store, school_id, studentId, rec);
+  if (!p.ok) return p;
+  const r = p.student.class_id ? await roster(store, school_id, p.student.class_id, rec) : null;
+  return {
+    ok: true,
+    term: p.term,
+    student: p.student,
+    subjects: p.subjects,
+    summary: p.summary,
+    attendance: p.attendance,
+    grading_bands: (r && r.grading_bands) || [],
+    stale: true,
+  };
+}
+
+// ── the canteen sheet ───────────────────────────────────────────────────────
+async function canteenClass(store, school_id, classId, rec) {
+  if (rec && !isClassTeacherOf(rec, classId)) {
+    return { ok: false, status: 403, error: 'The canteen sheet belongs to the class teacher.' };
+  }
+  const r = await roster(store, school_id, classId, rec);
+  if (!r) return { ok: true, students: [], totals: { owing: 0, amount: 0 } };
+  const owed = r.canteen || {};
+  const rows = (r.students || []).map(s => ({
+    id: s.id, index_number: s.index_number, name: s.name,
+    unpaid_days: (owed[s.id] || {}).unpaid_days || 0,
+    amount_owed: (owed[s.id] || {}).amount_owed || 0,
+    today_status: null,
+  }));
+  return {
+    ok: true,
+    date: new Date().toISOString().slice(0, 10),
+    daily_rate: r.daily_rate || null,
+    term: r.term || null,
+    students: rows,
+    totals: { owing: rows.filter(x => x.unpaid_days > 0).length, amount: rows.reduce((n, x) => n + x.amount_owed, 0) },
+    stale: true,
+  };
+}
+
+// ── subjects, for pickers that are not tied to one class ────────────────────
+async function allSubjects(store, school_id, rec, classId) {
+  if (classId) return scoreSubjects(store, school_id, classId, rec);
+  const rosters = await allRosters(store, school_id, rec);
+  const seen = new Map();
+  for (const r of rosters) for (const sub of r.subjects || []) if (!seen.has(sub.id)) seen.set(sub.id, sub);
+  return { ok: true, subjects: [...seen.values()].sort((a, b) => String(a.name).localeCompare(String(b.name))) };
+}
+
+// ── the teacher's own employment ────────────────────────────────────────────
+// One projection, keyed by user, so the cloud can only ever serve a teacher
+// their own record. Queued work is merged in so a leave request filed on the
+// bus shows as pending rather than vanishing until the school syncs.
+async function staffProfile(store, school_id, rec) {
+  const p = await snapshotPayload(store, school_id, 'staff_profile', `profile:user:${rec.user_id}`);
+  const base = p || { has_staff: false, staff: null, assignments: [], lesson_notes: [], leave: [], attendance: [], payslips: [] };
+  const today = new Date().toISOString().slice(0, 10);
+
+  const attendance = [...(base.attendance || [])];
+  for (const ch of await pending(store, school_id, ['staff_clock'])) {
+    const q = ch.payload || {};
+    if (q.user_id !== rec.user_id || !q.date) continue;
+    const hit = attendance.find(a => a.date === q.date);
+    if (hit) {
+      if (q.direction === 'out') hit.clock_out = hit.clock_out || q.at;
+      else hit.clock_in = hit.clock_in || q.at;
+      hit.pending = true;
+    } else {
+      attendance.unshift({
+        date: q.date, status: 'present', pending: true,
+        clock_in: q.direction === 'out' ? null : q.at,
+        clock_out: q.direction === 'out' ? q.at : null,
+      });
+    }
+  }
+
+  const leave = [...(base.leave || [])];
+  for (const ch of await pending(store, school_id, ['leave_request'])) {
+    const q = ch.payload || {};
+    if (q.user_id !== rec.user_id) continue;
+    leave.unshift({
+      id: null, leave_type: q.leave_type, start_date: q.start_date, end_date: q.end_date,
+      days_requested: q.days_requested, justification: q.justification,
+      status: 'pending', pending: true,
+    });
+  }
+
+  return {
+    ok: true,
+    has_staff: !!base.has_staff,
+    staff: base.staff || null,
+    designation: rec.designation || null,
+    is_admin: !!rec.is_admin,
+    assignments: base.assignments || [],
+    today: { date: today, attendance: attendance.find(a => a.date === today) || null },
+    attendance,
+    leave: { pending: leave.filter(l => l.status === 'pending').length, approved: leave.filter(l => l.status === 'approved').length },
+    leave_requests: leave,
+    payslips: base.payslips || [],
+    updated_at: base.updated_at || null,
+  };
+}
+
+async function lessonNotes(store, school_id, rec) {
+  const p = await snapshotPayload(store, school_id, 'staff_profile', `profile:user:${rec.user_id}`);
+  const notes = [...((p && p.lesson_notes) || [])];
+  for (const ch of await pending(store, school_id, ['lesson_note_save'])) {
+    const q = ch.payload || {};
+    if (q.user_id !== rec.user_id) continue;
+    const note = { id: q.local_id || null, ...(q.note || {}), pending: true, queue_ref: q.uuid };
+    // An edit queued for a note that is already projected replaces it in the
+    // list, rather than showing the teacher two copies of the same lesson.
+    const at = q.local_id ? notes.findIndex(n => String(n.id) === String(q.local_id)) : -1;
+    if (at >= 0) notes[at] = { ...notes[at], ...note };
+    else notes.unshift(note);
+  }
+  return { ok: true, has_staff: !!(p && p.has_staff), notes };
+}
+
+async function lessonNote(store, school_id, rec, id) {
+  const { notes } = await lessonNotes(store, school_id, rec);
+  const note = notes.find(n => String(n.id) === String(id));
+  return note ? { ok: true, note } : { ok: false, status: 404, error: 'Lesson note not found.' };
+}
+
+// ── messages and notices ────────────────────────────────────────────────────
+// Threads are already projected for the parent portal; the staff side reads the
+// same records. A reply is queued and shown at once, because a teacher who
+// types a reply and sees nothing types it again.
+async function staffThreads(store, school_id, rec) {
+  if (!can(rec, 'notifications', 'view')) return { ok: false, status: 403, error: 'Access denied.' };
+  const rows = await store.listSnapshots(school_id, 'message_thread');
+  const threads = rows.map(r => r.payload).filter(Boolean).map(t => ({
+    id: t.uuid, uuid: t.uuid, parent_id: t.parent_id, student_id: t.student_id,
+    student_name: t.student_name, subject: t.subject,
+    last_message_at: t.last_message_at, last_sender: t.last_sender,
+    staff_unread: 0,
+    preview: (t.messages && t.messages.length) ? String(t.messages[t.messages.length - 1].body).slice(0, 120) : '',
+  }));
+  threads.sort((a, b) => String(b.last_message_at || '').localeCompare(String(a.last_message_at || '')));
+  return { ok: true, threads, unread: 0, stale: true };
+}
+
+async function staffThread(store, school_id, rec, uuid) {
+  if (!can(rec, 'notifications', 'view')) return { ok: false, status: 403, error: 'Access denied.' };
+  const t = await snapshotPayload(store, school_id, 'message_thread', `thread:${uuid}`);
+  if (!t) return { ok: false, status: 404, error: 'Conversation not found.' };
+  const messages = [...(t.messages || [])];
+  for (const ch of await pending(store, school_id, ['message_reply'])) {
+    const q = ch.payload || {};
+    if (q.thread_uuid !== uuid) continue;
+    messages.push({ sender_type: 'staff', sender_name: q.sender_name || 'You', body: q.body, created_at: null, pending: true });
+  }
+  return {
+    ok: true,
+    thread: { id: t.uuid, uuid: t.uuid, subject: t.subject, student_name: t.student_name, parent_id: t.parent_id },
+    messages,
+  };
+}
+
+async function submitMessage(store, school_id, rec, body) {
+  if (!can(rec, 'notifications', 'create')) return { ok: false, status: 403, error: 'Access denied.' };
+  if (!body.body || !String(body.body).trim()) return { ok: false, status: 400, error: 'Type a message first.' };
+  // Starting a brand-new conversation needs a parent record the cloud does not
+  // hold, so replying is what works off-LAN and the app says so.
+  if (!body.threadUuid && !body.parentId) {
+    return { ok: false, status: 400, error: "Starting a new conversation needs the school's own system. You can reply to any existing conversation from here." };
+  }
+  await store.enqueueChange(school_id, {
+    type: 'message_reply',
+    payload: {
+      uuid: newRef(), user_id: rec.user_id, sender_name: rec.full_name || null,
+      thread_uuid: body.threadUuid || null,
+      parent_id: body.parentId || null, student_id: body.studentId || null,
+      subject: body.subject || null, body: String(body.body).trim(),
+    },
+  });
+  return { ok: true, queued: true };
+}
+
+async function announcements(store, school_id, rec) {
+  if (!can(rec, 'notifications', 'view')) return { ok: false, status: 403, error: 'Access denied.' };
+  const rows = await store.listSnapshots(school_id, 'announcement');
+  const list = rows.map(r => r.payload).filter(a => a && a.is_active !== 0);
+  for (const ch of await pending(store, school_id, ['announcement_create'])) {
+    const q = ch.payload || {};
+    list.unshift({ id: null, title: q.title, body: q.body, audience: q.audience, created_at: null, pending: true });
+  }
+  list.sort((a, b) => (a.pending ? -1 : b.pending ? 1 : String(b.created_at || '').localeCompare(String(a.created_at || ''))));
+  return { ok: true, announcements: list };
+}
+
+async function submitAnnouncement(store, school_id, rec, body) {
+  if (!can(rec, 'notifications', 'edit')) return { ok: false, status: 403, error: 'You cannot post announcements.' };
+  if (!body.title || !body.body) return { ok: false, status: 400, error: 'A title and a message are required.' };
+  await store.enqueueChange(school_id, {
+    type: 'announcement_create',
+    payload: {
+      uuid: newRef(), user_id: rec.user_id,
+      title: String(body.title).slice(0, 200), body: String(body.body).slice(0, 4000),
+      audience: body.audience === 'student' ? 'student' : 'all',
+      student_id: body.studentId || null,
+    },
+  });
+  return { ok: true, queued: true };
+}
+
 // ── writes ──────────────────────────────────────────────────────────────────
 // Each one appends to the change queue and returns immediately. Nothing here
 // touches a read model: the desktop applies the change and re-projects, which
@@ -415,6 +774,125 @@ async function submitHomework(store, school_id, rec, body) {
       subject_id: body.subjectId || null, title: String(body.title).trim(),
       description: body.description || '', due_date: body.dueDate || null,
       max_marks: body.maxMarks === '' || body.maxMarks == null ? null : Number(body.maxMarks),
+    },
+  });
+  return { ok: true, queued: true };
+}
+
+async function submitAssessments(store, school_id, rec, { classId, subjectId, marks }) {
+  const cid = parseInt(classId, 10); const sid = parseInt(subjectId, 10);
+  if (!cid || !sid) return { ok: false, status: 400, error: 'classId and subjectId are required.' };
+  if (!inScopeSubject(rec, cid, sid)) return { ok: false, status: 403, error: 'That subject is not one of yours in that class.' };
+  if (!Array.isArray(marks) || !marks.length) return { ok: false, status: 400, error: 'No marks to save.' };
+
+  // The column's total is on the roster, so an impossible mark is caught while
+  // the teacher is still looking at the sheet rather than dropped in silence a
+  // day later when the desktop applies the change.
+  const r = await roster(store, school_id, cid, rec);
+  const cols = Object.fromEntries((((r && r.assessments) || {})[sid] || { columns: [] }).columns.map(c => [String(c.id), c]));
+  const clean = [];
+  for (const m of marks) {
+    const student = parseInt(m.student_id, 10);
+    const col = cols[String(m.column_id)];
+    if (!student || !col) continue;
+    if (m.marks === '' || m.marks == null) { clean.push({ student_id: student, column_id: col.id, marks: null }); continue; }
+    const v = Number(m.marks);
+    if (!Number.isFinite(v) || v < 0) return { ok: false, status: 400, error: 'Marks cannot be negative.' };
+    if (v > col.max_marks) return { ok: false, status: 400, error: `A mark of ${v} is above the ${col.max_marks} this assessment is out of.` };
+    clean.push({ student_id: student, column_id: col.id, marks: v });
+  }
+  if (!clean.length) return { ok: false, status: 400, error: 'No marks to save.' };
+
+  await store.enqueueChange(school_id, {
+    type: 'assessment_entry',
+    payload: { uuid: newRef(), user_id: rec.user_id, class_id: cid, subject_id: sid, marks: clean },
+  });
+  return { ok: true, saved: clean.length, queued: true };
+}
+
+async function submitRemarks(store, school_id, rec, body) {
+  const sid = parseInt(body.studentId, 10);
+  if (!sid) return { ok: false, status: 400, error: 'studentId is required.' };
+  const snap = await snapshotPayload(store, school_id, 'student_snapshot', `student:${sid}`);
+  if (!snap) return { ok: false, status: 404, error: 'Student not found.' };
+  if (!isClassTeacherOf(rec, snap.class_id)) {
+    return { ok: false, status: 403, error: 'Only the class teacher can write end-of-term remarks for this class.' };
+  }
+  const trim = (v, n) => (v == null ? null : String(v).slice(0, n));
+  await store.enqueueChange(school_id, {
+    type: 'term_remarks',
+    payload: {
+      uuid: newRef(), user_id: rec.user_id, student_id: sid,
+      conduct: trim(body.conduct, 500), interests: trim(body.interests, 500),
+      talents: trim(body.talents, 500), remarks: trim(body.remarks, 1000),
+    },
+  });
+  return { ok: true, queued: true };
+}
+
+// A lesson note written on the way home. `local_id` is the desktop's own id
+// when the note already exists there — an edit updates it rather than filing a
+// second copy of the same lesson.
+async function submitLessonNote(store, school_id, rec, body) {
+  if (!body.topic || !String(body.topic).trim()) return { ok: false, status: 400, error: 'A topic is required.' };
+  const classId = body.classId ? parseInt(body.classId, 10) : null;
+  if (classId && !inScopeClass(rec, classId)) return { ok: false, status: 403, error: 'That class is not one of yours.' };
+  const note = {
+    class_group_id: classId,
+    subject_id: body.subjectId ? parseInt(body.subjectId, 10) : null,
+    week_number: body.weekNumber ? parseInt(body.weekNumber, 10) : null,
+    lesson_date: body.lessonDate || null,
+    duration_minutes: body.durationMinutes ? parseInt(body.durationMinutes, 10) : null,
+    topic: String(body.topic).trim().slice(0, 300),
+    sub_topic: body.subTopic || null,
+    references_text: body.references || null,
+    tlms: body.tlms || null,
+    objectives: body.objectives || null,
+    rpk: body.rpk || null,
+    introduction: body.introduction || null,
+    presentation: body.presentation || null,
+    activity: body.activity || null,
+    evaluation: body.evaluation || null,
+    closure: body.closure || null,
+    assignment: body.assignment || null,
+    remarks: body.remarks || null,
+    status: body.status === 'submitted' ? 'submitted' : 'draft',
+  };
+  await store.enqueueChange(school_id, {
+    type: 'lesson_note_save',
+    payload: { uuid: newRef(), user_id: rec.user_id, local_id: body.id ? parseInt(body.id, 10) : null, note },
+  });
+  return { ok: true, queued: true };
+}
+
+async function submitLeave(store, school_id, rec, body) {
+  const { leaveType, startDate, endDate, justification } = body;
+  if (!leaveType || !startDate || !endDate) return { ok: false, status: 400, error: 'Leave type and both dates are required.' };
+  if (!justification || !String(justification).trim()) return { ok: false, status: 400, error: 'A reason is required.' };
+  const start = new Date(startDate); const end = new Date(endDate);
+  if (isNaN(start) || isNaN(end)) return { ok: false, status: 400, error: 'Those dates could not be read. Use YYYY-MM-DD.' };
+  if (end < start) return { ok: false, status: 400, error: 'The end date cannot be before the start date.' };
+  const days = Math.round((end - start) / 86400000) + 1;
+  if (days > 365) return { ok: false, status: 400, error: 'A single request cannot cover more than a year.' };
+  await store.enqueueChange(school_id, {
+    type: 'leave_request',
+    payload: {
+      uuid: newRef(), user_id: rec.user_id, leave_type: String(leaveType).slice(0, 60),
+      start_date: startDate, end_date: endDate, days_requested: days,
+      justification: String(justification).trim().slice(0, 1000),
+    },
+  });
+  return { ok: true, queued: true, days_requested: days };
+}
+
+async function submitClock(store, school_id, rec, body) {
+  const direction = body.direction === 'out' ? 'out' : 'in';
+  const now = new Date();
+  await store.enqueueChange(school_id, {
+    type: 'staff_clock',
+    payload: {
+      uuid: newRef(), user_id: rec.user_id, direction,
+      date: now.toISOString().slice(0, 10), at: now.toTimeString().slice(0, 8),
     },
   });
   return { ok: true, queued: true };
@@ -552,7 +1030,12 @@ module.exports = {
   can, canAny,
   dashboard, students, debtors, classes, attendanceSheet, scoreSubjects, scoreSheet,
   canteenStudent, timetableMine, homeworkForClass,
+  studentProfile, attendanceHistory, assessmentSheet, resultsBroadsheet, studentReport,
+  canteenClass, allSubjects, staffProfile, lessonNotes, lessonNote,
+  staffThreads, staffThread, announcements,
   submitAttendance, submitScores, submitCanteen, submitHomework, pendingSummary,
+  submitAssessments, submitRemarks, submitLessonNote, submitLeave, submitClock,
+  submitMessage, submitAnnouncement,
   changePassword, requestPasswordReset, completePasswordReset,
   inScopeClass, inScopeSubject, isClassTeacherOf,
 };

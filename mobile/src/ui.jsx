@@ -1,64 +1,577 @@
-// Small shared UI primitives so screens stay short and consistent.
-import React from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView, Platform } from 'react-native';
-import { colors, spacing, radius } from './theme';
+// Nickland Edusoft — the shared interface.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// Every screen in the phone app and the browser app is assembled from these.
+// Two things they are built to do that the first version did not:
+//
+//   Fit the machine they are on. The old Screen capped itself at 640px on the
+//   web and stopped — which made a laptop show a phone-shaped column down the
+//   middle of a 27-inch monitor. Width is now a decision each component takes
+//   from `useLayout()`: the same Card is full-bleed on a handset and one cell
+//   of a grid on a desktop, and a table renders as a table where there is room
+//   and as stacked rows where there is not.
+//
+//   Say what kind of thing they are. A figure is set in tabular numerals, a
+//   status is a coloured pill, work not yet at the school is marked pending,
+//   and a destructive button does not look like a save. Colour follows the
+//   rules in theme.js: structure, action, judgement, data — nothing decorative.
 
-// These screens are laid out for a phone. Left alone in a desktop browser they
-// stretch a fee row across 1900 pixels, with the amount somewhere near Accra
-// and the label near Kumasi. Capping the column keeps a teacher's laptop
-// reading like the phone it was designed for.
-const WEB_MAX_WIDTH = 640;
-const webColumn = Platform.OS === 'web'
-  ? { maxWidth: WEB_MAX_WIDTH, width: '100%', marginHorizontal: 'auto' }
-  : null;
+import React, { useMemo, useState } from 'react';
+import {
+  View, Text as RNText, TextInput, TouchableOpacity, ActivityIndicator,
+  StyleSheet, ScrollView, Platform, Modal as RNModal, Pressable,
+} from 'react-native';
+import { colors, palette, gradients, type, spacing, radius, shadow } from './theme';
+import { useLayout, pageWidth } from './responsive';
+import { Icon } from './icons';
 
-export function Screen({ children, scroll = true, refreshControl }) {
+// ── gradients without a native dependency ───────────────────────────────────
+// The browser gets a real CSS gradient. The phone gets the base colour with two
+// soft bands laid over it, which reads as the same object without pulling in a
+// native module for the sake of a header.
+export function Gradient({ colors: stops = gradients.brand, angle = 135, style, children, pointerEvents }) {
+  const [from, to] = stops;
+  const web = Platform.OS === 'web'
+    ? { backgroundImage: `linear-gradient(${angle}deg, ${from} 0%, ${to} 100%)` }
+    : null;
+  return (
+    <View pointerEvents={pointerEvents} style={[{ backgroundColor: from, overflow: 'hidden' }, web, style]}>
+      {Platform.OS !== 'web' && (
+        <>
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: to, opacity: 0.55 }]} />
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: from, opacity: 0.45 }]} />
+        </>
+      )}
+      {children}
+    </View>
+  );
+}
+
+// ── text ────────────────────────────────────────────────────────────────────
+export function Display({ children, style, color }) { return <RNText style={[type.display, { color: color || colors.text }, style]}>{children}</RNText>; }
+export function Title({ children, style, color }) { return <RNText style={[type.title, { color: color || colors.text }, style]}>{children}</RNText>; }
+export function Heading({ children, style, color }) { return <RNText style={[type.heading, { color: color || colors.text }, style]}>{children}</RNText>; }
+export function Body({ children, style, color, numberOfLines }) { return <RNText numberOfLines={numberOfLines} style={[type.body, { color: color || colors.textSoft }, style]}>{children}</RNText>; }
+export function Muted({ children, style, numberOfLines }) { return <RNText numberOfLines={numberOfLines} style={[type.small, { color: colors.muted }, style]}>{children}</RNText>; }
+export function Micro({ children, style, color }) { return <RNText style={[type.micro, { color: color || colors.faint, textTransform: 'uppercase' }, style]}>{children}</RNText>; }
+export function Figure({ children, style, color }) { return <RNText style={[type.numeric, { color: color || colors.text }, style]}>{children}</RNText>; }
+
+// Kept so screens written against the first version still render.
+export const H1 = Title;
+export const H2 = Heading;
+
+// ── page frame ──────────────────────────────────────────────────────────────
+/**
+ * The body of a screen.
+ *
+ * `variant` decides how wide it is allowed to get on a large window:
+ *   page     the default — a working width, up to 1240px
+ *   reading  a single column of prose or a form, up to 760px
+ *   full     edge to edge; for a table or a chat thread that owns the width
+ */
+export function Screen({ children, scroll = true, refreshControl, variant = 'page', padded = true, style }) {
+  const layout = useLayout();
+  const width = variant === 'full' ? { width: '100%' } : pageWidth(layout, variant);
+  const pad = padded ? { padding: layout.gutter, gap: spacing.md } : null;
   const Body = scroll ? ScrollView : View;
-  const content = [styles.screenContent, webColumn];
   const props = scroll
-    ? { contentContainerStyle: content, refreshControl }
-    : { style: content };
+    ? { contentContainerStyle: [styles.screenBody, width, pad, style], refreshControl, showsVerticalScrollIndicator: false }
+    : { style: [styles.screenBody, width, pad, style] };
   return <Body style={styles.screen} {...props}>{children}</Body>;
 }
 
-export function Card({ children, style }) {
-  return <View style={[styles.card, style]}>{children}</View>;
+// ── surfaces ────────────────────────────────────────────────────────────────
+export function Card({ children, style, tone, padded = true, onPress, elevated }) {
+  const toneStyle = tone === 'accent' ? { borderLeftWidth: 3, borderLeftColor: colors.accent }
+    : tone === 'danger' ? { borderLeftWidth: 3, borderLeftColor: colors.danger }
+    : tone === 'success' ? { borderLeftWidth: 3, borderLeftColor: colors.success }
+    : tone === 'data' ? { borderLeftWidth: 3, borderLeftColor: colors.data }
+    : null;
+  const body = (
+    <View style={[styles.card, elevated ? shadow.raised : shadow.rest, padded && styles.cardPad, toneStyle, style]}>
+      {children}
+    </View>
+  );
+  if (!onPress) return body;
+  return <TouchableOpacity activeOpacity={0.82} onPress={onPress}>{body}</TouchableOpacity>;
 }
 
-export function H1({ children }) { return <Text style={styles.h1}>{children}</Text>; }
-export function H2({ children, style }) { return <Text style={[styles.h2, style]}>{children}</Text>; }
-export function Muted({ children, style }) { return <Text style={[styles.muted, style]}>{children}</Text>; }
-
-export function Button({ title, onPress, disabled, variant = 'primary' }) {
-  const bg = variant === 'primary' ? colors.primary : variant === 'danger' ? colors.danger : 'transparent';
-  const fg = variant === 'ghost' ? colors.primary : '#fff';
+// A titled block. Saves every screen re-inventing "heading, optional action,
+// then content" and keeps the spacing between them identical everywhere.
+export function Section({ title, subtitle, action, children, style, tone, icon }) {
   return (
-    <TouchableOpacity onPress={onPress} disabled={disabled}
-      style={[styles.btn, { backgroundColor: bg, opacity: disabled ? 0.5 : 1, borderWidth: variant === 'ghost' ? 1 : 0, borderColor: colors.border }]}>
-      <Text style={[styles.btnText, { color: fg }]}>{title}</Text>
+    <Card style={style} tone={tone}>
+      {(title || action) && (
+        <View style={styles.sectionHead}>
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+            {icon ? <IconTile name={icon} size={30} /> : null}
+            <View style={{ flex: 1 }}>
+              {title ? <Heading>{title}</Heading> : null}
+              {subtitle ? <Muted style={{ marginTop: 2 }}>{subtitle}</Muted> : null}
+            </View>
+          </View>
+          {action || null}
+        </View>
+      )}
+      {children}
+    </Card>
+  );
+}
+
+// A small tinted square holding an icon. The app's most repeated motif: it
+// gives a row a fixed left edge so a list of them reads as a column.
+export function IconTile({ name, size = 36, tone = 'primary', color }) {
+  const tones = {
+    primary: { bg: colors.primarySoft, fg: colors.primary },
+    gold: { bg: colors.accentSoft, fg: palette.gold600 },
+    success: { bg: palette.green100, fg: palette.green600 },
+    danger: { bg: palette.red100, fg: palette.red600 },
+    warning: { bg: palette.amber100, fg: palette.amber600 },
+    info: { bg: palette.blue100, fg: palette.blue600 },
+    violet: { bg: palette.violet100, fg: palette.violet500 },
+    data: { bg: '#DFF6F8', fg: palette.cyan600 },
+    chrome: { bg: 'rgba(255,255,255,0.12)', fg: '#FFFFFF' },
+  };
+  const t = tones[tone] || tones.primary;
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size * 0.32,
+      backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center',
+    }}>
+      <Icon name={name} size={size * 0.55} color={color || t.fg} />
+    </View>
+  );
+}
+
+// ── buttons ─────────────────────────────────────────────────────────────────
+const BUTTON_TONES = {
+  primary: { bg: colors.primary, fg: '#fff', border: 'transparent' },
+  gold: { bg: palette.gold500, fg: '#1B1300', border: 'transparent' },
+  danger: { bg: colors.danger, fg: '#fff', border: 'transparent' },
+  success: { bg: colors.success, fg: '#fff', border: 'transparent' },
+  outline: { bg: 'transparent', fg: colors.primary, border: colors.border },
+  subtle: { bg: colors.primarySoft, fg: colors.primary, border: 'transparent' },
+  ghost: { bg: 'transparent', fg: colors.primary, border: 'transparent' },
+};
+
+export function Button({
+  title, onPress, disabled, busy, variant = 'primary', size = 'md',
+  icon, iconRight, full = true, style,
+}) {
+  const t = BUTTON_TONES[variant] || BUTTON_TONES.primary;
+  const dims = size === 'sm'
+    ? { paddingVertical: 8, paddingHorizontal: 12, fontSize: 13, icon: 15 }
+    : size === 'lg'
+      ? { paddingVertical: 15, paddingHorizontal: 20, fontSize: 16, icon: 20 }
+      : { paddingVertical: 12, paddingHorizontal: 16, fontSize: 15, icon: 17 };
+  const off = disabled || busy;
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      onPress={onPress}
+      disabled={off}
+      activeOpacity={0.85}
+      style={[
+        styles.btn,
+        {
+          backgroundColor: t.bg,
+          borderColor: t.border,
+          borderWidth: t.border === 'transparent' ? 0 : 1,
+          paddingVertical: dims.paddingVertical,
+          paddingHorizontal: dims.paddingHorizontal,
+          opacity: off ? 0.5 : 1,
+          alignSelf: full ? 'stretch' : 'flex-start',
+        },
+        variant === 'primary' && !off ? shadow.rest : null,
+        style,
+      ]}
+    >
+      {busy ? <ActivityIndicator size="small" color={t.fg} /> : (icon ? <Icon name={icon} size={dims.icon} color={t.fg} /> : null)}
+      <RNText style={{ color: t.fg, fontWeight: '700', fontSize: dims.fontSize, letterSpacing: -0.1 }}>{title}</RNText>
+      {iconRight ? <Icon name={iconRight} size={dims.icon} color={t.fg} /> : null}
     </TouchableOpacity>
   );
 }
 
-export function Field({ label, value, onChangeText, ...rest }) {
+export function IconButton({ name, onPress, tone = 'subtle', size = 38, color, disabled, label }) {
+  const bg = tone === 'chrome' ? 'rgba(255,255,255,0.12)' : tone === 'plain' ? 'transparent' : colors.primarySoft;
+  const fg = color || (tone === 'chrome' ? '#fff' : colors.primary);
   return (
-    <View style={{ marginBottom: spacing.md }}>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
-      <TextInput style={styles.input} value={value} onChangeText={onChangeText}
-        placeholderTextColor={colors.muted} autoCapitalize="none" {...rest} />
+    <TouchableOpacity
+      accessibilityRole="button" accessibilityLabel={label}
+      onPress={onPress} disabled={disabled} activeOpacity={0.75}
+      style={{
+        width: size, height: size, borderRadius: size * 0.32,
+        backgroundColor: bg, alignItems: 'center', justifyContent: 'center',
+        opacity: disabled ? 0.45 : 1,
+      }}
+    >
+      <Icon name={name} size={size * 0.5} color={fg} />
+    </TouchableOpacity>
+  );
+}
+
+// Floating action — the phone's "add one". On a desktop the same action is a
+// button in the section header, so this only draws where it belongs.
+export function Fab({ name = 'plus', label, onPress }) {
+  const layout = useLayout();
+  if (!layout.isPhone) return null;
+  return (
+    <TouchableOpacity
+      accessibilityRole="button" accessibilityLabel={label}
+      onPress={onPress} activeOpacity={0.88}
+      style={[styles.fab, shadow.floating]}
+    >
+      <Icon name={name} size={22} color="#fff" />
+      {label ? <RNText style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>{label}</RNText> : null}
+    </TouchableOpacity>
+  );
+}
+
+// ── inputs ──────────────────────────────────────────────────────────────────
+export function Field({ label, value, onChangeText, hint, error, icon, right, style, inputStyle, ...rest }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <View style={[{ marginBottom: spacing.md }, style]}>
+      {label ? <Micro style={{ marginBottom: 6, color: colors.muted }}>{label}</Micro> : null}
+      <View style={[
+        styles.inputWrap,
+        focused && { borderColor: colors.primary, backgroundColor: '#fff' },
+        error && { borderColor: colors.danger },
+      ]}>
+        {icon ? <Icon name={icon} size={17} color={focused ? colors.primary : colors.faint} /> : null}
+        <TextInput
+          style={[styles.input, inputStyle]}
+          value={value == null ? '' : String(value)}
+          onChangeText={onChangeText}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          placeholderTextColor={colors.faint}
+          autoCapitalize="none"
+          {...rest}
+        />
+        {right || null}
+      </View>
+      {error ? <Muted style={{ color: colors.danger, marginTop: 4 }}>{error}</Muted>
+        : hint ? <Muted style={{ marginTop: 4 }}>{hint}</Muted> : null}
     </View>
   );
 }
 
-export function Row({ left, right }) {
+export function TextArea(props) {
   return (
-    <View style={styles.row}>
+    <Field
+      {...props}
+      multiline
+      numberOfLines={props.numberOfLines || 4}
+      autoCapitalize="sentences"
+      inputStyle={[{ minHeight: (props.numberOfLines || 4) * 22, textAlignVertical: 'top', paddingTop: 6 }, props.inputStyle]}
+    />
+  );
+}
+
+/**
+ * A picker built from pills rather than a native select.
+ *
+ * A native picker means a platform module and three different behaviours; a
+ * teacher choosing between six classes is better served by seeing all six.
+ * Long lists fall back to a scrolling row.
+ */
+export function Select({ label, value, options, onChange, hint, empty = 'Nothing to choose from.', columns }) {
+  const layout = useLayout();
+  const wrap = columns || (layout.isPhone ? 2 : 4);
+  const opts = options || [];
+  return (
+    <View style={{ marginBottom: spacing.md }}>
+      {label ? <Micro style={{ marginBottom: 6, color: colors.muted }}>{label}</Micro> : null}
+      {opts.length === 0
+        ? <Muted>{empty}</Muted>
+        : (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {opts.map((o) => {
+              const active = String(o.value) === String(value);
+              return (
+                <TouchableOpacity
+                  key={String(o.value)}
+                  accessibilityRole="button"
+                  onPress={() => onChange(o.value)}
+                  activeOpacity={0.8}
+                  style={[
+                    styles.selectPill,
+                    { minWidth: wrap <= 2 ? '48%' : undefined },
+                    active && { backgroundColor: colors.primary, borderColor: colors.primary },
+                  ]}
+                >
+                  <RNText numberOfLines={1} style={{ color: active ? '#fff' : colors.textSoft, fontWeight: '600', fontSize: 14 }}>
+                    {o.label}
+                  </RNText>
+                  {o.note ? (
+                    <RNText style={{ color: active ? 'rgba(255,255,255,0.75)' : colors.faint, fontSize: 11, fontWeight: '600' }}>
+                      {o.note}
+                    </RNText>
+                  ) : null}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+      {hint ? <Muted style={{ marginTop: 6 }}>{hint}</Muted> : null}
+    </View>
+  );
+}
+
+export function SearchField({ value, onChangeText, placeholder = 'Search…', onClear }) {
+  return (
+    <View style={styles.searchWrap}>
+      <Icon name="search" size={17} color={colors.faint} />
+      <TextInput
+        style={[styles.input, { paddingVertical: Platform.OS === 'web' ? 10 : 8 }]}
+        value={value} onChangeText={onChangeText}
+        placeholder={placeholder} placeholderTextColor={colors.faint}
+        autoCapitalize="none" returnKeyType="search"
+      />
+      {value ? <IconButton name="close" size={28} tone="plain" color={colors.faint} onPress={() => (onClear ? onClear() : onChangeText(''))} label="Clear search" /> : null}
+    </View>
+  );
+}
+
+// A date as typed text, validated on the way out. A native date picker is a
+// platform module per platform; a school types 2026-09-14 faster than it
+// spins three wheels.
+export function DateField({ label, value, onChange, hint }) {
+  return (
+    <Field
+      label={label} value={value} onChangeText={onChange}
+      placeholder="YYYY-MM-DD" keyboardType={Platform.OS === 'web' ? 'default' : 'numbers-and-punctuation'}
+      icon="calendar" hint={hint} maxLength={10}
+    />
+  );
+}
+
+// ── rows, lists and tables ──────────────────────────────────────────────────
+export function Row({ left, right, onPress, style }) {
+  const body = (
+    <View style={[styles.row, style]}>
       <View style={{ flex: 1 }}>{left}</View>
       <View style={{ alignItems: 'flex-end' }}>{right}</View>
     </View>
   );
+  return onPress ? <TouchableOpacity activeOpacity={0.7} onPress={onPress}>{body}</TouchableOpacity> : body;
 }
 
+export function ListRow({ title, subtitle, meta, icon, iconTone, right, onPress, badge, style }) {
+  const body = (
+    <View style={[styles.listRow, style]}>
+      {icon ? <IconTile name={icon} tone={iconTone} size={38} /> : null}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <RNText numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text, flexShrink: 1 }}>{title}</RNText>
+          {badge || null}
+        </View>
+        {subtitle ? <Muted numberOfLines={1} style={{ marginTop: 1 }}>{subtitle}</Muted> : null}
+        {meta ? <View style={{ marginTop: 6 }}>{meta}</View> : null}
+      </View>
+      {right ? <View style={{ alignItems: 'flex-end' }}>{right}</View> : null}
+      {onPress ? <Icon name="chevron" size={16} color={colors.faint} /> : null}
+    </View>
+  );
+  return onPress ? <TouchableOpacity activeOpacity={0.72} onPress={onPress}>{body}</TouchableOpacity> : body;
+}
+
+export function Divider({ style }) { return <View style={[styles.divider, style]} />; }
+
+/**
+ * A table where there is room for one, and stacked rows where there is not.
+ *
+ * `columns` is [{ key, label, width?, align?, render? }]. On a phone the first
+ * column becomes the row's title and the rest become labelled lines beneath it,
+ * so a broadsheet is readable on a handset instead of scrolling sideways
+ * forever.
+ */
+export function DataTable({ columns, rows, keyExtractor, onRowPress, empty = 'Nothing to show.', dense }) {
+  const layout = useLayout();
+  if (!rows || rows.length === 0) return <Muted>{empty}</Muted>;
+  const key = keyExtractor || ((r, i) => String(r.id ?? i));
+
+  if (!layout.canTable) {
+    const [first, ...rest] = columns;
+    return (
+      <View>
+        {rows.map((r, i) => {
+          const body = (
+            <View key={key(r, i)} style={styles.stackRow}>
+              <RNText style={{ ...type.body, fontWeight: '700', color: colors.text }}>
+                {first.render ? first.render(r) : r[first.key]}
+              </RNText>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 6 }}>
+                {rest.map(c => (
+                  <View key={c.key} style={{ minWidth: 92 }}>
+                    <Micro>{c.label}</Micro>
+                    <RNText style={{ ...type.small, color: colors.textSoft, marginTop: 1 }}>
+                      {c.render ? c.render(r) : (r[c.key] ?? '—')}
+                    </RNText>
+                  </View>
+                ))}
+              </View>
+            </View>
+          );
+          return onRowPress
+            ? <TouchableOpacity key={key(r, i)} activeOpacity={0.72} onPress={() => onRowPress(r)}>{body}</TouchableOpacity>
+            : body;
+        })}
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ minWidth: '100%' }}>
+      <View style={{ flex: 1, minWidth: '100%' }}>
+        <View style={styles.tableHead}>
+          {columns.map(c => (
+            <View key={c.key} style={{ width: c.width, flex: c.width ? undefined : 1, paddingHorizontal: 6 }}>
+              <Micro style={{ textAlign: c.align || 'left' }}>{c.label}</Micro>
+            </View>
+          ))}
+        </View>
+        {rows.map((r, i) => {
+          const body = (
+            <View style={[styles.tableRow, dense && { paddingVertical: 7 }]}>
+              {columns.map(c => (
+                <View key={c.key} style={{ width: c.width, flex: c.width ? undefined : 1, paddingHorizontal: 6 }}>
+                  {c.render
+                    ? <View style={{ alignItems: c.align === 'right' ? 'flex-end' : c.align === 'center' ? 'center' : 'flex-start' }}>{c.render(r)}</View>
+                    : <RNText numberOfLines={1} style={{ ...type.small, color: colors.textSoft, textAlign: c.align || 'left' }}>{r[c.key] ?? '—'}</RNText>}
+                </View>
+              ))}
+            </View>
+          );
+          return onRowPress
+            ? <TouchableOpacity key={key(r, i)} activeOpacity={0.72} onPress={() => onRowPress(r)}>{body}</TouchableOpacity>
+            : <View key={key(r, i)}>{body}</View>;
+        })}
+      </View>
+    </ScrollView>
+  );
+}
+
+// ── figures ─────────────────────────────────────────────────────────────────
+export function StatCard({ label, value, tone, icon, note, onPress, style }) {
+  const fg = tone === 'success' ? colors.success
+    : tone === 'danger' ? colors.danger
+    : tone === 'warning' ? colors.warning
+    : tone === 'data' ? colors.data
+    : colors.text;
+  const body = (
+    <View style={[styles.stat, shadow.rest, style]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Micro>{label}</Micro>
+        {icon ? <Icon name={icon} size={16} color={colors.faint} /> : null}
+      </View>
+      <Figure color={fg} style={{ marginTop: 8 }}>{value}</Figure>
+      {note ? <Muted style={{ marginTop: 2 }}>{note}</Muted> : null}
+    </View>
+  );
+  return onPress ? <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={{ flexGrow: 1, flexBasis: 0 }}>{body}</TouchableOpacity> : body;
+}
+
+// Lays cards out in the number of columns the window can take.
+export function Grid({ children, min = 160, gap = spacing.md, columns }) {
+  const layout = useLayout();
+  const cols = columns || layout.columns;
+  const basis = `${Math.floor(1000 / cols) / 10}%`;
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap, marginHorizontal: 0 }}>
+      {React.Children.map(children, (child, i) => child ? (
+        <View key={i} style={{ flexGrow: 1, flexBasis: basis, minWidth: min, maxWidth: '100%' }}>{child}</View>
+      ) : null)}
+    </View>
+  );
+}
+
+export function ProgressBar({ value, max = 100, tone = 'primary', height = 8, label }) {
+  const pct = Math.max(0, Math.min(100, max > 0 ? (value / max) * 100 : 0));
+  const fill = tone === 'success' ? colors.success : tone === 'danger' ? colors.danger
+    : tone === 'warning' ? colors.warning : colors.primary;
+  return (
+    <View>
+      {label ? <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+        <Muted>{label}</Muted><Muted>{Math.round(pct)}%</Muted>
+      </View> : null}
+      <View style={{ height, borderRadius: height, backgroundColor: colors.borderSoft, overflow: 'hidden' }}>
+        <View style={{ width: `${pct}%`, height: '100%', borderRadius: height, backgroundColor: fill }} />
+      </View>
+    </View>
+  );
+}
+
+// ── labels ──────────────────────────────────────────────────────────────────
+const BADGE_TONES = {
+  neutral: { bg: colors.borderSoft, fg: colors.muted },
+  primary: { bg: colors.primarySoft, fg: colors.primary },
+  success: { bg: palette.green100, fg: palette.green600 },
+  danger: { bg: palette.red100, fg: palette.red600 },
+  warning: { bg: palette.amber100, fg: palette.amber600 },
+  info: { bg: palette.blue100, fg: palette.blue600 },
+  gold: { bg: colors.accentSoft, fg: palette.gold600 },
+  data: { bg: '#DFF6F8', fg: palette.cyan600 },
+  chrome: { bg: 'rgba(255,255,255,0.14)', fg: '#fff' },
+};
+
+export function Badge({ label, tone = 'neutral', icon, style }) {
+  const t = BADGE_TONES[tone] || BADGE_TONES.neutral;
+  return (
+    <View style={[styles.badge, { backgroundColor: t.bg }, style]}>
+      {icon ? <Icon name={icon} size={11} color={t.fg} /> : null}
+      <RNText style={{ color: t.fg, fontSize: 11, fontWeight: '800', letterSpacing: 0.3 }}>{label}</RNText>
+    </View>
+  );
+}
+
+// Work a teacher has done that has not reached the school's computer yet. It
+// gets its own mark everywhere it appears, because "saved" and "saved here,
+// waiting" are not the same promise.
+export function PendingBadge({ label = 'Waiting to sync' }) {
+  return <Badge tone="data" icon="refresh" label={label} />;
+}
+
+export function SegmentedControl({ value, options, onChange, style }) {
+  return (
+    <View style={[styles.segment, style]}>
+      {options.map(o => {
+        const active = String(o.value) === String(value);
+        return (
+          <TouchableOpacity
+            key={String(o.value)} accessibilityRole="tab" accessibilityState={{ selected: active }}
+            onPress={() => onChange(o.value)} activeOpacity={0.8}
+            style={[styles.segmentItem, active && styles.segmentItemActive]}
+          >
+            {o.icon ? <Icon name={o.icon} size={15} color={active ? colors.primary : colors.muted} /> : null}
+            <RNText numberOfLines={1} style={{ fontSize: 13.5, fontWeight: '700', color: active ? colors.primary : colors.muted }}>
+              {o.label}
+            </RNText>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+export function Avatar({ name, photo, size = 40, tone = 'primary' }) {
+  const initials = useMemo(() => String(name || '?')
+    .split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?', [name]);
+  const bg = tone === 'chrome' ? 'rgba(255,255,255,0.16)' : colors.primarySoft;
+  const fg = tone === 'chrome' ? '#fff' : colors.primary;
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size / 2, backgroundColor: bg,
+      alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+    }}>
+      <RNText style={{ color: fg, fontWeight: '800', fontSize: size * 0.36 }}>{initials}</RNText>
+    </View>
+  );
+}
+
+// ── states ──────────────────────────────────────────────────────────────────
 export function Loading({ label }) {
   return (
     <View style={styles.center}>
@@ -68,30 +581,191 @@ export function Loading({ label }) {
   );
 }
 
-export function ErrorNote({ message }) {
-  if (!message) return null;
-  return <View style={styles.errorBox}><Text style={{ color: colors.danger }}>{message}</Text></View>;
+// Shown while a list loads, in the shape the list will take. A spinner tells a
+// teacher on a slow phone nothing about what is coming.
+export function Skeleton({ rows = 4, height = 54 }) {
+  return (
+    <View style={{ gap: 10 }}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <View key={i} style={{ height, borderRadius: radius.md, backgroundColor: colors.borderSoft, opacity: 1 - i * 0.12 }} />
+      ))}
+    </View>
+  );
 }
 
-// The neutral counterpart to ErrorNote: progress and instructions, not failure.
-export function InfoNote({ message }) {
+export function EmptyState({ icon = 'note', title, message, action }) {
+  return (
+    <View style={{ alignItems: 'center', paddingVertical: spacing.xl, gap: 6 }}>
+      <IconTile name={icon} size={52} tone="primary" />
+      {title ? <Heading style={{ marginTop: 6, textAlign: 'center' }}>{title}</Heading> : null}
+      {message ? <Muted style={{ textAlign: 'center', maxWidth: 380 }}>{message}</Muted> : null}
+      {action ? <View style={{ marginTop: 10 }}>{action}</View> : null}
+    </View>
+  );
+}
+
+function Note({ message, tone, icon }) {
   if (!message) return null;
-  return <View style={styles.infoBox}><Text style={{ color: colors.text }}>{message}</Text></View>;
+  const t = BADGE_TONES[tone] || BADGE_TONES.neutral;
+  return (
+    <View style={[styles.note, { backgroundColor: t.bg }]}>
+      <Icon name={icon} size={16} color={t.fg} />
+      <RNText style={{ color: t.fg, flex: 1, fontSize: 13.5, fontWeight: '600', lineHeight: 19 }}>{message}</RNText>
+    </View>
+  );
+}
+
+export function ErrorNote({ message }) { return <Note message={message} tone="danger" icon="alert" />; }
+export function InfoNote({ message }) { return <Note message={message} tone="info" icon="note" />; }
+export function SuccessNote({ message }) { return <Note message={message} tone="success" icon="tick" />; }
+export function WarningNote({ message }) { return <Note message={message} tone="warning" icon="alert" />; }
+
+// ── modal ───────────────────────────────────────────────────────────────────
+// A centred panel on a desktop, a sheet rising from the bottom on a phone —
+// the same component, because the content is identical and only the gesture
+// people expect differs.
+export function Sheet({ visible, onClose, title, children, footer, width = 560 }) {
+  const layout = useLayout();
+  if (!visible) return null;
+  return (
+    <RNModal transparent animationType={layout.isPhone ? 'slide' : 'fade'} visible onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose} />
+      <View pointerEvents="box-none" style={[
+        StyleSheet.absoluteFill,
+        { justifyContent: layout.isPhone ? 'flex-end' : 'center', alignItems: 'center', padding: layout.isPhone ? 0 : spacing.xl },
+      ]}>
+        <View style={[
+          styles.sheet, shadow.floating,
+          layout.isPhone
+            ? { width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, maxHeight: '88%' }
+            : { width: '100%', maxWidth: width, maxHeight: '86%' },
+        ]}>
+          <View style={styles.sheetHead}>
+            <Heading style={{ flex: 1 }}>{title}</Heading>
+            <IconButton name="close" size={34} tone="plain" color={colors.muted} onPress={onClose} label="Close" />
+          </View>
+          <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm }}>{children}</ScrollView>
+          {footer ? <View style={styles.sheetFoot}>{footer}</View> : null}
+        </View>
+      </View>
+    </RNModal>
+  );
+}
+
+// ── key/value ───────────────────────────────────────────────────────────────
+export function KeyValue({ items, columns }) {
+  const layout = useLayout();
+  const cols = columns || (layout.isPhone ? 2 : 3);
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
+      {(items || []).filter(i => i && i.value != null && i.value !== '').map((i, n) => (
+        <View key={n} style={{ flexGrow: 1, flexBasis: `${Math.floor(100 / cols) - 2}%`, minWidth: 120 }}>
+          <Micro>{i.label}</Micro>
+          <RNText style={{ ...type.body, color: colors.text, marginTop: 2 }}>{i.value}</RNText>
+        </View>
+      ))}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-  screenContent: { padding: spacing.lg, gap: spacing.md },
-  card: { backgroundColor: colors.card, borderRadius: radius.md, padding: spacing.lg, borderWidth: 1, borderColor: colors.border },
-  h1: { fontSize: 22, fontWeight: '800', color: colors.text },
-  h2: { fontSize: 16, fontWeight: '700', color: colors.text },
-  muted: { color: colors.muted, fontSize: 13 },
-  label: { color: colors.muted, fontSize: 12, marginBottom: 4, fontWeight: '600' },
-  input: { backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: colors.text },
-  btn: { paddingVertical: 13, borderRadius: radius.sm, alignItems: 'center', marginTop: spacing.sm },
-  btnText: { fontWeight: '700', fontSize: 15 },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
-  errorBox: { backgroundColor: '#FEF2F2', borderRadius: radius.sm, padding: spacing.md, borderWidth: 1, borderColor: '#FECACA' },
-  infoBox: { backgroundColor: '#EFF6FF', borderRadius: radius.sm, padding: spacing.md, borderWidth: 1, borderColor: '#BFDBFE' },
+  screenBody: { flexGrow: 1 },
+
+  card: {
+    backgroundColor: colors.card, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  cardPad: { padding: spacing.lg },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md },
+
+  btn: {
+    borderRadius: radius.sm + 2, alignItems: 'center', justifyContent: 'center',
+    flexDirection: 'row', gap: 8,
+  },
+  fab: {
+    position: 'absolute', right: spacing.lg, bottom: spacing.lg + 6,
+    backgroundColor: colors.primary, borderRadius: radius.pill,
+    paddingVertical: 14, paddingHorizontal: 18,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+
+  inputWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border,
+    borderRadius: radius.sm + 2, paddingHorizontal: 12,
+  },
+  input: {
+    flex: 1, paddingVertical: Platform.OS === 'web' ? 11 : 10,
+    fontSize: 15, color: colors.text,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
+  },
+  searchWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+    borderRadius: radius.pill, paddingHorizontal: 14,
+  },
+  selectPill: {
+    paddingVertical: 9, paddingHorizontal: 14, borderRadius: radius.pill,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card,
+    alignItems: 'center',
+  },
+
+  row: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+  },
+  listRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+  },
+  divider: { height: 1, backgroundColor: colors.borderSoft, marginVertical: spacing.sm },
+  stackRow: { paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.borderSoft },
+  tableHead: {
+    flexDirection: 'row', paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  tableRow: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 11,
+    borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+  },
+
+  stat: {
+    backgroundColor: colors.card, borderRadius: radius.md + 2,
+    borderWidth: 1, borderColor: colors.border, padding: spacing.lg,
+  },
+  badge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.pill,
+  },
+  segment: {
+    flexDirection: 'row', backgroundColor: colors.borderSoft,
+    borderRadius: radius.sm + 2, padding: 3, gap: 3,
+  },
+  segmentItem: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 8, paddingHorizontal: 8, borderRadius: radius.sm,
+  },
+  segmentItemActive: { backgroundColor: colors.card, ...shadow.rest },
+
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, minHeight: 220 },
+  note: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    borderRadius: radius.md, padding: spacing.md,
+  },
+
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(7,20,43,0.55)' },
+  sheet: { backgroundColor: colors.card, borderRadius: radius.lg, overflow: 'hidden' },
+  sheetHead: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+  },
+  sheetFoot: {
+    padding: spacing.lg, borderTopWidth: 1, borderTopColor: colors.borderSoft,
+    flexDirection: 'row', gap: spacing.sm, justifyContent: 'flex-end',
+  },
 });
+
+export { Icon };
+export default { Screen, Card, Section, Button, Field, Row };

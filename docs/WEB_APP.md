@@ -1,13 +1,46 @@
 # The web app
 
 The mobile app, in a browser. Same React source as the phone build in
-`mobile/`, same eighteen screens, same API — compiled for the web instead of
-for Android. Parents and teachers get to it by opening an address; there is
-nothing to install and no APK to pass around on WhatsApp.
+`mobile/`, same screens, same API — compiled for the web instead of for
+Android. Parents and teachers get to it by opening an address; there is nothing
+to install and no APK to pass around on WhatsApp.
 
-It is the fastest way to put Nickland Edusoft in people's hands. The phone app
-is still the better experience on a phone, and both are built from the same
-code, so neither is a fork of the other.
+It is the fastest way to put Nickland Edusoft in people's hands, and for
+teachers it is not a fallback: **teachers do not get the desktop at all**, so
+the browser and the phone are the whole of their working day.
+
+## It fits the machine it is on
+
+One bundle is opened on a 320-pixel Android handset, a 6.7-inch iPhone, a
+staffroom tablet and a 24-inch office monitor. `mobile/src/responsive.js` is
+the single place that decides which of those it is, so no screen measures the
+window and picks its own thresholds.
+
+| Width | Navigation | Layout |
+|---|---|---|
+| < 768 | Bottom bar of five, plus a **More** sheet holding everything else | One column, full-bleed cards, large tap targets |
+| 768–1179 | A rail of icons down the side | Two or three columns |
+| ≥ 1180 | A labelled sidebar, grouped | Up to four columns; the content column stops widening at 1240px so a register is not stretched across a cinema screen |
+
+A browser window dragged narrow gets the phone layout, because at 380 pixels it
+*is* a phone as far as the layout is concerned. Tables render as tables where
+there is room and as stacked, labelled rows where there is not — so a
+broadsheet of thirteen subjects is readable on a handset instead of scrolling
+sideways forever.
+
+This meant replacing expo-router's `Tabs` for the signed-in areas, which draws
+a bottom bar and only a bottom bar: on a laptop it showed five of the app's
+fifteen screens along the bottom edge of a 1920-pixel window and hid the rest.
+Routing is unchanged — every screen still has a URL that can be typed,
+bookmarked and shared, and still guards itself.
+
+## One sign-in box
+
+There is no "parent or staff?" choice. Nobody answers that question at a school
+gate, and getting it wrong came back as *invalid username or password*, which
+reads as a forgotten password rather than a wrong tab. The credential decides:
+the server matches a staff username first, then a parent's phone or email, and
+the app goes where the account belongs.
 
 For the phone build see [`MOBILE_BUILD.md`](MOBILE_BUILD.md); for the API it
 speaks, [`MOBILE_API.md`](MOBILE_API.md).
@@ -26,23 +59,36 @@ school's computer is switched off.
 | Served by | the desktop | Vercel |
 | Needs internet | **No** on the Wi-Fi; yes through a tunnel | Yes |
 | **Needs the school's computer on** | **Yes** | **No** |
-| **Teachers** | Everything — register, scores, canteen, homework, marking | Register, scores, canteen, homework. Saved instantly, reach the school when it next syncs |
+| **Teachers** | Everything — the register and its history, class work, exam marks, the broadsheet and report cards, homework and its marking, lesson notes, the canteen sheet, messages, notices, clock-in, leave, payslips | All of it except two things: adding an assessment column, and starting a brand-new conversation. Saved instantly, reach the school when it next syncs |
 | **Parents** | Everything, including paying fees | Fees, results, attendance, receipts, notices, messages (read) |
 | Installable to home screen | Only over a tunnel (plain HTTP is not a secure origin) | Yes |
 
 **A teacher can do their job from home with the school's computer off.** That
 is the point of the online column, and it is not a read-only consolation
-prize: the register, the score sheet, the canteen collection and setting
-homework all work. What they cannot do online is *take a fee payment* — that
-writes a receipt against the school's own numbering — and *mark* homework,
-which needs an assignment the desktop has actually created.
+prize: the register, class work and exam marks, the broadsheet, lesson notes,
+leave, payslips and a reply to a parent all work.
+
+Four things stay with the school, and each says so plainly rather than failing
+with a network error:
+
+- **Taking a fee payment** — it writes a receipt against the school's own
+  numbering.
+- **Marking homework** — it needs an assignment the desktop actually created.
+- **Adding an assessment column** — the desktop numbers it, and marks queued
+  against an id the cloud invented would arrive pointing at nothing.
+- **Starting a brand-new conversation** — it needs a parent record the cloud
+  does not hold. Replying to an existing thread works from anywhere.
 
 ### How that works, and why it is safe
 
 The school's desktop stays the source of truth. It **projects** what teachers
-need — accounts and their permissions, class rosters with pupils, subjects,
-recent registers and the marks already entered, the dashboard numbers, the
-debtor list, each teacher's timetable — and the cloud serves those. A teacher's
+need — accounts with their permissions *and their teaching scope*, class
+rosters with pupils, guardian contacts, subjects, recent registers, the marks
+already entered, continuous assessment, term summaries, canteen balances, the
+dashboard numbers, the debtor list, each teacher's timetable, and a
+`staff_profile` record carrying their own employment (assignments, lesson
+notes, leave, clock-ins and **paid** payslips only) — and the cloud serves
+those. A teacher's
 writes are **queued** on the cloud, and the desktop applies them on its next
 sync through the very same functions its own LAN API uses. There is one
 implementation of "what marking a register means", not two.

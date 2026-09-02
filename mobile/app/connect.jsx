@@ -22,13 +22,19 @@ import { View, Text, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '../src/auth';
 import { setConnection, api } from '../src/api';
-import { Screen, Card, H1, H2, Muted, Field, Button, ErrorNote } from '../src/ui';
-import { colors } from '../src/theme';
+import {
+  Screen, Card, Title, Heading, Muted, Field, Button, ErrorNote,
+  SuccessNote, WarningNote, SegmentedControl, ListRow, Gradient, IconTile,
+} from '../src/ui';
+import { Icon } from '../src/icons';
+import { colors, palette, gradients, spacing, radius, shadow, type } from '../src/theme';
+import { useLayout } from '../src/responsive';
 import { isWeb } from '../src/storage';
 import { webOrigin, isSecureOrigin } from '../src/origin';
 
 export default function Connect() {
   const { saveHost, saveCloud, detectedSchools } = useAuth();
+  const layout = useLayout();
   const [tab, setTab] = useState(detectedSchools ? 'cloud' : 'school');
 
   // School-address state. In a browser already sitting on a plain-HTTP
@@ -99,19 +105,33 @@ export default function Connect() {
   }
 
   return (
-    <Screen>
-      <View style={{ alignItems: 'center', marginVertical: 20 }}>
-        <View style={{ width: 64, height: 64, borderRadius: 16, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={{ fontSize: 30 }}>🎓</Text>
+    <Screen variant="reading">
+      <Gradient colors={gradients.chrome} angle={145} style={[{ borderRadius: radius.lg, padding: spacing.xl, marginBottom: spacing.sm }, shadow.raised]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <View style={{
+            width: 46, height: 46, borderRadius: 15,
+            backgroundColor: 'rgba(255,255,255,0.10)', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Icon name="school" size={24} color={palette.gold400} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: layout.isPhone ? 20 : 24, letterSpacing: -0.4 }}>
+              Nickland Edusoft
+            </Text>
+            <Text style={{ color: colors.onChromeMuted, fontSize: 13, fontWeight: '600' }}>
+              Connect to your school
+            </Text>
+          </View>
         </View>
-        <H1>Nickland Edusoft</H1>
-        <Muted>Connect to your school</Muted>
-      </View>
+      </Gradient>
 
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Tab label="My school" active={tab === 'school'} onPress={() => switchTab('school')} />
-        <Tab label="Online" active={tab === 'cloud'} onPress={() => switchTab('cloud')} />
-      </View>
+      <SegmentedControl
+        value={tab} onChange={switchTab}
+        options={[
+          { value: 'school', label: 'My school', icon: 'pin' },
+          { value: 'cloud', label: 'Online', icon: 'grid' },
+        ]}
+      />
 
       {tab === 'school' ? (
         <Card>
@@ -124,30 +144,20 @@ export default function Connect() {
             is off, use Online.
           </Muted>
           {lanBlocked && (
-            <View style={{ marginTop: 12, padding: 12, backgroundColor: '#FFFBEB', borderRadius: 8 }}>
-              <Text style={{ color: colors.text, fontSize: 13 }}>
-                This page is on a secure (https) address, and browsers block secure pages from
-                reaching a plain http address on the local network. Either open the school's
-                address directly in your browser, or use the school's https address.
-              </Text>
-            </View>
+            <WarningNote message="This page is on a secure (https) address, and browsers block secure pages from reaching a plain http address on the local network. Either open the school's address directly in your browser, or use the school's https address." />
           )}
           <ErrorNote message={error} />
-          {school && (
-            <View style={{ marginTop: 12, padding: 12, backgroundColor: '#ECFDF5', borderRadius: 8 }}>
-              <Text style={{ fontWeight: '700', color: colors.success }}>✓ Connected to {school.name}</Text>
-            </View>
-          )}
+          {school && <SuccessNote message={`Connected to ${school.name}.`} />}
           {school
-            ? <Button title="Continue" onPress={() => router.replace('/login')} />
-            : <Button title={busy ? 'Checking…' : 'Connect'} onPress={verifyLan} disabled={busy} />}
+            ? <Button title="Continue" onPress={() => router.replace('/login')} size="lg" iconRight="chevron" />
+            : <Button title={busy ? 'Checking…' : 'Connect'} onPress={verifyLan} busy={busy} size="lg" />}
         </Card>
       ) : (
         <Card>
           {detectedSchools ? (
             <>
-              <H2>Choose your school</H2>
-              <Muted>You are on {shortHost(detectedSchools.baseUrl)}. Pick your school.</Muted>
+              <Heading>Choose your school</Heading>
+              <Muted style={{ marginBottom: spacing.sm }}>You are on {shortHost(detectedSchools.baseUrl)}. Pick your school.</Muted>
             </>
           ) : (
             <>
@@ -164,22 +174,28 @@ export default function Connect() {
           <ErrorNote message={error} />
           {schools && schools.length > 0 && (
             <View style={{ marginTop: 12 }}>
-              {!detectedSchools && <H2>Choose your school</H2>}
+              {!detectedSchools && <Heading>Choose your school</Heading>}
               {schools.map(s => {
                 const active = picked?.school_id === s.school_id;
                 return (
-                  <TouchableOpacity key={s.school_id} onPress={() => setPicked(s)}
-                    style={{ marginTop: 8, padding: 12, borderRadius: 10, borderWidth: 1,
-                      borderColor: active ? colors.primary : colors.border, backgroundColor: active ? '#EEF2FB' : '#fff' }}>
-                    <Text style={{ fontWeight: '700', color: active ? colors.primary : colors.text }}>{s.name}</Text>
+                  <TouchableOpacity key={s.school_id} onPress={() => setPicked(s)} activeOpacity={0.8}
+                    style={{
+                      marginTop: 8, padding: 14, borderRadius: radius.md, borderWidth: 1,
+                      flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+                      borderColor: active ? colors.primary : colors.border,
+                      backgroundColor: active ? colors.primarySoft : colors.card,
+                    }}>
+                    <IconTile name="school" size={34} tone={active ? 'primary' : 'primary'} />
+                    <Text style={{ ...type.body, fontWeight: '700', color: active ? colors.primary : colors.text, flex: 1 }}>{s.name}</Text>
+                    {active ? <Icon name="tick" size={17} color={colors.primary} /> : null}
                   </TouchableOpacity>
                 );
               })}
             </View>
           )}
           {picked
-            ? <Button title={`Continue as ${picked.name}`} onPress={continueCloud} />
-            : (!detectedSchools && <Button title={busy ? 'Searching…' : 'Find my school'} onPress={findSchools} disabled={busy} />)}
+            ? <Button title={`Continue as ${picked.name}`} onPress={continueCloud} size="lg" iconRight="chevron" />
+            : (!detectedSchools && <Button title={busy ? 'Searching…' : 'Find my school'} onPress={findSchools} busy={busy} size="lg" />)}
         </Card>
       )}
     </Screen>
@@ -188,13 +204,4 @@ export default function Connect() {
 
 function shortHost(u) {
   return String(u || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
-}
-
-function Tab({ label, active, onPress }) {
-  return (
-    <TouchableOpacity onPress={onPress}
-      style={{ flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center', backgroundColor: active ? colors.primary : '#fff', borderWidth: 1, borderColor: colors.border }}>
-      <Text style={{ color: active ? '#fff' : colors.text, fontWeight: '700', fontSize: 13 }}>{label}</Text>
-    </TouchableOpacity>
-  );
 }

@@ -4,6 +4,7 @@ import { View, Text, Modal, TouchableOpacity } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../../src/auth';
+import { useScreenTitle } from '../../../src/shell';
 import { api, money } from '../../../src/api';
 import { Screen, Card, H2, Muted, Row, Loading, ErrorNote, Button, Field } from '../../../src/ui';
 import { colors } from '../../../src/theme';
@@ -20,6 +21,8 @@ export default function ChildDetail() {
   const [transport, setTransport] = useState(null);
   const [error, setError] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
+
+  useScreenTitle(data?.child?.name || 'My child');
 
   const load = useCallback(async () => {
     setError(null);

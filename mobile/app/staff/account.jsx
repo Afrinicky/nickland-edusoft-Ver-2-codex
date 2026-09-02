@@ -4,8 +4,11 @@ import { View, Text } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { api } from '../../src/api';
-import { Screen, Card, H2, Muted, Button, Field, ErrorNote, InfoNote } from '../../src/ui';
-import { colors } from '../../src/theme';
+import {
+  Screen, Card, Section, Heading, Muted, Micro, Button, Badge, Field,
+  ErrorNote, InfoNote, SuccessNote, Grid, StatCard, Avatar, KeyValue, Divider,
+} from '../../src/ui';
+import { colors, spacing, type } from '../../src/theme';
 
 export default function Account() {
   const { profile, host, mode, token, signOut, forgetConnection } = useAuth();
@@ -57,47 +60,69 @@ export default function Account() {
     return () => { live = false; };
   }, [online, token]);
 
+  // A module map is not a sentence. "Students, Academics, Canteen" reads as a
+  // list of what this account can open, which is the question being asked.
+  const MODULE_NAMES = {
+    dashboard: 'Overview', students: 'Students', academics: 'Academics',
+    fees: 'Fees', canteen: 'Canteen', staff: 'Staff', payroll: 'Payroll',
+    finance: 'Finance', notifications: 'Messages & notices', settings: 'Settings',
+  };
+
   return (
-    <Screen>
+    <Screen variant="reading">
       <Card>
-        <H2>{u.full_name || 'Staff'}</H2>
-        <Muted>{profile?.designation || ''}{profile?.is_admin ? ' · Administrator' : ''}</Muted>
-        <View style={{ marginTop: 8 }}>
-          <Muted>Connected to: {online ? `${profile?.school?.name || 'Nickland Edusoft online'} (internet)` : host}</Muted>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg }}>
+          <Avatar name={u.full_name} size={54} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text numberOfLines={1} style={{ ...type.title, color: colors.text }}>{u.full_name || 'Staff'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+              <Muted>{profile?.designation || 'Staff'}</Muted>
+              {profile?.is_admin ? <Badge tone="gold" label="Administrator" /> : null}
+              <Badge tone={online ? 'data' : 'success'} label={online ? 'Over the internet' : 'On the school network'} />
+            </View>
+          </View>
         </View>
+        <Divider />
+        <KeyValue items={[
+          { label: 'Username', value: u.username },
+          { label: online ? 'School' : 'Address', value: online ? (profile?.school?.name || 'Nickland Edusoft online') : host },
+        ]} />
       </Card>
 
       {online && (
-        <Card>
-          <H2>Reaching the school</H2>
+        <Section title="Reaching the school" icon="refresh">
           {waiting === null ? (
             <Muted>Checking…</Muted>
           ) : waiting === 0 ? (
-            <Muted>Everything you have entered has reached the school.</Muted>
+            <SuccessNote message="Everything you have entered has reached the school." />
           ) : (
-            <Text style={{ color: colors.primary, fontWeight: '700' }}>
-              {waiting} {waiting === 1 ? 'entry is' : 'entries are'} waiting for the school's computer.
-            </Text>
+            <InfoNote message={`${waiting} ${waiting === 1 ? 'entry is' : 'entries are'} waiting for the school's computer.`} />
           )}
-          <Muted style={{ marginTop: 6 }}>
-            Your work is saved here the moment you enter it, and lands in the school's records
-            the next time its computer syncs. Taking a fee payment is the one thing that needs
-            the school itself, because receipts are numbered there.
+          <Muted style={{ marginTop: spacing.sm }}>
+            Your work is saved the moment you enter it and lands in the school's records the next
+            time its computer syncs. Taking a fee payment is the one thing that needs the school
+            itself, because receipts are numbered there.
           </Muted>
-        </Card>
+        </Section>
       )}
 
-      <Card>
-        <H2>Your access</H2>
-        <Muted>{profile?.is_admin ? 'Full access (administrator).' : (allowed.length ? allowed.join(', ') : 'No modules enabled.')}</Muted>
-      </Card>
+      <Section title="What you can open" icon="grid">
+        {profile?.is_admin ? (
+          <Muted>Full access — an administrator is not restricted anywhere.</Muted>
+        ) : allowed.length === 0 ? (
+          <Muted>No modules are enabled for your account. Ask the school office.</Muted>
+        ) : (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            {allowed.map(k => <Badge key={k} tone="primary" label={MODULE_NAMES[k] || k} />)}
+          </View>
+        )}
+      </Section>
 
-      <Card>
-        <H2>Your password</H2>
+      <Section title="Your password" icon="wallet">
         {forced && !pwDone && (
           <InfoNote message="Your password was set by an administrator. Choose your own before carrying on." />
         )}
-        <InfoNote message={pwDone} />
+        <SuccessNote message={pwDone} />
         {changing ? (
           <>
             <Field label="Current password" value={pw.current} onChangeText={v => setP('current', v)}
@@ -107,19 +132,24 @@ export default function Account() {
             <Field label="Confirm new password" value={pw.confirm} onChangeText={v => setP('confirm', v)}
               secureTextEntry placeholder="Type it again" />
             <ErrorNote message={pwError} />
-            <Button title={pwBusy ? 'Saving…' : 'Change password'} onPress={savePassword} disabled={pwBusy} />
+            <Button title={pwBusy ? 'Saving…' : 'Change password'} onPress={savePassword} busy={pwBusy} />
             {!forced && <Button title="Cancel" variant="ghost" onPress={() => { setChanging(false); setPwError(null); }} />}
           </>
         ) : (
           <>
             <Muted>Change the password you sign in with.</Muted>
-            <Button title="Change password" variant="ghost" onPress={() => { setChanging(true); setPwDone(null); }} />
+            <Button title="Change password" variant="outline" icon="gear"
+              onPress={() => { setChanging(true); setPwDone(null); }} style={{ marginTop: spacing.sm }} />
           </>
         )}
-      </Card>
+      </Section>
 
-      <Button title="Sign out" variant="danger" onPress={async () => { await signOut(); router.replace('/login'); }} />
-      <Button title="Change school" variant="ghost" onPress={async () => { await forgetConnection(); router.replace('/connect'); }} />
+      <Card>
+        <Button title="Sign out" variant="danger" icon="logout"
+          onPress={async () => { await signOut(); router.replace('/login'); }} />
+        <Button title="Change school or address" variant="ghost"
+          onPress={async () => { await forgetConnection(); router.replace('/connect'); }} />
+      </Card>
     </Screen>
   );
 }

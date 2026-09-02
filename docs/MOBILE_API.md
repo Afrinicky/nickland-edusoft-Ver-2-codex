@@ -33,7 +33,8 @@ student's guardian contact on file; otherwise an admin provisions the account.
 |--------|------|---------|
 | GET | `/health` | Liveness + school name. |
 | GET | `/info` | School identity + whether self-registration is on. |
-| POST | `/auth/login` | Staff login `{ username, password, device }` → `{ token }`. |
+| POST | `/auth/signin` | **One sign-in box** `{ identifier, password, device }` → `{ role, token, … }`. Matches a staff username first, then a parent's phone or email. One message for both failures, so an outsider cannot learn which accounts are real. |
+| POST | `/auth/login` | Staff login `{ username, password, device }` → `{ token }`. Kept for older clients. |
 | POST | `/auth/parent/register` | Parent self-register `{ full_name, phone, email, password }` (must match a student). |
 | POST | `/auth/parent/login` | Parent login `{ identifier (phone/email), password }`. |
 
@@ -56,6 +57,87 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | POST | `/parent/messages` | parent | `{ threadId?, studentId?, subject?, body }` — start or continue a thread. |
 | GET | `/parent/children/:id/homework` | parent | The child's class homework (upcoming + recently due). |
 | GET | `/parent/children/:id/transport` | parent | The child's bus route, stop, pickup time and transport-fee balance. |
+
+### Staff — teaching
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/classes` | The classes this teacher may open, each flagged `is_class_teacher`. |
+| GET | `/subjects?classId=` | Subjects — narrowed to what they teach in that class. |
+| GET | `/terms` | Terms, most recent first. |
+| GET | `/students?classId=&q=` | The roll, scoped to their classes, searchable. |
+| GET | `/students/:id` | A pupil's record: guardians, attendance, marks, homework, and fees/canteen where the account may see money. |
+| GET | `/students/:id/parents` | Parent accounts linked to a pupil, for starting a conversation. |
+| GET | `/attendance?classId=&date=` | The register for a day. |
+| POST | `/attendance` | Save it. A batch reaching outside the teacher's classes is refused whole. |
+| GET | `/attendance/history?classId=&days=` | Day-by-day totals and per-pupil absences. |
+| GET | `/scores/subjects?classId=` | Subjects with score entry open to this teacher. |
+| GET | `/scores?classId=&subjectId=` | Exam marks for a class + subject. |
+| POST | `/scores` | Save raw exam marks (0–100). |
+| GET | `/assessments?classId=&subjectId=` | Continuous assessment: the term's columns, the marks in them, and the weighting. |
+| POST | `/assessments/column` | Add an assignment / test / quiz with its own total. |
+| POST | `/assessments` | Save class-work marks; the weighted class score is recomputed through the desktop's own function. |
+| GET | `/results?classId=&termId=` | The broadsheet — every pupil against every subject, with average and position. |
+| GET | `/results/student/:id` | One pupil's terminal report, with the grading bands. |
+| POST | `/results/remarks` | Conduct, interests, talents and the class teacher's remark. **Class teacher only.** |
+| GET | `/homework?classId=&all=` | Homework set for a class. |
+| POST | `/homework` | Set homework; give it marks and it feeds the class score. |
+| GET | `/homework/:id/sheet` | The marking sheet. |
+| POST | `/homework/:id/marks` | Save who handed in what, and their marks. |
+| DELETE | `/homework/:id` | Withdraw an assignment (and the marks that hung off it). |
+| GET | `/lesson-notes?status=&classId=` | The teacher's own lesson notes. |
+| GET | `/lesson-notes/:id` | One note in full. |
+| POST | `/lesson-notes` | Write or edit one; `status: 'submitted'` sends it for review. An approved note is no longer theirs to change. |
+| DELETE | `/lesson-notes/:id` | Delete a note that has not been approved. |
+| GET | `/timetable/mine` | Their own week, today first. |
+| GET | `/timetable/class/:id` | A class grid, for a class they teach. |
+| GET | `/canteen/student/:id` | One pupil's canteen balance. |
+| POST | `/canteen/collect` | Take canteen money and issue a receipt. |
+| GET | `/canteen/class?classId=` | The morning sheet: who owes, and how much. **Class teacher only.** |
+
+### Staff — talking to parents
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/messages` | Every parent↔school thread, with the unread count. |
+| GET | `/messages/:id` | One thread (and marks it read for staff). |
+| POST | `/messages` | Reply or start a thread; mirrored to the parent's SMS or email. |
+| GET | `/announcements` | Active notices. |
+| POST | `/announcements` | Post one (needs `notifications` → Manage). |
+
+### Staff — their own employment
+Everything under `/hr` is about the signed-in person and nobody else. There is
+no `staffId` parameter anywhere in it by design: the token decides whose
+payslip this is, so no amount of guessing at ids reaches a colleague's.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/hr/me` | Their staff record, teaching assignments, and today's clock-in. |
+| POST | `/hr/clock` | `{ direction: 'in' \| 'out' }`. Clocking in twice does not move the first stamp. |
+| GET | `/hr/attendance?month=&year=` | Their own month of clock-ins. |
+| GET | `/hr/leave` | Their leave requests and how each was decided. |
+| POST | `/hr/leave` | Ask for leave; the days are counted from the dates. |
+| GET | `/hr/payslips?year=` | **Paid** months only — an unpaid draft row is the school's working figure, not a statement of what anyone is owed. |
+
+### Scope — whose class
+
+Permissions answer "may this account edit scores at all". Scope answers the
+question straight after: **whose**. It is resolved from `staff_assignments` by
+`electron/ipc/_scope.js` — the same resolver the desktop uses — and applied to
+every staff route above.
+
+| Assignment | What it grants |
+|---|---|
+| Class, no subject | The whole class — every subject in it |
+| Class + subject | That subject in that class, nothing else in it |
+| Subject, no class | That subject in every class that teaches it |
+
+The register, the canteen sheet and the end-of-term remarks belong to the one
+teacher answerable for the class (`is_class_teacher`), not to everyone who
+takes a subject in it. Proprietors, Administrators and Head Teachers are
+unrestricted as to *which* class; money and system modules are still theirs
+only if the school granted them.
+
+A pupil outside a teacher's scope answers **404, not 403** — which pupils are
+in another class is not theirs to learn either.
 
 ### Payment gateway (Paystack by default; pluggable per school)
 - Configured in Settings → Online Payments (`payment_gateway`, `paystack_secret_key`, …).

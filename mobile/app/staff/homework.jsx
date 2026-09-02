@@ -1,212 +1,273 @@
-// Set homework — pick a class + subject, add a title, details and due date.
-// Also lists the class's current homework.
+// Homework — set it, see who has done it, and mark it.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// Graded homework is backed by an assessment column, so a mark entered here
+// feeds the weighted class score and the report card, exactly as one entered on
+// the Class work sheet does. Marking needs an assignment the desktop has
+// created, so over the internet the marking sheet says so rather than failing
+// with a network error.
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, TextInput, ScrollView, TouchableOpacity } from 'react-native';
-import { Stack } from 'expo-router';
+import { View, Text, TextInput, RefreshControl } from 'react-native';
 import { useAuth } from '../../src/auth';
 import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
-import { Screen, Card, H2, Muted, Row, Field, Button, Loading, ErrorNote } from '../../src/ui';
-import { colors } from '../../src/theme';
-import { ClassPicker } from './attendance';
+import {
+  Screen, Card, Section, Heading, Muted, Micro, Button, Badge, Sheet, Field, TextArea,
+  ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState, ListRow, Select, Fab,
+  Grid, StatCard, SegmentedControl, PendingBadge,
+} from '../../src/ui';
+import { ClassPicker, SubjectPicker, useClasses, useSubjects, todayISO } from '../../src/pickers';
+import { useLayout } from '../../src/responsive';
+import { colors, palette, spacing, radius, type } from '../../src/theme';
+
+const SUBMISSION = [
+  { key: 'submitted', label: 'Done', tone: 'success' },
+  { key: 'late', label: 'Late', tone: 'warning' },
+  { key: 'missing', label: 'Not done', tone: 'danger' },
+];
 
 function HomeworkScreen() {
-  const { token } = useAuth();
-  const [classes, setClasses] = useState(null);
+  const { token, mode, profile } = useAuth();
+  const layout = useLayout();
+  const { classes, error: classError } = useClasses(token);
+
   const [classId, setClassId] = useState(null);
-  const [subjects, setSubjects] = useState([]);
-  const [subjectId, setSubjectId] = useState(null);
-  const [title, setTitle] = useState('');
-  const [desc, setDesc] = useState('');
-  const [due, setDue] = useState('');
-  const [maxMarks, setMaxMarks] = useState('');
-  const [list, setList] = useState([]);
+  const subjects = useSubjects(token, classId);
+  const [list, setList] = useState(null);
+  const [showAll, setShowAll] = useState(false);
   const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(null);
-  const [marking, setMarking] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [composing, setComposing] = useState(false);
+  const [form, setForm] = useState({ subjectId: null, title: '', description: '', dueDate: '', maxMarks: '' });
+  const [saving, setSaving] = useState(false);
+
+  const [marking, setMarking] = useState(null);   // the assignment being marked
+  const [sheet, setSheet] = useState(null);
+  const [entries, setEntries] = useState({});
 
   useEffect(() => {
-    api.classes(token).then(r => setClasses(r.classes || [])).catch(e => { setError(e.message); setClasses([]); });
-  }, [token]);
+    if (classId == null && classes && classes.length === 1) setClassId(classes[0].id);
+  }, [classes, classId]);
 
-  const loadClass = useCallback(async (cid) => {
-    setSubjects([]); setSubjectId(null); setList([]); setSaved(null);
-    try {
-      const [subs, hw] = await Promise.all([api.scoreSubjects(token, cid), api.classHomework(token, cid)]);
-      setSubjects(subs.subjects || []);
-      setList(hw.homework || []);
-    } catch (e) { setError(e.message); }
-  }, [token]);
+  const load = useCallback(async () => {
+    if (!classId) return;
+    setList(null); setError(null);
+    try { const r = await api.classHomework(token, classId, showAll); setList(r.homework || []); }
+    catch (e) { setError(e.message); setList([]); }
+  }, [token, classId, showAll]);
 
-  useEffect(() => { if (classId) loadClass(classId); }, [classId, loadClass]);
+  useEffect(() => { load(); }, [load]);
 
-  async function save() {
-    if (!title.trim()) { setError('A title is required.'); return; }
+  async function setHomework() {
+    if (!form.title.trim()) { setError('Give the assignment a title.'); return; }
     setSaving(true); setError(null); setSaved(null);
     try {
       await api.saveHomework(token, {
-        classId, subjectId, title, description: desc, dueDate: due,
-        maxMarks: maxMarks === '' ? null : Number(maxMarks),
+        classId, subjectId: form.subjectId,
+        title: form.title, description: form.description, dueDate: form.dueDate,
+        maxMarks: form.maxMarks === '' ? null : Number(form.maxMarks),
       });
-      setTitle(''); setDesc(''); setDue(''); setMaxMarks(''); setSaved('Homework set.');
-      const hw = await api.classHomework(token, classId); setList(hw.homework || []);
+      setForm({ subjectId: null, title: '', description: '', dueDate: '', maxMarks: '' });
+      setComposing(false);
+      setSaved(mode === 'cloud'
+        ? 'Homework saved and queued — it reaches the class when the school next syncs.'
+        : 'Homework set. The class can see it now.');
+      load();
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   }
 
-  if (classes === null) return <Loading label="Loading classes…" />;
+  const openMarking = useCallback(async (hw) => {
+    setMarking(hw); setSheet(null);
+    try {
+      const r = await api.homeworkSheet(token, hw.id);
+      setSheet(r);
+      setEntries(Object.fromEntries((r.students || []).map(s => [
+        s.student_id, { status: s.status || 'pending', marks: s.marks == null ? '' : String(s.marks) },
+      ])));
+    } catch (e) { setSheet({ error: e.message, students: [] }); }
+  }, [token]);
+
+  async function saveMarks() {
+    setSaving(true);
+    try {
+      const payload = Object.entries(entries).map(([student_id, v]) => ({
+        student_id: Number(student_id),
+        status: v.status,
+        marks: v.marks === '' ? null : Number(v.marks),
+      }));
+      await api.saveHomeworkMarks(token, marking.id, payload);
+      setMarking(null);
+      setSaved('Marks saved. They count towards the class score.');
+      load();
+    } catch (e) { setSheet(s => ({ ...s, error: e.message })); }
+    finally { setSaving(false); }
+  }
+
+  async function withdraw(hw) {
+    setSaving(true);
+    try { await api.deleteHomework(token, hw.id); setSaved('Assignment withdrawn.'); load(); }
+    catch (e) { setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  const canEdit = profile?.is_admin || profile?.permissions?.academics?.canEdit;
+  const canDelete = profile?.is_admin || profile?.permissions?.academics?.canDelete;
+  const rows = list || [];
+  const overdue = rows.filter(h => h.due_date && h.due_date < todayISO()).length;
 
   return (
-    <Screen>
-      <Stack.Screen options={{ title: 'Set Homework' }} />
+    <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
+      <ErrorNote message={classError || error} />
+      <SuccessNote message={saved} />
+
       <Card>
-        <H2>Class</H2>
         <ClassPicker classes={classes} value={classId} onChange={setClassId} />
-        {classId && subjects.length > 0 && (
-          <>
-            <H2 style={{ marginTop: 12 }}>Subject (optional)</H2>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {subjects.map(s => {
-                  const active = subjectId === s.id;
-                  return (
-                    <TouchableOpacity key={s.id} onPress={() => setSubjectId(active ? null : s.id)}
-                      style={{ paddingVertical: 8, paddingHorizontal: 14, borderRadius: 999,
-                        backgroundColor: active ? colors.accent : '#fff', borderWidth: 1, borderColor: active ? colors.accent : colors.border }}>
-                      <Text style={{ color: active ? '#fff' : colors.text, fontWeight: '600' }}>{s.name}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
-          </>
-        )}
+        {classId ? (
+          <SegmentedControl
+            value={showAll ? 'all' : 'current'} onChange={v => setShowAll(v === 'all')}
+            options={[{ value: 'current', label: 'Current', icon: 'book' }, { value: 'all', label: 'Everything set', icon: 'layers' }]}
+          />
+        ) : null}
       </Card>
 
-      <ErrorNote message={error} />
-      {saved && <Card><Text style={{ color: colors.success, fontWeight: '700' }}>✓ {saved}</Text></Card>}
+      {!classId ? (
+        <Card><EmptyState icon="book" title="Choose a class" message="Homework is set for a whole class, optionally against one subject." /></Card>
+      ) : list === null ? (
+        <Card><Skeleton rows={4} height={66} /></Card>
+      ) : (
+        <>
+          {rows.length > 0 && (
+            <Grid min={150}>
+              <StatCard label="Assignments" value={rows.length} icon="book" />
+              <StatCard label="Past the due date" value={overdue} tone={overdue ? 'warning' : undefined} icon="calendar" />
+            </Grid>
+          )}
 
-      {classId && (
-        <Card>
-          <H2>New homework</H2>
-          <View style={{ marginTop: 8 }}>
-            <Field label="Title" value={title} onChangeText={setTitle} autoCapitalize="sentences" placeholder="e.g. Maths exercise 4" />
-            <Field label="Details (optional)" value={desc} onChangeText={setDesc} multiline numberOfLines={3} autoCapitalize="sentences" />
-            <Field label="Due date (YYYY-MM-DD, optional)" value={due} onChangeText={setDue} placeholder="2026-08-20" />
-            <Field label="Total marks (leave blank if not graded)" value={maxMarks}
-              onChangeText={v => setMaxMarks(v.replace(/[^0-9.]/g, ''))} keyboardType="numeric" placeholder="e.g. 10" />
-            {maxMarks !== '' && !subjectId && (
-              <Muted style={{ color: colors.danger }}>Choose a subject — graded homework counts towards its class score.</Muted>
-            )}
-          </View>
-          <Button title={saving ? 'Saving…' : 'Set homework'} onPress={save} disabled={saving} />
-        </Card>
+          <Section
+            title={showAll ? 'Everything set this term' : 'Current homework'}
+            icon="book"
+            action={canEdit && !layout.isPhone
+              ? <Button size="sm" title="Set homework" icon="plus" onPress={() => setComposing(true)} full={false} />
+              : null}
+          >
+            {rows.length === 0 ? (
+              <EmptyState
+                icon="book" title="Nothing set" message="No homework is outstanding for this class."
+                action={canEdit ? <Button title="Set homework" icon="plus" onPress={() => setComposing(true)} full={false} /> : null}
+              />
+            ) : rows.map((h, i) => (
+              <ListRow
+                key={h.id ?? `pending-${i}`}
+                icon="book" iconTone={h.due_date && h.due_date < todayISO() ? 'warning' : 'primary'}
+                title={h.title}
+                subtitle={[h.subject_name, h.due_date ? `Due ${h.due_date}` : null, h.max_marks ? `${h.max_marks} marks` : null]
+                  .filter(Boolean).join(' · ')}
+                badge={h.pending ? <PendingBadge /> : null}
+                right={h.id && canEdit ? (
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <Button size="sm" variant="subtle" title="Mark" onPress={() => openMarking(h)} full={false} />
+                    {canDelete ? <Button size="sm" variant="ghost" title="Withdraw" onPress={() => withdraw(h)} full={false} /> : null}
+                  </View>
+                ) : null}
+                meta={(h.submitted_count || h.missing_count || h.marked_count) ? (
+                  <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+                    <Badge tone="success" label={`${h.submitted_count || 0} done`} />
+                    <Badge tone="danger" label={`${h.missing_count || 0} not done`} />
+                    {h.marked_count ? <Badge tone="info" label={`${h.marked_count} marked`} /> : null}
+                    {h.average_mark != null ? <Badge tone="data" label={`avg ${h.average_mark}`} /> : null}
+                  </View>
+                ) : null}
+              />
+            ))}
+          </Section>
+        </>
       )}
 
-      {classId && (
-        <Card>
-          <H2>Current homework</H2>
-          {list.length === 0 ? <Muted>None set for this class.</Muted> : list.map(h => (
-            <TouchableOpacity key={h.id} onPress={() => setMarking(h)}>
-              <Row
-                left={<>
-                  <Text style={{ fontWeight: '600' }}>{h.title}</Text>
-                  <Muted>{[h.subject_name, h.is_graded ? `out of ${h.max_marks}` : 'not graded'].filter(Boolean).join(' · ')}</Muted>
-                </>}
-                right={<>
-                  <Muted>{h.due_date ? `Due ${h.due_date}` : ''}</Muted>
-                  <Text style={{ color: colors.primary, fontWeight: '700' }}>{h.is_graded ? 'Mark ›' : 'Track ›'}</Text>
-                </>} />
-            </TouchableOpacity>
-          ))}
-        </Card>
-      )}
+      {canEdit && classId ? <Fab label="Set homework" onPress={() => setComposing(true)} /> : null}
 
-      {marking && (
-        <MarkSheet token={token} homework={marking}
-          onClose={async () => { setMarking(null); const hw = await api.classHomework(token, classId); setList(hw.homework || []); }} />
-      )}
+      {/* Setting one */}
+      <Sheet
+        visible={composing} onClose={() => setComposing(false)} title="Set homework"
+        footer={<>
+          <Button variant="outline" title="Cancel" onPress={() => setComposing(false)} full={false} />
+          <Button title={saving ? 'Saving…' : 'Set it'} onPress={setHomework} busy={saving} full={false} />
+        </>}
+      >
+        <SubjectPicker subjects={subjects} value={form.subjectId} onChange={v => setForm(f => ({ ...f, subjectId: v }))} label="Subject (optional)" />
+        <Field label="Title" value={form.title} onChangeText={v => setForm(f => ({ ...f, title: v }))}
+          placeholder="e.g. Fractions, exercise 4" autoCapitalize="sentences" />
+        <TextArea label="What to do" value={form.description} onChangeText={v => setForm(f => ({ ...f, description: v }))}
+          placeholder="Instructions for the pupils" numberOfLines={4} />
+        <Field label="Due date" value={form.dueDate} onChangeText={v => setForm(f => ({ ...f, dueDate: v }))}
+          placeholder="YYYY-MM-DD" icon="calendar" maxLength={10} />
+        <Field label="Total marks (optional)" value={form.maxMarks}
+          onChangeText={v => setForm(f => ({ ...f, maxMarks: v.replace(/[^0-9]/g, '') }))}
+          keyboardType="numeric" placeholder="Leave empty for ungraded"
+          hint="Give it marks and it counts towards the class score, like any other assessment." />
+      </Sheet>
+
+      {/* Marking one */}
+      <Sheet
+        visible={!!marking} onClose={() => setMarking(null)} width={620}
+        title={marking ? marking.title : 'Marking'}
+        footer={sheet && !sheet.error ? (
+          <>
+            <Button variant="outline" title="Close" onPress={() => setMarking(null)} full={false} />
+            <Button title={saving ? 'Saving…' : 'Save marks'} onPress={saveMarks} busy={saving} full={false} />
+          </>
+        ) : null}
+      >
+        {sheet === null ? <Skeleton rows={5} /> : sheet.error ? <ErrorNote message={sheet.error} /> : (
+          <>
+            <Muted>
+              {marking?.max_marks
+                ? `Out of ${marking.max_marks}. A pupil marked "not done" scores zero.`
+                : 'Ungraded — record who handed it in.'}
+            </Muted>
+            {(sheet.students || []).map(s => {
+              const e = entries[s.student_id] || { status: 'pending', marks: '' };
+              return (
+                <View key={s.student_id} style={{ paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.borderSoft }}>
+                  <Text numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text }}>{s.name}</Text>
+                  <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, alignItems: 'center' }}>
+                    {SUBMISSION.map(st => {
+                      const on = e.status === st.key;
+                      return (
+                        <Button
+                          key={st.key} size="sm" full={false}
+                          variant={on ? (st.tone === 'success' ? 'success' : st.tone === 'danger' ? 'danger' : 'gold') : 'outline'}
+                          title={st.label}
+                          onPress={() => setEntries(m => ({ ...m, [s.student_id]: { ...e, status: st.key } }))}
+                        />
+                      );
+                    })}
+                    {marking?.max_marks ? (
+                      <TextInput
+                        accessibilityLabel={`Mark for ${s.name}`}
+                        value={e.marks}
+                        onChangeText={v => setEntries(m => ({ ...m, [s.student_id]: { ...e, marks: v.replace(/[^0-9.]/g, '') } }))}
+                        keyboardType="numeric" placeholder="—" placeholderTextColor={colors.faint} maxLength={6}
+                        style={{
+                          width: 70, textAlign: 'center', backgroundColor: colors.surfaceAlt,
+                          borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
+                          paddingVertical: 8, fontSize: 15, fontWeight: '700', color: colors.text,
+                        }}
+                      />
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </>
+        )}
+      </Sheet>
     </Screen>
   );
 }
 
-// Marking sheet — record each pupil's status and mark. Graded marks are pushed
-// into the class score on the host, so the report card stays in step.
-function MarkSheet({ token, homework, onClose }) {
-  const [rows, setRows] = useState(null);
-  const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [done, setDone] = useState(null);
-
-  useEffect(() => {
-    api.homeworkSheet(token, homework.id)
-      .then(r => setRows((r.students || []).map(s => ({ ...s }))))
-      .catch(e => { setError(e.message); setRows([]); });
-  }, [token, homework.id]);
-
-  function setRow(id, patch) {
-    setRows(rs => rs.map(r => (r.student_id === id ? { ...r, ...patch } : r)));
-  }
-
-  async function save() {
-    setSaving(true); setError(null); setDone(null);
-    try {
-      const r = await api.saveHomeworkMarks(token, homework.id, rows.map(r => ({
-        student_id: r.student_id, status: r.status, marks: r.marks, remarks: r.remarks,
-      })));
-      setDone(r.linked_to_assessment ? 'Marks saved and added to the class score.' : 'Submissions saved.');
-    } catch (e) { setError(e.message); }
-    finally { setSaving(false); }
-  }
-
-  if (rows === null) return <Card><Muted>Loading marking sheet…</Muted></Card>;
-
-  return (
-    <Card>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <H2>{homework.title}</H2>
-        <TouchableOpacity onPress={onClose}><Text style={{ color: colors.primary, fontWeight: '700' }}>Close</Text></TouchableOpacity>
-      </View>
-      <Muted>{homework.is_graded ? `Out of ${homework.max_marks}` : 'Not graded — track submission only'}</Muted>
-      <ErrorNote message={error} />
-      {done && <Text style={{ color: colors.success, fontWeight: '700', marginTop: 6 }}>✓ {done}</Text>}
-
-      {rows.map(r => (
-        <View key={r.student_id} style={{ paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-          <Text style={{ fontWeight: '600' }}>{r.name}</Text>
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 6, alignItems: 'center' }}>
-            {['submitted', 'late', 'missing'].map(st => {
-              const active = r.status === st;
-              return (
-                <TouchableOpacity key={st} onPress={() => setRow(r.student_id, { status: st })}
-                  style={{ flex: 1, paddingVertical: 7, borderRadius: 8, alignItems: 'center',
-                    backgroundColor: active ? (st === 'missing' ? colors.danger : colors.primary) : '#fff',
-                    borderWidth: 1, borderColor: active ? 'transparent' : colors.border }}>
-                  <Text style={{ color: active ? '#fff' : colors.text, fontWeight: '600', fontSize: 12 }}>
-                    {st === 'submitted' ? 'In' : st === 'late' ? 'Late' : 'Not in'}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-            {homework.is_graded && (
-              <TextInput value={r.marks == null ? '' : String(r.marks)}
-                onChangeText={v => setRow(r.student_id, { marks: v === '' ? null : v.replace(/[^0-9.]/g, '') })}
-                keyboardType="numeric" placeholder="—" placeholderTextColor={colors.muted}
-                style={{ width: 64, textAlign: 'center', backgroundColor: '#fff', borderWidth: 1,
-                  borderColor: colors.border, borderRadius: 8, paddingVertical: 7, color: colors.text }} />
-            )}
-          </View>
-        </View>
-      ))}
-      <Button title={saving ? 'Saving…' : 'Save marks'} onPress={save} disabled={saving} />
-    </Card>
-  );
-}
-
-// Reachable by URL in the browser build, so the screen guards itself rather
-// than relying on the tab bar having hidden it. The server checks the same
-// permissions on every request regardless.
 export default function Homework() {
   return (
     <RequireModule modules={[['academics', 'view']]}>

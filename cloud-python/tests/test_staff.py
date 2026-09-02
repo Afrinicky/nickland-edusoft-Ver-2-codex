@@ -46,6 +46,9 @@ PERMS = {
     "canteen":   {"canView": True,  "canCreate": True,  "canEdit": False, "canDelete": False},
     "dashboard": {"canView": True,  "canCreate": False, "canEdit": False, "canDelete": False},
     "fees":      {"canView": False, "canCreate": False, "canEdit": False, "canDelete": False},
+    # Read and reply to a parent, but not post a notice to the whole school —
+    # the split the desktop's own roles use.
+    "notifications": {"canView": True, "canCreate": True, "canEdit": False, "canDelete": False},
 }
 
 
@@ -57,17 +60,72 @@ def main():
     store = MemoryStore()
     sid = store.create_school(name="Ave Maria School")["school_id"]
 
+    # The desktop projects the teacher's scope alongside their permissions, so
+    # the fixture carries one: Basic 5 outright and answerable for it, and
+    # nothing in Basic 6. Without it the cloud served every class in the school
+    # to every teacher.
+    SCOPE = {"unrestricted": False, "whole_classes": [1], "class_subjects": {},
+             "any_class_subjects": [], "class_teacher_of": [1]}
+
     store.upsert_snapshot(sid, {"entity_type": "staff_auth", "entity_key": "user:7", "uuid": "s1", "version": 1,
         "payload": {"user_id": 7, "username": "owusu", "full_name": "Mr Owusu", "staff_id": 3,
                     "designation": "Teacher", "is_admin": False, "password_hash": pw_hash,
-                    "is_active": True, "permissions": PERMS}})
+                    "is_active": True, "permissions": PERMS, "scope": SCOPE}})
     store.upsert_snapshot(sid, {"entity_type": "class_roster", "entity_key": "class:1", "uuid": "c1", "version": 1,
         "payload": {"class_id": 1, "name": "Basic 5", "short_code": "B5", "level_order": 5,
                     "term": {"id": 3, "label": "Third Term"},
-                    "students": [{"id": 11, "index_number": "AVE/001", "name": "ANSU Monalisa"},
-                                 {"id": 12, "index_number": "AVE/002", "name": "BOATENG Kwame"}],
+                    "students": [{"id": 11, "index_number": "AVE/001", "name": "ANSU Monalisa",
+                                  "guardians": [{"relation": "Mother", "name": "Mrs Ansu", "contact": "0244000111"}]},
+                                 {"id": 12, "index_number": "AVE/002", "name": "BOATENG Kwame", "guardians": []}],
                     "subjects": [{"id": 4, "name": "Mathematics", "code": "MTH"}],
-                    "scores": {}, "attendance": {}, "homework": [], "timetable": None}})
+                    "scores": {}, "attendance": {}, "homework": [], "timetable": None,
+                    "assessments": {"4": {"columns": [{"id": 21, "assessment_type": "Class Test", "max_marks": 20,
+                                                       "display_order": 1}],
+                                          "marks": {"11": {"21": 14}}}},
+                    "summaries": {"11": {"total_score_all": 300, "average_score": 75, "class_rank": 1,
+                                         "number_on_roll": 2, "teacher_remarks": "A strong term."}},
+                    "canteen": {"11": {"unpaid_days": 4, "amount_owed": 20},
+                                "12": {"unpaid_days": 0, "amount_owed": 0}},
+                    "daily_rate": 5, "weights": {"classWeight": 40, "examWeight": 60},
+                    "grading_bands": [{"min_score": 75, "max_score": 100, "remark": "Higher"}],
+                    "attendance_days": 14}})
+    # A class this teacher has nothing to do with.
+    store.upsert_snapshot(sid, {"entity_type": "class_roster", "entity_key": "class:2", "uuid": "c2", "version": 1,
+        "payload": {"class_id": 2, "name": "Basic 6", "short_code": "B6", "level_order": 6,
+                    "students": [{"id": 21, "index_number": "AVE/021", "name": "OTHER Pupil"}],
+                    "subjects": [{"id": 4, "name": "Mathematics", "code": "MTH"}],
+                    "scores": {}, "attendance": {}, "homework": []}})
+    store.upsert_snapshot(sid, {"entity_type": "student_snapshot", "entity_key": "student:11", "uuid": "p1", "version": 1,
+        "payload": {"student_id": 11, "index_number": "AVE/001", "name": "ANSU Monalisa",
+                    "class_id": 1, "class_name": "Basic 5", "term": "Third Term",
+                    "fees": {"billed": 500, "paid": 240, "balance": 260},
+                    "canteen": {"unpaid_days": 4, "amount_owed": 20},
+                    "attendance": {"present": 40, "absent": 2, "total": 42},
+                    "report": {"term": "Third Term", "subjects": [{"subject": "Mathematics", "total": 78, "grade": "Higher"}],
+                               "average": 75, "rank": 1, "number_on_roll": 2, "remarks": "A strong term."},
+                    "homework": []}})
+    store.upsert_snapshot(sid, {"entity_type": "student_snapshot", "entity_key": "student:21", "uuid": "p2", "version": 1,
+        "payload": {"student_id": 21, "index_number": "AVE/021", "name": "OTHER Pupil",
+                    "class_id": 2, "class_name": "Basic 6"}})
+    store.upsert_snapshot(sid, {"entity_type": "staff_profile", "entity_key": "profile:user:7", "uuid": "hr1", "version": 1,
+        "payload": {"user_id": 7, "has_staff": True,
+                    "staff": {"id": 3, "staff_number": "AVE-003", "name": "Owusu Kofi", "role": "Teacher",
+                              "status": "Active", "designation": "Teacher"},
+                    "assignments": [{"class_group_id": 1, "subject_id": None, "is_class_teacher": 1,
+                                     "class_name": "Basic 5", "subject_name": None}],
+                    "lesson_notes": [{"id": 5, "topic": "Adding fractions", "status": "submitted",
+                                      "class_name": "Basic 5", "subject_name": "Mathematics"}],
+                    "leave": [], "attendance": [],
+                    "payslips": [{"id": 2, "month": 7, "year": 2026, "net_salary": 1800,
+                                  "actual_amount_paid": 1800}]}})
+    store.upsert_snapshot(sid, {"entity_type": "announcement", "entity_key": "announcement:1", "uuid": "a1", "version": 1,
+        "payload": {"id": 1, "title": "Mid-term break", "body": "School closes Friday.",
+                    "audience": "all", "is_active": 1, "created_at": "2026-08-01"}})
+    store.upsert_snapshot(sid, {"entity_type": "message_thread", "entity_key": "thread:t-1", "uuid": "t1", "version": 1,
+        "payload": {"uuid": "t-1", "parent_id": 1, "student_id": 11, "student_name": "ANSU Monalisa",
+                    "subject": "Absence on Monday", "last_message_at": "2026-08-20 09:00",
+                    "messages": [{"sender_type": "parent", "sender_name": "Mrs Ansu",
+                                  "body": "She was unwell.", "created_at": "2026-08-20 09:00"}]}})
     store.upsert_snapshot(sid, {"entity_type": "school_metrics", "entity_key": "metrics:school", "uuid": "m1", "version": 1,
         "payload": {"term": {"id": 3, "label": "Third Term"},
                     "metrics": {"students": 2, "staff": 1, "fees_collected": 900, "fees_outstanding": 260}}})
@@ -156,6 +214,7 @@ def main():
 
     ck("the account screen can say how much is waiting",
        c.get("/api/v1/staff/pending", headers=hdr).json()["pending"] == 4)
+    waiting_before_extras = 4
 
     # The queue must be in the shape the desktop's applier reads.
     queued = store.pending_changes(sid, types=staff_api.WRITE_TYPES)
@@ -169,6 +228,116 @@ def main():
     store.changes_since(sid, str(first["cursor"]))
     ck("nothing is left waiting once it has been taken",
        c.get("/api/v1/staff/pending", headers=hdr).json()["pending"] == 0)
+
+    # ── the scope the desktop projects holds here too ──
+    names = [c_["name"] for c_ in c.get("/api/v1/staff/classes", headers=hdr).json()["classes"]]
+    ck("a class that is not theirs is not listed", "Basic 6" not in names)
+    ck("and its roll is not served",
+       all(s_["class_name"] != "Basic 6" for s_ in c.get("/api/v1/staff/students", headers=hdr).json()["students"]))
+    ck("its register resolves to nothing at all",
+       c.get("/api/v1/staff/attendance?classId=2&date=2026-08-24", headers=hdr).json()["students"] == [])
+    ck("and a pupil in it answers not-found, not forbidden",
+       c.get("/api/v1/staff/students/21", headers=hdr).status_code == 404)
+
+    # ── a pupil's record ──
+    prof = c.get("/api/v1/staff/students/11", headers=hdr).json()
+    ck("a pupil's record carries who to ring",
+       prof["guardians"][0]["contact"] == "0244000111")
+    ck("and their attendance and marks", prof["attendance"]["present"] == 40 and prof["subjects"][0]["total_score"] == 78)
+    ck("but not fees, which this teacher may not see", prof["fees"] is None)
+
+    # ── continuous assessment ──
+    a = c.get("/api/v1/staff/assessments?classId=1&subjectId=4", headers=hdr).json()
+    ck("the assessment sheet carries its columns and marks",
+       a["columns"][0]["max_marks"] == 20
+       and {x["id"]: x for x in a["students"]}[11]["marks"]["21"] == 14)
+    ck("adding a column is refused, because the desktop numbers it",
+       c.post("/api/v1/staff/assessments/column", headers=hdr,
+              json={"classId": 1, "subjectId": 4, "assessmentType": "Quiz", "maxMarks": 10}).status_code == 400)
+    ck("a mark above what the assessment is out of is refused",
+       c.post("/api/v1/staff/assessments", headers=hdr,
+              json={"classId": 1, "subjectId": 4,
+                    "marks": [{"student_id": 11, "column_id": 21, "marks": 30}]}).status_code == 400)
+    r = c.post("/api/v1/staff/assessments", headers=hdr,
+               json={"classId": 1, "subjectId": 4, "marks": [{"student_id": 12, "column_id": 21, "marks": 16}]})
+    ck("class work marks queue", r.json()["ok"] and r.json()["queued"])
+    a = c.get("/api/v1/staff/assessments?classId=1&subjectId=4", headers=hdr).json()
+    ck("and the teacher sees their own straight away",
+       {x["id"]: x for x in a["students"]}[12]["marks"]["21"] == 16)
+
+    # ── the broadsheet and the report ──
+    board = c.get("/api/v1/staff/results?classId=1", headers=hdr).json()
+    ck("the broadsheet carries the position and average",
+       {x["id"]: x for x in board["students"]}[11]["rank"] == 1)
+    rep = c.get("/api/v1/staff/results/student/11", headers=hdr).json()
+    ck("a report card carries the grading bands", rep["grading_bands"][0]["remark"] == "Higher")
+    ck("only the class teacher writes the remarks — and this one is",
+       c.post("/api/v1/staff/results/remarks", headers=hdr,
+              json={"studentId": 11, "remarks": "Well done."}).json()["ok"])
+    ck("but not for a pupil in another class",
+       c.post("/api/v1/staff/results/remarks", headers=hdr,
+              json={"studentId": 21, "remarks": "No."}).status_code == 403)
+
+    # ── the canteen sheet ──
+    sheet2 = c.get("/api/v1/staff/canteen/class?classId=1", headers=hdr).json()
+    ck("the canteen sheet totals what the class owes", sheet2["totals"]["amount"] == 20)
+    ck("and belongs to the class teacher only",
+       c.get("/api/v1/staff/canteen/class?classId=2", headers=hdr).status_code == 403)
+
+    # ── the teacher's own employment ──
+    hr = c.get("/api/v1/staff/hr/me", headers=hdr).json()
+    ck("their own record is served", hr["has_staff"] and hr["staff"]["staff_number"] == "AVE-003")
+    ck("with the classes they are answerable for", hr["assignments"][0]["is_class_teacher"] == 1)
+    ck("payslips are their own", c.get("/api/v1/staff/hr/payslips", headers=hdr).json()["payslips"][0]["year"] == 2026)
+    ck("clocking in queues", c.post("/api/v1/staff/hr/clock", headers=hdr, json={"direction": "in"}).json()["queued"])
+    ck("and shows at once", c.get("/api/v1/staff/hr/me", headers=hdr).json()["today"]["attendance"]["pending"] is True)
+    ck("leave with the end before the start is refused",
+       c.post("/api/v1/staff/hr/leave", headers=hdr,
+              json={"leaveType": "Casual", "startDate": "2026-09-10", "endDate": "2026-09-01",
+                    "justification": "x"}).status_code == 400)
+    r = c.post("/api/v1/staff/hr/leave", headers=hdr,
+               json={"leaveType": "Casual", "startDate": "2026-09-01", "endDate": "2026-09-03",
+                     "justification": "Family funeral."})
+    ck("a leave request counts its days", r.json()["days_requested"] == 3)
+    ck("and shows as pending before the school has it",
+       c.get("/api/v1/staff/hr/leave", headers=hdr).json()["requests"][0]["pending"] is True)
+
+    # ── lesson notes ──
+    ck("lesson notes are the teacher's own",
+       c.get("/api/v1/staff/lesson-notes", headers=hdr).json()["notes"][0]["topic"] == "Adding fractions")
+    ck("a note with no topic is refused",
+       c.post("/api/v1/staff/lesson-notes", headers=hdr, json={"classId": 1}).status_code == 400)
+    ck("one for another class is refused",
+       c.post("/api/v1/staff/lesson-notes", headers=hdr,
+              json={"classId": 2, "topic": "Nope"}).status_code == 403)
+    ck("a new note queues",
+       c.post("/api/v1/staff/lesson-notes", headers=hdr,
+              json={"classId": 1, "topic": "Long division", "status": "submitted"}).json()["queued"])
+    ck("and appears in the list at once",
+       any(n["topic"] == "Long division" and n.get("pending")
+           for n in c.get("/api/v1/staff/lesson-notes", headers=hdr).json()["notes"]))
+
+    # ── messages and notices ──
+    ck("the thread list is served",
+       c.get("/api/v1/staff/messages", headers=hdr).json()["threads"][0]["subject"] == "Absence on Monday")
+    ck("starting a new conversation says it needs the school",
+       c.post("/api/v1/staff/messages", headers=hdr, json={"body": "Hello"}).status_code == 400)
+    ck("a reply queues",
+       c.post("/api/v1/staff/messages", headers=hdr,
+              json={"threadUuid": "t-1", "body": "Thank you for letting us know."}).json()["queued"])
+    ck("and shows in the thread before the school has it",
+       c.get("/api/v1/staff/messages/t-1", headers=hdr).json()["messages"][-1]["pending"] is True)
+    ck("notices are readable", c.get("/api/v1/staff/announcements", headers=hdr).json()["announcements"][0]["title"] == "Mid-term break")
+    ck("posting one needs the right to edit notifications",
+       c.post("/api/v1/staff/announcements", headers=hdr,
+              json={"title": "x", "body": "y"}).status_code == 403)
+
+    # ── one sign-in box ──
+    ratelimit.reset()
+    r = c.post("/api/v1/signin", json={"school_id": sid, "identifier": "owusu", "password": "teach123"})
+    ck("the single sign-in box finds the staff account", r.status_code == 200 and r.json()["role"] == "staff")
+    ck("and says nothing useful about a wrong one",
+       c.post("/api/v1/signin", json={"school_id": sid, "identifier": "owusu", "password": "no"}).status_code == 401)
 
     # Revoking the account ends the session on the next request.
     store.upsert_snapshot(sid, {"entity_type": "staff_auth", "entity_key": "user:7", "uuid": "s2", "version": 2,
