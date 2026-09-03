@@ -16,7 +16,7 @@ import { useAuth } from '../../src/auth';
 import { api } from '../../src/api';
 import {
   Screen, Card, Section, Heading, Body, Muted, Micro, Button, Badge, Field,
-  ErrorNote, InfoNote, SuccessNote, Grid, StatCard, Avatar, KeyValue, Divider,
+  ErrorNote, InfoNote, SuccessNote, Flash, Grid, StatCard, Avatar, KeyValue, Divider,
   MenuRow, Sheet, Toolbar, Crest,
 } from '../../src/ui';
 import { useBranding } from '../../src/brand';
@@ -114,7 +114,6 @@ export default function Account() {
         </Gradient>
       </Appear>
 
-      <SuccessNote message={pwDone} />
 
       <Section title="Your account" icon="badge" padded>
         <MenuRow icon="badge" label="My work and my record" hint="Employment, attendance, leave, payslips"
@@ -207,7 +206,7 @@ export default function Account() {
           secureTextEntry icon="lock" placeholder="At least 6 characters" />
         <Field label="Confirm new password" value={pw.confirm} onChangeText={v => setP('confirm', v)}
           secureTextEntry icon="lock" placeholder="Type it again" />
-        <ErrorNote message={pwError} />
+        <Flash error={pwError} success={pwDone} onClear={() => setPwDone(null)} style={{ marginBottom: 0 }} />
       </Sheet>
 
     </Screen>

@@ -106,24 +106,21 @@ export default function Connect() {
 
   return (
     <Screen variant="reading">
-      <Gradient colors={gradients.chrome} angle={145} style={[{ borderRadius: radius.lg, padding: spacing.xl, marginBottom: spacing.sm }, shadow.raised]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <View style={{
-            width: 46, height: 46, borderRadius: 15,
-            backgroundColor: 'rgba(255,255,255,0.10)', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Icon name="school" size={24} color={palette.gold400} />
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={{ color: '#fff', fontWeight: '800', fontSize: layout.isPhone ? 20 : 24, letterSpacing: -0.4 }}>
-              Nickland Edusoft
-            </Text>
-            <Text style={{ color: colors.onChromeMuted, fontSize: 13, fontWeight: '600' }}>
-              Connect to your school
-            </Text>
-          </View>
+      {/* Was a dark banner. The screens before sign-in are the first thing
+          anybody sees of the product, and a slab of ink at the top of one of
+          them is the only dark surface left in the app — it read as a
+          different app rather than as this one starting up. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: spacing.md }}>
+        <IconTile name="school" size={46} tone="primary" />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={{ ...type.title, fontSize: layout.isPhone ? 20 : 24, color: colors.text }}>
+            Nickland Edusoft
+          </Text>
+          <Text style={{ ...type.small, color: colors.muted, fontWeight: '600' }}>
+            Connect to your school
+          </Text>
         </View>
-      </Gradient>
+      </View>
 
       <SegmentedControl
         value={tab} onChange={switchTab}

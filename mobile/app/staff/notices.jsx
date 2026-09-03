@@ -11,7 +11,7 @@ import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import {
   Screen, Card, Section, Muted, Micro, Button, Badge, Sheet, Field, TextArea,
-  ErrorNote, SuccessNote, Skeleton, EmptyState, Fab, Grid, StatCard, PendingBadge,
+  Flash, Skeleton, EmptyState, Fab, Grid, StatCard, PendingBadge,
 } from '../../src/ui';
 import { useLayout } from '../../src/responsive';
 import { colors, spacing, type } from '../../src/theme';
@@ -61,8 +61,7 @@ function NoticesScreen() {
 
   return (
     <Screen variant="reading" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
-      <ErrorNote message={error} />
-      <SuccessNote message={saved} />
+      <Flash success={saved} onClear={() => setSaved(null)} />
 
       {rows === null ? <Card><Skeleton rows={4} height={78} /></Card> : (
         <>
@@ -113,6 +112,7 @@ function NoticesScreen() {
           placeholder="e.g. Mid-term break" autoCapitalize="sentences" />
         <TextArea label="Message" value={form.body} onChangeText={v => setForm(f => ({ ...f, body: v }))}
           numberOfLines={6} placeholder="What parents need to know" />
+        <Flash error={error} style={{ marginTop: spacing.sm, marginBottom: 0 }} />
       </Sheet>
     </Screen>
   );

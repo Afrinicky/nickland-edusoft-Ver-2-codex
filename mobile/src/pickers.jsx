@@ -56,11 +56,31 @@ export function useSubjects(token, classId) {
 // A head teacher sees every class in the school; a class teacher sees one or
 // two. Where the list is long enough to need it, the panel groups it the way
 // the school itself talks about the school.
-const LEVEL_ORDER = ['Creche', 'Nursery', 'Kindergarten', 'Primary', 'JHS'];
+// The ladder a Ghanaian basic school actually climbs, with the spellings
+// schools actually use — "basic" and "primary" are the same rung under two
+// names, and a school that uses one never uses the other. Anything not listed
+// sorts to the end rather than being dropped.
+const LEVEL_ORDER = [
+  'Creche', 'Pre-Nursery', 'Nursery', 'Kindergarten', 'KG',
+  'Primary', 'Basic', 'JHS', 'Junior High',
+];
 
 function levelRank(category) {
-  const i = LEVEL_ORDER.indexOf(category);
+  const key = String(category || '').trim().toLowerCase();
+  const i = LEVEL_ORDER.findIndex(l => l.toLowerCase() === key);
   return i < 0 ? 99 : i;
+}
+
+// `level_category` is whatever the office typed into the desktop, so it arrives
+// as "nursery" or "NURSERY" as readily as "Nursery". A tab strip reading
+// "All nursery kindergarten basic" looks like a bug; capitalise for display and
+// keep the raw value for matching.
+function titleCase(s) {
+  return String(s || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(w => (w.length <= 3 && w === w.toUpperCase() ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+    .join(' ');
 }
 
 function levelGroups(classes) {
@@ -70,7 +90,7 @@ function levelGroups(classes) {
     if (g && !seen.includes(g)) seen.push(g);
   }
   seen.sort((a, b) => levelRank(a) - levelRank(b));
-  return seen.map(g => ({ value: g, label: g }));
+  return seen.map(g => ({ value: g, label: titleCase(g) }));
 }
 
 /**

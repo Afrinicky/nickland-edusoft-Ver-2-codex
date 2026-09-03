@@ -16,7 +16,7 @@ import { useAuth } from '../../src/auth';
 import { api } from '../../src/api';
 import {
   Screen, Card, Section, Heading, Muted, Micro, Button, Badge, Sheet, Field, TextArea,
-  ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState, ListRow, Fab, SegmentedControl,
+  Flash, InfoNote, Skeleton, EmptyState, ListRow, Fab, SegmentedControl,
   Grid, StatCard, KeyValue, Divider, PendingBadge, Select,
 } from '../../src/ui';
 import { ClassPicker, SubjectPicker, useClasses, useSubjects, todayISO } from '../../src/pickers';
@@ -111,8 +111,7 @@ export default function LessonNotes() {
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
-      <ErrorNote message={error} />
-      <SuccessNote message={saved} />
+      <Flash success={saved} onClear={() => setSaved(null)} />
 
       {notes === null ? <Card><Skeleton rows={4} height={66} /></Card> : (
         <>
@@ -270,6 +269,7 @@ export default function LessonNotes() {
               placeholder="How the lesson actually went" />
           </>
         ) : null}
+        <Flash error={error} style={{ marginTop: spacing.sm, marginBottom: 0 }} />
       </Sheet>
     </Screen>
   );

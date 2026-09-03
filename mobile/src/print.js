@@ -22,12 +22,25 @@
 // browsers, and the parent tapping "Print report" would get nothing at all with
 // no explanation.
 //
-// On the phone app there is no print pipeline, so `canPrint` is false and every
-// caller offers the browser instead of a dead button.
+// Three pipelines, one function:
+//
+//   The desktop browser gets a hidden iframe and `print()`.
+//
+//   A phone browser gets the same iframe, and a new tab if that fails — Chrome
+//   on Android will print from an iframe, Safari on iOS often will not, and a
+//   parent tapping "Print report" must not get silence either way. The tab
+//   still carries the school's own document, and every mobile browser can print
+//   or "Save as PDF" from one.
+//
+//   The Android app gets `expo-print`, which opens the system print sheet —
+//   the same one with the printers on it and "Save as PDF" at the top.
+//
+// `canPrint` used to be `Platform.OS === 'web'`, so the phone app showed a
+// button that explained why it could not print. It can.
 
 import { Platform } from 'react-native';
 
-export const canPrint = Platform.OS === 'web';
+export const canPrint = true;
 
 const esc = (v) => String(v == null ? '' : v)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -236,21 +249,81 @@ function ensureFrame() {
  * print — the caller then says so rather than leaving a button that does
  * nothing.
  */
-export function printHtml(html) {
-  if (!canPrint || typeof document === 'undefined') return false;
+export async function printHtml(html) {
+  if (!html) return { ok: false, error: 'There is nothing to print.' };
+  if (Platform.OS !== 'web') return printNative(html);
+  if (typeof document === 'undefined') return { ok: false, error: 'Printing is not available here.' };
+  const viaFrame = await printInFrame(html);
+  if (viaFrame) return { ok: true };
+  // Chrome on Android prints happily from the iframe; Safari on iOS blocks it.
+  // The document itself is fine either way, so hand it to the browser whole and
+  // let the reader use the print or share button it already has.
+  return openInTab(html);
+}
+
+/**
+ * The phone app. `expo-print` hands the HTML to Android's own print service,
+ * which is where the school's printer and "Save as PDF" both live.
+ */
+async function printNative(html) {
   try {
-    const f = ensureFrame();
-    const doc = f.contentWindow.document;
-    doc.open();
-    doc.write(html);
-    doc.close();
+    // Required lazily: the browser build must not pull a native module in, and
+    // `canPrint` is now true on both.
+    const Print = require('expo-print');
+    await Print.printAsync({ html });
+    return { ok: true };
+  } catch (e) {
+    const msg = String((e && e.message) || e || '');
+    // Dismissing the print sheet rejects on some Android builds. Somebody who
+    // changed their mind has not hit an error.
+    if (/cancel|dismiss|user did not/i.test(msg)) return { ok: true };
+    return { ok: false, error: 'This phone has no print service set up. Add one in Android settings, or open the school’s web address in a browser.' };
+  }
+}
+
+function openInTab(html) {
+  try {
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank');
+    if (!w) { URL.revokeObjectURL(url); return { ok: false, error: 'Your browser blocked the document. Allow pop-ups for this site and try again.' }; }
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 60000);
+    return { ok: true };
+  } catch (_) {
+    return { ok: false, error: 'The browser would not open the document.' };
+  }
+}
+
+/**
+ * Resolves true when the print dialog actually opened, false when it did not —
+ * which is the whole point. The old version swallowed the failure inside the
+ * image callback and reported success regardless, so a phone browser that
+ * refuses to print from an iframe produced a button that did nothing at all.
+ */
+function printInFrame(html) {
+  return new Promise((resolve) => {
+    let f, doc;
+    try {
+      f = ensureFrame();
+      doc = f.contentWindow.document;
+      doc.open();
+      doc.write(html);
+      doc.close();
+    } catch (_) { resolve(false); return; }
+
+    const go = () => {
+      try {
+        f.contentWindow.focus();
+        if (typeof f.contentWindow.print !== 'function') { resolve(false); return; }
+        f.contentWindow.print();
+        resolve(true);
+      } catch (_) { resolve(false); }
+    };
+
     // Let the crest and the photograph decode before the dialog opens,
     // otherwise the first print of a session comes out with empty boxes.
-    const go = () => {
-      try { f.contentWindow.focus(); f.contentWindow.print(); } catch (_) {}
-    };
     const imgs = Array.from(doc.images || []);
-    if (!imgs.length) { setTimeout(go, 60); return true; }
+    if (!imgs.length) { setTimeout(go, 60); return; }
     let left = imgs.length;
     let fired = false;
     const done = () => { if (--left <= 0 && !fired) { fired = true; setTimeout(go, 40); } };
@@ -260,10 +333,7 @@ export function printHtml(html) {
     });
     // A photograph that never resolves must not mean a button that never works.
     setTimeout(() => { if (!fired) { fired = true; go(); } }, 2500);
-    return true;
-  } catch (_) {
-    return false;
-  }
+  });
 }
 
 /**
@@ -274,16 +344,17 @@ export function printHtml(html) {
  * shows it to a person rather than logging it.
  */
 export async function printFromSchool(fetcher) {
-  if (!canPrint) return { ok: false, error: NOT_ON_PHONE };
   let doc;
   try { doc = await fetcher(); }
   catch (e) { return { ok: false, error: e.message || 'Could not fetch the document.' }; }
   if (!doc || typeof doc !== 'string') return { ok: false, error: 'The school returned an empty document.' };
-  return printHtml(doc) ? { ok: true } : { ok: false, error: 'The browser would not open the print dialog.' };
+  return printHtml(doc);
 }
 
+// Kept because callers still import it, but nothing reaches for it now that
+// every build can print.
 export const NOT_ON_PHONE =
-  'Printing happens in the browser. Open the school’s web address on a computer or phone browser, sign in, and the print button there will produce this document.';
+  'Printing needs the school’s web address open in a browser.';
 
 export default {
   canPrint, printHtml, printFromSchool, staffProfileHtml, statementHtml, NOT_ON_PHONE,

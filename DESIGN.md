@@ -21,7 +21,7 @@ nothing else.
 | Muted | `ink500` | `#61617E` | 5.6:1 — passes for body, so a caption is never below the floor. |
 | Faint | `ink400` | `#8A8AA3` | 3.4:1. **Decoration and icons only.** Never body text. |
 | Border | `line` | `#E7E5F2` | |
-| Chrome | `ink950` | `#15132B` | **The splash, and nothing else.** |
+| Chrome | `ink950` | `#15132B` | Retired. Nothing in the app uses it. |
 
 Judgement colours carry meaning, never decoration: `#12864A` good, `#B26205`
 attention, `#C7343A` wrong, `#0E8E8E` computed/live.
@@ -32,8 +32,9 @@ every pairing and fails the build below the floor.
 
 ### Where colour is allowed to be
 
-One screen in the app is dark, and it is the splash. The top bar, the drawer,
-the sidebar and the bottom bar are all one white surface with hairline borders.
+**No screen in the app is dark.** The splash was, and the sign-in page carried a
+dark panel down one side; both are gone. The top bar, the drawer, the sidebar
+and the bottom bar are all one white surface with hairline borders.
 
 Violet appears in exactly three places and means the same thing in each:
 
@@ -45,6 +46,33 @@ Violet appears in exactly three places and means the same thing in each:
 A dark rail down the side of a light screen is a slab of ink with nothing on
 it, and in Ghanaian daylight a dark panel is a mirror. If a surface is not one
 of the three above, it is white.
+
+### Choosing from a list
+
+A dropdown is a closed field that opens a panel anchored **under the field**, on
+every screen size. It was a bottom sheet on phones, which put the list at the
+opposite end of the screen from the field being answered.
+
+The panel is a folder-tab strip over a white card of rows. The tab in force is
+raised and carries a rule under its label. A row is a circle, a name, whatever
+qualifies it in muted text, and a tick on the one in force, with the rule
+between rows inset to where the text starts.
+
+It takes the room that is actually below the field, down to a margin off the
+bottom of the window — not a fixed height. A search box appears only past
+fourteen options; below that the tabs do the narrowing.
+
+### Saying what just happened
+
+A message about an action goes **against the thing that caused it** — the button,
+the field, the card — never at the top of the screen. A teacher who presses Save
+at the bottom of a register of forty and gets "Saved" above the fold presses
+Save again.
+
+It is a short line with a small round icon, not a slab with a paragraph in it.
+A success clears itself after a few seconds; an error stays. Only a failure of
+the whole screen — a load that did not, a class that is not yours — belongs at
+the top, because that is what it is about.
 
 ## Type
 

@@ -14,7 +14,7 @@ import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import {
   Screen, Card, Section, Heading, Muted, Micro, Button, Badge, Sheet, Field,
-  ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState, Grid, StatCard, PendingBadge, Select,
+  ErrorNote, Flash, InfoNote, Skeleton, EmptyState, Grid, StatCard, PendingBadge, Select,
 } from '../../src/ui';
 import { ClassPicker, SubjectPicker, useClasses, useSubjects } from '../../src/pickers';
 import { useLayout, pageWidth } from '../../src/responsive';
@@ -133,7 +133,7 @@ function AssessmentsScreen() {
       <RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />
     }>
       <View style={[{ padding: layout.gutter, gap: spacing.md }, columns.length > 2 ? null : pageWidth(layout)]}>
-        <ErrorNote message={classError || error} />
+        <ErrorNote message={classError} />
 
         <Card>
           <ClassPicker classes={classes} value={classId} onChange={setClassId} />
@@ -165,7 +165,6 @@ function AssessmentsScreen() {
           </Card>
         ) : (
           <>
-            <SuccessNote message={saved} />
             <Grid min={150}>
               <StatCard label="Assessments" value={columns.length} icon="layers" />
               <StatCard label="Total marks" value={totalMax} icon="chart" />
@@ -243,9 +242,13 @@ function AssessmentsScreen() {
                 </View>
               </ScrollView>
 
+              <Flash
+                error={error} success={saved} onClear={() => setSaved(null)}
+                style={{ marginTop: spacing.md, marginBottom: 0 }}
+              />
               <Button
                 title={saving ? 'Saving…' : 'Save class work marks'} onPress={save}
-                busy={saving} disabled={invalid.length > 0} size="lg" style={{ marginTop: spacing.md }}
+                busy={saving} disabled={invalid.length > 0} size="lg" style={{ marginTop: spacing.sm }}
               />
               {invalid.length > 0 ? (
                 <Muted style={{ color: colors.danger, marginTop: 6 }}>

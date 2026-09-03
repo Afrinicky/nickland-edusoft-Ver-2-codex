@@ -21,7 +21,7 @@ import { RequireModule } from '../../src/guard';
 import { api, money } from '../../src/api';
 import {
   Screen, Card, Section, Heading, Body, Muted, Micro, Button, Badge, Sheet, Field, Select,
-  ErrorNote, SuccessNote, InfoNote, WarningNote, Skeleton, EmptyState, ListRow, SearchField,
+  ErrorNote, Flash, InfoNote, WarningNote, Skeleton, EmptyState, ListRow, SearchField,
   Grid, StatCard, KeyValue, Tabs, CheckRow, Avatar, Toolbar, DateField, Divider,
 } from '../../src/ui';
 import { ClassPicker, useClasses } from '../../src/pickers';
@@ -54,8 +54,6 @@ function CanteenScreen() {
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => setRefreshing(false)} />}>
-      <ErrorNote message={error} />
-      <SuccessNote message={saved} />
 
       <Card><ClassPicker classes={classes} value={classId} onChange={setClassId} /></Card>
 
@@ -80,14 +78,16 @@ function CanteenScreen() {
       ) : tab === 'quick' ? (
         <QuickPay
           token={token} classId={classId} cloud={cloud} canCollect={canCollect}
-          onError={setError} onSaved={setSaved} layout={layout}
+          onError={setError} onSaved={setSaved} error={error} saved={saved}
+          onClear={() => setSaved(null)} layout={layout}
         />
       ) : tab === 'sheet' ? (
-        <ClassSheet token={token} classId={classId} onError={setError} />
+        <ClassSheet token={token} classId={classId} onError={setError} error={error} />
       ) : (
         <OnePupil
           token={token} classId={classId} canCollect={canCollect}
-          onError={setError} onSaved={setSaved} cloud={cloud}
+          onError={setError} onSaved={setSaved} error={error} saved={saved}
+          onClear={() => setSaved(null)} cloud={cloud}
         />
       )}
     </Screen>
@@ -95,7 +95,7 @@ function CanteenScreen() {
 }
 
 // ── Quick Pay ───────────────────────────────────────────────────────────────
-function QuickPay({ token, classId, cloud, canCollect, onError, onSaved, layout }) {
+function QuickPay({ token, classId, cloud, canCollect, onError, onSaved, error, saved, onClear, layout }) {
   const [date, setDate] = useState(todayISO());
   const [data, setData] = useState(null);
   const [picked, setPicked] = useState({});
@@ -238,6 +238,9 @@ function QuickPay({ token, classId, cloud, canCollect, onError, onSaved, layout 
             />
           ) : null}
         </View>
+        {/* Against the money, not at the top of the page. A teacher taking the
+            collection is looking at this button, not at the masthead. */}
+        <Flash error={error} success={saved} onClear={onClear} style={{ marginTop: spacing.md, marginBottom: 0 }} />
       </Card>
 
       <Card>
@@ -311,7 +314,7 @@ function QuickPay({ token, classId, cloud, canCollect, onError, onSaved, layout 
 }
 
 // ── the class sheet ─────────────────────────────────────────────────────────
-function ClassSheet({ token, classId, onError }) {
+function ClassSheet({ token, classId, onError, error }) {
   const [sheet, setSheet] = useState(null);
   const [q, setQ] = useState('');
 
@@ -376,7 +379,7 @@ function ClassSheet({ token, classId, onError }) {
 }
 
 // ── one pupil, several days ─────────────────────────────────────────────────
-function OnePupil({ token, classId, canCollect, onError, onSaved, cloud }) {
+function OnePupil({ token, classId, canCollect, onError, onSaved, error, saved, onClear, cloud }) {
   const [roll, setRoll] = useState(null);
   const [q, setQ] = useState('');
   const [collecting, setCollecting] = useState(null);
@@ -434,6 +437,7 @@ function OnePupil({ token, classId, canCollect, onError, onSaved, cloud }) {
     <>
       <Card><SearchField value={q} onChangeText={setQ} placeholder="Find a pupil" /></Card>
 
+      <Flash success={saved} onClear={onClear} />
       <Section title="Collect from one pupil" icon="user" subtitle="For arrears, or a parent paying several days at once.">
         {rows.length === 0 ? <Muted>Nobody matches that.</Muted> : rows.map(s => {
           const name = s.name || `${s.surname || ''} ${s.first_name || ''}`.trim();
@@ -479,6 +483,7 @@ function OnePupil({ token, classId, canCollect, onError, onSaved, cloud }) {
             <Field label="Note (optional)" value={form.notes} onChangeText={v => setForm(f => ({ ...f, notes: v }))}
               placeholder="Anything the office should know" autoCapitalize="sentences" />
             {cloud ? <InfoNote message="Off the school's network this is queued with a reference the school de-duplicates on, so a repeated delivery cannot take the money twice." /> : null}
+            <Flash error={error} style={{ marginTop: spacing.sm, marginBottom: 0 }} />
           </>
         )}
       </Sheet>

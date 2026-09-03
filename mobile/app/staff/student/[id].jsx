@@ -15,7 +15,7 @@ import { useScreenTitle } from '../../../src/shell';
 import { api, money } from '../../../src/api';
 import {
   Screen, Card, Section, Title, Heading, Body, Muted, Micro, Button, Badge, Avatar,
-  ErrorNote, InfoNote, SuccessNote, Skeleton, EmptyState, ListRow, Grid, StatCard,
+  ErrorNote, InfoNote, Flash, Skeleton, EmptyState, ListRow, Grid, StatCard,
   KeyValue, ProgressBar, Divider, Gradient, IconTile, Hero, HeroStat, Toolbar, Sheet, Tabs,
   Field, TextArea, Select, DateField,
 } from '../../../src/ui';
@@ -104,8 +104,7 @@ function StudentScreen() {
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
-      <ErrorNote message={error} />
-      <SuccessNote message={saved} />
+      <Flash success={saved} onClear={() => setSaved(null)} />
 
       <Hero
         crest={<Avatar name={s.name} photo={s.photo} size={layout.isPhone ? 58 : 72} tone="chrome" ring />}
@@ -321,6 +320,7 @@ function StudentScreen() {
         <DateField label="Date" value={entry.date} onChange={v => setEntry(e => ({ ...e, date: v }))}
           hint="Leave blank for today." />
         <InfoNote message="The pupil's parent sees this in their app, so write it as you would say it to them." />
+        <Flash error={error} style={{ marginTop: spacing.sm, marginBottom: 0 }} />
       </Sheet>
     </Screen>
   );

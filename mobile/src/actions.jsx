@@ -19,8 +19,8 @@ import React, { useState } from 'react';
 import { View, Text } from 'react-native';
 import { useBranding } from './brand';
 import { channels as channelsFor, hrefFor, open as openLink, settleMessage, generalMessage } from './contact';
-import { canPrint, printHtml, printFromSchool, NOT_ON_PHONE } from './print';
-import { Button, IconButton, Sheet, Muted, Micro, ListRow, InfoNote, ErrorNote, Badge, Card } from './ui';
+import { printHtml, printFromSchool } from './print';
+import { Button, IconButton, Sheet, Muted, Micro, ListRow, InfoNote, Flash, Badge, Card } from './ui';
 import { useLayout } from './responsive';
 import { colors, spacing, radius, shadow, type } from './theme';
 import { Icon } from './icons';
@@ -162,35 +162,31 @@ export function PrintButton({
   const [busy, setBusy] = useState(false);
 
   async function go() {
-    if (!canPrint) { setNote({ tone: 'info', text: NOT_ON_PHONE }); return; }
-
-    // The school's own document — fetched from the desktop's report generator
-    // so what comes out of the printer here is what comes out of the printer in
-    // the office. It costs a round trip, hence the busy state.
-    if (fetchDoc) {
-      setBusy(true);
-      const r = await printFromSchool(fetchDoc);
-      setBusy(false);
-      if (!r.ok) setNote({ tone: 'error', text: r.error });
-      return;
-    }
-
-    const html = typeof build === 'function' ? build() : build;
-    if (html) printHtml(html);
+    setNote(null);
+    setBusy(true);
+    try {
+      // The school's own document — fetched from the desktop's report generator
+      // so what comes out of the printer here is what comes out of the printer
+      // in the office. It costs a round trip, hence the busy state.
+      const r = fetchDoc
+        ? await printFromSchool(fetchDoc)
+        : await printHtml(typeof build === 'function' ? build() : build);
+      if (!r.ok) setNote(r.error);
+    } catch (e) {
+      setNote((e && e.message) || 'Could not print that.');
+    } finally { setBusy(false); }
   }
 
+  // A print that failed says so under the button that failed, not in a modal
+  // over the whole screen.
   return (
-    <>
+    <View>
       <Button
         variant={variant} size={size} title={busy ? 'Preparing…' : title} icon={icon}
         full={full} disabled={disabled} busy={busy} onPress={go}
       />
-      <Sheet visible={!!note} onClose={() => setNote(null)} title="Printing" width={440}>
-        {note?.tone === 'error'
-          ? <ErrorNote message={note.text} />
-          : <InfoNote message={note?.text} />}
-      </Sheet>
-    </>
+      <Flash error={note} style={{ marginTop: 8, marginBottom: 0 }} />
+    </View>
   );
 }
 

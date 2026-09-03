@@ -14,7 +14,7 @@ import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import {
   Screen, Card, Section, Heading, Body, Muted, Micro, Button, Badge,
-  ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState, SegmentedControl,
+  ErrorNote, Flash, InfoNote, Skeleton, EmptyState, SegmentedControl,
   DataTable, Grid, StatCard, ProgressBar, PendingBadge,
 } from '../../src/ui';
 import { ClassPicker, DateStepper, useClasses, todayISO } from '../../src/pickers';
@@ -102,7 +102,7 @@ function AttendanceScreen() {
       await (tab === 'mark' ? loadRoster() : loadHistory());
       setRefreshing(false);
     }} />}>
-      <ErrorNote message={classError || error} />
+      <ErrorNote message={classError} />
 
       <Card>
         <ClassPicker classes={classes} value={classId} onChange={setClassId} />
@@ -123,7 +123,6 @@ function AttendanceScreen() {
         <>
           <Card><DateStepper value={date} onChange={setDate} /></Card>
 
-          <SuccessNote message={saved} />
 
           {roster === null ? <Card><Skeleton rows={6} height={48} /></Card>
             : roster.length === 0 ? <Card><EmptyState icon="users" title="Nobody on this roll" message="There are no active pupils in this class." /></Card>
@@ -186,9 +185,13 @@ function AttendanceScreen() {
                         </View>
                       </View>
                     ))}
+                    <Flash
+                      error={error} success={saved} onClear={() => setSaved(null)}
+                      style={{ marginTop: spacing.md, marginBottom: 0 }}
+                    />
                     <Button
                       title={saving ? 'Saving…' : `Save register for ${date}`}
-                      onPress={save} busy={saving} size="lg" style={{ marginTop: spacing.md }}
+                      onPress={save} busy={saving} size="lg" style={{ marginTop: spacing.sm }}
                     />
                   </Card>
                 </>

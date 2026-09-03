@@ -6,10 +6,10 @@
 // gets a reputation for being broken. So this moment is spent showing whose
 // app it is.
 //
-// It is the one dark screen in the product, deliberately: the school's crest
-// carries better on ink than on white, and it marks the boundary between "not
-// yet running" and "running". Everything after it is light, because the rest
-// of the app is used outdoors.
+// It used to be the one dark screen in the product. It is not any more: a dark
+// panel flashing up before a light app reads as a different app, and there is
+// no longer a dark surface anywhere for it to belong to. Crest, name, a thin
+// bar, on the same ground as everything that follows.
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Animated, Platform, Easing } from 'react-native';
 import { Redirect } from 'expo-router';
@@ -18,8 +18,7 @@ import { useAuth } from '../src/auth';
 import { useBranding } from '../src/brand';
 import { Crest } from '../src/ui';
 import { useReducedMotion, EASE_OUT } from '../src/motion';
-import { colors, gradients, type, spacing, radius } from '../src/theme';
-import { Gradient } from '../src/ui';
+import { colors, type, spacing } from '../src/theme';
 import { storage } from '../src/storage';
 
 export const SEEN_KEY = 'seenWelcome';
@@ -70,16 +69,14 @@ export function Splash({ logo, school }) {
   }, [rise, fill, reduced]);
 
   return (
-    <Gradient colors={gradients.chrome} angle={160} style={styles.screen}>
-      {/* The one dark screen in the app, so the one place the phone's own
-          status bar has to carry light content. */}
-      <StatusBar style="light" />
+    <View style={styles.screen}>
+      <StatusBar style="dark" />
       <Animated.View style={{
         alignItems: 'center', gap: spacing.lg,
         opacity: rise,
         transform: reduced ? undefined : [{ translateY: rise.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }],
       }}>
-        <Crest logo={logo} size={92} tone="chrome" />
+        <Crest logo={logo} size={92} />
         <View style={{ alignItems: 'center', gap: 5 }}>
           <Text numberOfLines={2} style={styles.name}>{school || 'Nickland Edusoft'}</Text>
           <Text style={styles.tag}>Attendance · Marks · Reports · Canteen</Text>
@@ -93,23 +90,21 @@ export function Splash({ logo, school }) {
       </View>
 
       <Text style={styles.vendor}>Nickland Sales</Text>
-    </Gradient>
+    </View>
   );
 }
 
 const styles = {
-  screen: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, gap: spacing.xxl },
-  name: {
-    ...type.title, color: '#fff', fontSize: 24, textAlign: 'center', maxWidth: 320,
+  screen: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    padding: spacing.xl, gap: spacing.xxl, backgroundColor: colors.bg,
   },
-  tag: { ...type.small, color: 'rgba(255,255,255,0.56)', fontWeight: '600', letterSpacing: 0.2 },
+  name: { ...type.title, color: colors.text, fontSize: 24, textAlign: 'center', maxWidth: 320 },
+  tag: { ...type.small, color: colors.muted, fontWeight: '600', letterSpacing: 0.2 },
   track: {
     width: 148, height: 4, borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.14)', overflow: 'hidden',
+    backgroundColor: colors.border, overflow: 'hidden',
   },
-  fill: { height: '100%', borderRadius: 4, backgroundColor: '#fff' },
-  vendor: {
-    ...type.micro, color: 'rgba(255,255,255,0.32)',
-    position: 'absolute', bottom: 34,
-  },
+  fill: { height: '100%', borderRadius: 4, backgroundColor: colors.primary },
+  vendor: { ...type.micro, color: colors.faint, position: 'absolute', bottom: 34 },
 };

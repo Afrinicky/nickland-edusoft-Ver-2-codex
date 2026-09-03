@@ -12,7 +12,7 @@ import { useAuth } from '../../src/auth';
 import { api, money } from '../../src/api';
 import {
   Screen, Card, Section, Title, Heading, Body, Muted, Micro, Button, Badge, Sheet,
-  Field, TextArea, Select, ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState,
+  Field, TextArea, Select, ErrorNote, Flash, InfoNote, Skeleton, EmptyState,
   ListRow, Grid, StatCard, KeyValue, Divider, Gradient, Avatar, SegmentedControl,
   DataTable, PendingBadge, Tabs, Toolbar, Crest,
 } from '../../src/ui';
@@ -126,10 +126,9 @@ export default function MyWork() {
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
-      <ErrorNote message={error} />
-      <SuccessNote message={saved} />
+      <Flash success={saved} onClear={() => setSaved(null)} />
 
-      <Gradient colors={gradients.chrome} angle={140} style={[{ borderRadius: radius.lg, padding: spacing.xl }, shadow.raised]}>
+      <Gradient colors={gradients.brand} angle={140} style={[{ borderRadius: radius.lg, padding: spacing.xl }, shadow.raised]}>
         <View style={{ flexDirection: layout.isPhone ? 'column' : 'row', alignItems: layout.isPhone ? 'flex-start' : 'center', gap: spacing.lg }}>
           {/* The teacher's own photograph, from the school's staff record.
               It was on the desktop all along and never reached the app. */}
@@ -356,6 +355,7 @@ export default function MyWork() {
         <TextArea label="Why" value={form.justification} numberOfLines={4}
           onChangeText={v => setForm(f => ({ ...f, justification: v }))}
           placeholder="What the leave is for" />
+        <Flash error={error} style={{ marginTop: spacing.sm, marginBottom: 0 }} />
       </Sheet>
 
       <Sheet

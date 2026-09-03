@@ -413,7 +413,11 @@ export function Select({
     return seen.length > 1 ? seen : [];
   }, [groups, list]);
 
-  const showSearch = searchable != null ? searchable : list.length > 8;
+  // The reference has no search box, and for a school it does not need one: a
+  // basic school has eleven or twelve classes and the level tabs already cut
+  // that to three or four. The box only appears for a list long enough that
+  // scanning it is genuinely work — a roll of pupils, not a rack of classes.
+  const showSearch = searchable != null ? searchable : list.length > 14;
   const showGroups = groupList.length > 1 && list.length > 6;
 
   const shown = useMemo(() => {
@@ -540,29 +544,45 @@ export function Select({
 }
 
 /**
- * The panel itself. Kept separate so the closed field costs nothing until it
- * is opened, and so the two placements — sheet and popover — are one piece of
- * markup with two frames around it rather than two components drifting apart.
+ * The panel itself, built to one reference: a folder-tab strip across the top,
+ * and a white card of rows sitting under it.
+ *
+ * Two things it deliberately is not:
+ *
+ *   It is not a bottom sheet on a phone. It was, and rising from the bottom of
+ *   the screen put the list as far as it is possible to get from the field you
+ *   tapped — you press "Class" at the top of a form and the answer appears by
+ *   your other thumb. It is anchored under the field on every screen size.
+ *
+ *   It is not held to a fixed height. It takes the room that is actually below
+ *   the field, down to a margin off the bottom of the window. A list of eleven
+ *   classes on a tall phone shows eleven classes; the same list on a short
+ *   laptop scrolls. Capping it at 420px made every panel scroll on a screen
+ *   with space to spare.
  */
 function SelectPanel({
   t, layout, anchor, onClose, title,
   showSearch, query, onQuery, groups, group, onGroup,
   options, value, onChoose,
 }) {
-  const phone = layout.isPhone || !anchor;
-
-  // Where the popover sits. Under the field if it fits, above it if it does
-  // not, and never past the edge of the window on either side.
+  // Where it sits: under the field if there is any room, above it when there
+  // genuinely is not, and never past the edge of the window on either side.
   const frame = useMemo(() => {
-    if (phone) return null;
-    const gap = 8;
+    const gap = 6;
     const margin = spacing.md;
-    // Wide enough to read a class name and its qualifier, and no wider. A
-    // panel that inherits the width of a full-width form field is a banner,
-    // not a menu: the eye has to travel the whole window to reach the tick.
+    if (!anchor) {
+      return {
+        left: margin, right: margin,
+        top: Math.round(layout.height * 0.12),
+        maxHeight: Math.round(layout.height * 0.7),
+      };
+    }
+    // As wide as the field, so the open panel reads as the field expanding
+    // rather than as a separate object that happens to be nearby. Clamped so a
+    // full-width desktop form does not produce a menu the width of a cinema.
     const width = Math.min(
-      Math.max(anchor.width, 300), 400,
-      Math.max(260, layout.width - margin * 2),
+      Math.max(anchor.width, 260), 460,
+      Math.max(240, layout.width - margin * 2),
     );
     const left = Math.min(
       Math.max(margin, anchor.x),
@@ -570,125 +590,135 @@ function SelectPanel({
     );
     const below = layout.height - (anchor.y + anchor.height) - gap - margin;
     const above = anchor.y - gap - margin;
-    const flip = below < 240 && above > below;
+    const flip = below < 220 && above > below;
     return {
       left, width,
       top: flip ? undefined : anchor.y + anchor.height + gap,
       bottom: flip ? layout.height - anchor.y + gap : undefined,
-      maxHeight: Math.max(200, Math.min(420, flip ? above : below)),
+      maxHeight: Math.max(180, flip ? above : below),
     };
-  }, [phone, anchor, layout.width, layout.height]);
+  }, [anchor, layout.width, layout.height]);
 
-  const rise = phone ? 32 : 8;
-  const body = (
-    <>
-      <View style={styles.selectHead}>
-        <Heading style={{ flex: 1 }} numberOfLines={1}>{title}</Heading>
-        <IconButton name="close" size={32} tone="plain" color={colors.muted} onPress={onClose} label="Close" />
-      </View>
-
-      {showSearch ? (
-        <View style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.sm }}>
-          <SearchField value={query} onChangeText={onQuery} placeholder="Type to narrow the list…"
-            onClear={() => onQuery('')} />
-        </View>
-      ) : null}
-
-      {groups ? (
-        // The strip wraps rather than scrolling sideways. A school has four or
-        // five levels, not forty, and a row that runs off the edge of a 400px
-        // panel reads as clipped even when it scrolls perfectly well.
-        <View style={{
-          flexDirection: 'row', flexWrap: 'wrap', gap: 6,
-          paddingHorizontal: spacing.md, paddingBottom: spacing.sm,
-        }}>
-          {[{ value: null, label: 'All' }, ...groups].map(g => {
-            const on = (g.value || null) === (group || null);
-            return (
-              <Press key={String(g.value)} onPress={() => onGroup(g.value || null)}
-                accessibilityRole="tab" accessibilityState={{ selected: on }}>
-                <View style={[styles.selectTab, on && styles.selectTabOn]}>
-                  <RNText style={{
-                    ...type.small, fontWeight: '700',
-                    color: on ? '#fff' : colors.textSoft,
-                  }}>{g.label}</RNText>
-                </View>
-              </Press>
-            );
-          })}
-        </View>
-      ) : null}
-
-      <ScrollView
-        style={{ flexGrow: 0, flexShrink: 1 }}
-        contentContainerStyle={{ paddingHorizontal: spacing.sm, paddingBottom: spacing.sm }}
-        keyboardShouldPersistTaps="handled">
-        {options.length === 0 ? (
-          <View style={{ padding: spacing.lg, alignItems: 'center' }}>
-            <Muted>Nothing here matches that.</Muted>
-          </View>
-        ) : options.map((o, i) => {
-          const on = String(o.value) === String(value);
-          return (
-            <Press key={`${String(o.value)}-${i}`} onPress={() => onChoose(o)}
-              accessibilityRole="radio" accessibilityState={{ selected: on }}>
-              <View style={[styles.optionRow, on && styles.optionRowOn]}>
-                <View style={[styles.optionMark, on && styles.optionMarkOn]}>
-                  {o.icon
-                    ? <Icon name={o.icon} size={16} color={on ? '#fff' : colors.primary} />
-                    : (
-                      <RNText numberOfLines={1} style={{
-                        ...type.small, fontWeight: '800', fontSize: 12,
-                        color: on ? '#fff' : colors.primary,
-                      }}>{o.mark || initialsOf(o.label)}</RNText>
-                    )}
-                </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <RNText numberOfLines={1} style={{
-                    ...type.body, fontWeight: on ? '700' : '600', color: colors.text,
-                  }}>{o.label}</RNText>
-                  {o.note ? (
-                    <RNText numberOfLines={1} style={{ ...type.small, color: colors.muted, marginTop: 1 }}>
-                      {o.note}
-                    </RNText>
-                  ) : null}
-                </View>
-                {on ? <Icon name="tick" size={18} color={colors.primary} /> : null}
-              </View>
-            </Press>
-          );
-        })}
-      </ScrollView>
-    </>
-  );
+  const tabs = groups ? [{ value: null, label: 'All' }, ...groups] : null;
 
   return (
     <RNModal transparent animationType="none" visible onRequestClose={onClose}>
       <Animated.View style={[StyleSheet.absoluteFill, {
-        backgroundColor: phone ? 'rgba(14,11,36,0.42)' : 'rgba(14,11,36,0.06)', opacity: t,
+        backgroundColor: 'rgba(14,11,36,0.10)', opacity: t,
       }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
       </Animated.View>
+
       <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
         <Animated.View
           style={[
-            styles.selectPanel, shadow.floating,
+            { position: 'absolute' }, frame,
             {
               opacity: t,
               transform: [
-                { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [rise, 0] }) },
-                { scale: phone ? 1 : t.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }) },
+                { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [-6, 0] }) },
+                { scale: t.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }) },
               ],
             },
-            phone
-              ? {
-                position: 'absolute', left: 0, right: 0, bottom: 0,
-                borderBottomLeftRadius: 0, borderBottomRightRadius: 0, maxHeight: '76%',
-              }
-              : { position: 'absolute', ...frame },
           ]}>
-          {phone ? <View style={styles.grabber} /> : null}
-          {body}
+
+          {/* The strip. Folder tabs on a recessed ground: the one in force is a
+              raised white tab with a rule under its label, the rest sit flat.
+              With no groups to switch between it carries the title instead, so
+              the panel always opens with the same shape at the top. */}
+          <View style={styles.selectStrip}>
+            {tabs ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                style={{ flexGrow: 0, flexShrink: 1 }}
+                contentContainerStyle={{ alignItems: 'stretch' }}>
+                {tabs.map(g => {
+                  const on = (g.value || null) === (group || null);
+                  return (
+                    <Press key={String(g.value)} onPress={() => onGroup(g.value || null)}
+                      accessibilityRole="tab" accessibilityState={{ selected: on }}>
+                      <View style={[styles.selectTab, on && styles.selectTabOn]}>
+                        <RNText numberOfLines={1} style={{
+                          ...type.body, fontWeight: '700',
+                          color: on ? colors.text : colors.textSoft,
+                        }}>{g.label}</RNText>
+                        <View style={[styles.selectTabRule, on && styles.selectTabRuleOn]} />
+                      </View>
+                    </Press>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <View style={{ flex: 1, justifyContent: 'center', paddingLeft: spacing.md }}>
+                <RNText numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text }}>
+                  {title}
+                </RNText>
+              </View>
+            )}
+            <Press onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
+              <View style={styles.selectStripClose}>
+                <Icon name="chevron" size={14} color={colors.textSoft}
+                  style={{ transform: [{ rotate: '270deg' }] }} />
+              </View>
+            </Press>
+          </View>
+
+          {/* The card of rows, layered over the strip. */}
+          <View style={[styles.selectCard, shadow.floating]}>
+            {showSearch ? (
+              <View style={{ paddingHorizontal: spacing.md, paddingTop: spacing.md }}>
+                <SearchField value={query} onChangeText={onQuery} placeholder="Type to narrow the list…"
+                  onClear={() => onQuery('')} />
+              </View>
+            ) : null}
+
+            <ScrollView
+              style={{ flexGrow: 0, flexShrink: 1 }}
+              contentContainerStyle={{ paddingVertical: 6 }}
+              keyboardShouldPersistTaps="handled">
+              {options.length === 0 ? (
+                <View style={{ padding: spacing.xl, alignItems: 'center' }}>
+                  <Muted>Nothing here matches that.</Muted>
+                </View>
+              ) : options.map((o, i) => {
+                const on = String(o.value) === String(value);
+                return (
+                  <Press key={`${String(o.value)}-${i}`} onPress={() => onChoose(o)}
+                    accessibilityRole="radio" accessibilityState={{ selected: on }}>
+                    <View style={styles.optionRow}>
+                      <View style={[styles.optionMark, on && styles.optionMarkOn]}>
+                        {o.icon
+                          ? <Icon name={o.icon} size={17} color={on ? '#fff' : colors.primary} />
+                          : (
+                            <RNText numberOfLines={1} style={{
+                              ...type.small, fontWeight: '800', fontSize: 12,
+                              color: on ? '#fff' : colors.primary,
+                            }}>{o.mark || initialsOf(o.label)}</RNText>
+                          )}
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <RNText numberOfLines={1} style={{
+                          ...type.body, fontWeight: '700',
+                          color: on ? colors.primary : colors.text,
+                        }}>{o.label}</RNText>
+                        {o.note ? (
+                          <RNText numberOfLines={1} style={{ ...type.small, color: colors.muted, marginTop: 2 }}>
+                            {o.note}
+                          </RNText>
+                        ) : null}
+                      </View>
+                      {o.meta ? (
+                        <RNText numberOfLines={1} style={{ ...type.small, color: colors.muted }}>{o.meta}</RNText>
+                      ) : null}
+                      {on ? <Icon name="tick" size={18} color={colors.primary} /> : null}
+                    </View>
+                    {/* Inset rule: it starts where the text starts, so the run
+                        of circles down the left edge is unbroken. */}
+                    {i < options.length - 1 ? <View style={styles.optionRule} /> : null}
+                  </Press>
+                );
+              })}
+            </ScrollView>
+          </View>
         </Animated.View>
       </View>
     </RNModal>
@@ -1269,7 +1299,11 @@ export function Avatar({ name, photo, size = 40, tone = 'primary', ring, square 
  * The school's crest. Falls back to the app's own mark, so a school that has
  * never uploaded one gets something deliberate rather than a gap.
  */
-export function Crest({ logo, size = 40, tone = 'chrome', rounded = true }) {
+// `tone` used to default to 'chrome' — a near-transparent white tile with a
+// pale violet mark on it, which was right when this only ever sat on a dark
+// header. There is no dark header any more, and the default rendered as an
+// invisible white square on the sign-in page of a school with no crest set.
+export function Crest({ logo, size = 40, tone = 'light', rounded = true }) {
   const [broken, setBroken] = useState(false);
   const ok = logo && !broken;
   const bg = ok
@@ -1438,23 +1472,67 @@ export function EmptyState({ icon = 'note', title, message, action }) {
   );
 }
 
-function Note({ message, tone, icon }) {
+/**
+ * A small tinted line saying what just happened.
+ *
+ * Two rules about where one of these goes, both learned the hard way:
+ *
+ *   It belongs beside the thing it is about. These used to be rendered at the
+ *   top of the screen — so a teacher pressing Save at the bottom of a register
+ *   of forty pupils got "Saved" somewhere above the fold, out of sight, and
+ *   pressed Save again. Put it against the button, the field or the card that
+ *   caused it.
+ *
+ *   It is small. A full-width slab with a paragraph in it reads as a warning
+ *   about the app; a short line with a round icon reads as an answer to what
+ *   you just did.
+ */
+function Note({ message, tone, icon, style }) {
   if (!message) return null;
   const t = BADGE_TONES[tone] || BADGE_TONES.neutral;
   return (
-    <Appear distance={6}>
-      <View style={[styles.note, { backgroundColor: t.bg }]} accessibilityRole={tone === 'danger' ? 'alert' : undefined}>
-        <Icon name={icon} size={17} color={t.fg} />
-        <RNText style={{ ...type.small, color: t.fg, flex: 1, fontWeight: '600', lineHeight: 19 }}>{message}</RNText>
+    <Appear distance={5}>
+      <View
+        style={[styles.note, { backgroundColor: t.bg }, style]}
+        accessibilityRole={tone === 'danger' ? 'alert' : 'text'}
+        accessibilityLiveRegion={tone === 'danger' ? 'assertive' : 'polite'}
+      >
+        <View style={[styles.noteDot, { backgroundColor: t.fg }]}>
+          <Icon name={icon} size={11} color={t.bg} />
+        </View>
+        <RNText style={{ ...type.small, color: t.fg, flex: 1, fontWeight: '600', lineHeight: 18 }}>{message}</RNText>
       </View>
     </Appear>
   );
 }
 
-export function ErrorNote({ message }) { return <Note message={message} tone="danger" icon="alert" />; }
-export function InfoNote({ message }) { return <Note message={message} tone="primary" icon="note" />; }
-export function SuccessNote({ message }) { return <Note message={message} tone="success" icon="tick" />; }
-export function WarningNote({ message }) { return <Note message={message} tone="warning" icon="alert" />; }
+export function ErrorNote({ message, style }) { return <Note message={message} tone="danger" icon="alert" style={style} />; }
+export function InfoNote({ message, style }) { return <Note message={message} tone="primary" icon="note" style={style} />; }
+export function SuccessNote({ message, style }) { return <Note message={message} tone="success" icon="tick" style={style} />; }
+export function WarningNote({ message, style }) { return <Note message={message} tone="warning" icon="alert" style={style} />; }
+
+/**
+ * The pair of them, for the common case: a screen holds one `error` and one
+ * `success` and wants whichever is set shown next to the action.
+ *
+ * A success clears itself after a few seconds — it has been read by then, and
+ * "Saved" still sitting there five minutes later makes the reader wonder
+ * whether it means the last save or this one. An error stays until something
+ * is done about it.
+ */
+export function Flash({ error, success, info, warning, onClear, style }) {
+  React.useEffect(() => {
+    if (!success || !onClear) return undefined;
+    const id = setTimeout(onClear, 4200);
+    return () => clearTimeout(id);
+  }, [success, onClear]);
+
+  if (error) return <ErrorNote message={error} style={style} />;
+  if (success) return <SuccessNote message={success} style={style} />;
+  if (warning) return <WarningNote message={warning} style={style} />;
+  if (info) return <InfoNote message={info} style={style} />;
+  return null;
+}
 
 // ── modal ───────────────────────────────────────────────────────────────────
 // A centred panel on a desktop, a sheet rising from the bottom on a phone —
@@ -1637,31 +1715,53 @@ const styles = StyleSheet.create({
     width: 26, height: 26, borderRadius: 8,
     alignItems: 'center', justifyContent: 'center',
   },
-  selectPanel: {
-    backgroundColor: colors.card, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
-  },
-  selectHead: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    paddingLeft: spacing.lg, paddingRight: spacing.sm,
-    paddingTop: spacing.md, paddingBottom: spacing.sm,
+  // The strip across the top: a recessed ground carrying folder tabs. The tab
+  // in force is raised — white, square-shouldered at the bottom so it joins the
+  // card below it — and carries a rule under its label.
+  selectStrip: {
+    flexDirection: 'row', alignItems: 'stretch',
+    backgroundColor: colors.surfaceAlt,
+    borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+    borderWidth: 1, borderBottomWidth: 0, borderColor: colors.border,
+    minHeight: 52, paddingTop: 4, paddingHorizontal: 4, overflow: 'hidden',
   },
   selectTab: {
-    paddingVertical: 7, paddingHorizontal: 14, borderRadius: radius.control,
-    backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border,
+    justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 18, paddingTop: 10, minHeight: 48,
+    borderTopLeftRadius: radius.sm, borderTopRightRadius: radius.sm,
   },
-  selectTabOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  selectTabOn: { backgroundColor: colors.card },
+  selectTabRule: { height: 3, borderRadius: 2, alignSelf: 'stretch', marginTop: 7, backgroundColor: 'transparent' },
+  selectTabRuleOn: { backgroundColor: colors.primary },
+  selectStripClose: {
+    width: 44, alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch',
+  },
+  // The card of rows, joined to the strip above it.
+  selectCard: {
+    backgroundColor: colors.card,
+    borderBottomLeftRadius: radius.lg, borderBottomRightRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
+    flexShrink: 1,
+  },
   optionRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    minHeight: 54, paddingVertical: 8, paddingHorizontal: 10,
-    borderRadius: radius.sm,
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    minHeight: 64, paddingVertical: 10, paddingHorizontal: spacing.md,
   },
-  optionRowOn: { backgroundColor: colors.primarySoft },
+  // Round, as the reference has them. A circle beside a name reads as a person
+  // or a place; a rounded square reads as another button on a screen that
+  // already has enough of those.
   optionMark: {
-    width: 36, height: 36, borderRadius: 12, backgroundColor: colors.primarySoft,
+    width: 42, height: 42, borderRadius: 21, backgroundColor: colors.primarySoft,
     alignItems: 'center', justifyContent: 'center',
   },
   optionMarkOn: { backgroundColor: colors.primary },
+  // Starts where the text starts, so the run of circles down the left is
+  // unbroken by rules cutting across it.
+  optionRule: {
+    height: 1, backgroundColor: colors.borderSoft,
+    marginLeft: spacing.md + 42 + 14, marginRight: spacing.md,
+  },
 
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 10 },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 11, minHeight: 56 },
@@ -1744,8 +1844,13 @@ const styles = StyleSheet.create({
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   note: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
-    padding: spacing.md, borderRadius: radius.sm, marginBottom: spacing.sm,
+    flexDirection: 'row', alignItems: 'center', gap: 9,
+    paddingVertical: 9, paddingHorizontal: 11,
+    borderRadius: radius.sm, marginBottom: spacing.sm,
+  },
+  noteDot: {
+    width: 19, height: 19, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
   },
 
   sheet: {
