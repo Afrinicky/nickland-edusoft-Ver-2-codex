@@ -13,7 +13,7 @@ import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import {
   Screen, Card, Section, Heading, Muted, Micro, Button, Badge, Sheet, Field, TextArea,
-  ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState, ListRow, Select, Fab,
+  ErrorNote, Flash, InfoNote, Skeleton, EmptyState, ListRow, Select, Fab,
   Grid, StatCard, SegmentedControl, PendingBadge,
 } from '../../src/ui';
 import { ClassPicker, SubjectPicker, useClasses, useSubjects, todayISO } from '../../src/pickers';
@@ -120,8 +120,8 @@ function HomeworkScreen() {
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
-      <ErrorNote message={classError || error} />
-      <SuccessNote message={saved} />
+      <ErrorNote message={classError} />
+      <Flash success={saved} onClear={() => setSaved(null)} />
 
       <Card>
         <ClassPicker classes={classes} value={classId} onChange={setClassId} />
@@ -207,6 +207,7 @@ function HomeworkScreen() {
           onChangeText={v => setForm(f => ({ ...f, maxMarks: v.replace(/[^0-9]/g, '') }))}
           keyboardType="numeric" placeholder="Leave empty for ungraded"
           hint="Give it marks and it counts towards the class score, like any other assessment." />
+        <Flash error={error} style={{ marginTop: spacing.sm, marginBottom: 0 }} />
       </Sheet>
 
       {/* Marking one */}

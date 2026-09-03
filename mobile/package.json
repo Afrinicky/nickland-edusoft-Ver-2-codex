@@ -26,6 +26,7 @@
     "expo-build-properties": "~0.12.5",
     "expo-constants": "~16.0.0",
     "expo-linking": "~6.3.0",
+    "expo-print": "~13.0.1",
     "expo-router": "~3.5.0",
     "expo-secure-store": "~13.0.0",
     "expo-status-bar": "~1.12.0",

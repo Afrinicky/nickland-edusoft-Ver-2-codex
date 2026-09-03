@@ -11,7 +11,7 @@ import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import {
   Screen, Card, Section, Heading, Muted, Micro, Button, Badge, Grid, StatCard,
-  ErrorNote, SuccessNote, Skeleton, EmptyState, PendingBadge,
+  ErrorNote, Flash, Skeleton, EmptyState, PendingBadge,
 } from '../../src/ui';
 import { ClassPicker, SubjectPicker, useClasses, useSubjects } from '../../src/pickers';
 import { useLayout } from '../../src/responsive';
@@ -86,7 +86,9 @@ function ScoresScreen() {
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
-      <ErrorNote message={classError || error} />
+      {/* Only what is wrong with the whole screen belongs up here. What
+          went right or wrong with a save sits against the Save button. */}
+      <ErrorNote message={classError} />
 
       <Card>
         <ClassPicker classes={classes} value={classId} onChange={setClassId} />
@@ -106,7 +108,6 @@ function ScoresScreen() {
         <Card><EmptyState icon="users" title="Nobody on this roll" message="There are no active pupils in this class." /></Card>
       ) : (
         <>
-          <SuccessNote message={saved} />
           <Grid min={150}>
             <StatCard label="Entered" value={`${entered}/${rows.length}`} icon="check" />
             <StatCard label="Class average" value={average == null ? '—' : `${average}`} tone="data" icon="chart" />
@@ -151,9 +152,13 @@ function ScoresScreen() {
                 </View>
               );
             })}
+            <Flash
+              error={error} success={saved} onClear={() => setSaved(null)}
+              style={{ marginTop: spacing.md, marginBottom: 0 }}
+            />
             <Button
               title={saving ? 'Saving…' : 'Save exam marks'} onPress={save}
-              busy={saving} disabled={invalid.length > 0} size="lg" style={{ marginTop: spacing.md }}
+              busy={saving} disabled={invalid.length > 0} size="lg" style={{ marginTop: spacing.sm }}
             />
             {invalid.length > 0 ? <Muted style={{ color: colors.danger, marginTop: 6 }}>
               {invalid.length} mark{invalid.length === 1 ? ' is' : 's are'} outside 0–100.

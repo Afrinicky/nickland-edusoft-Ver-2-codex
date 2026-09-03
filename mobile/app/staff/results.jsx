@@ -14,7 +14,7 @@ import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import {
   Screen, Card, Section, Heading, Title, Body, Muted, Micro, Button, Badge, Sheet,
-  Field, TextArea, ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState,
+  Field, TextArea, ErrorNote, Flash, InfoNote, Skeleton, EmptyState,
   DataTable, Grid, StatCard, KeyValue, Divider, SegmentedControl, Tabs, Avatar, Toolbar, Select,
 } from '../../src/ui';
 import { ClassPicker, useClasses } from '../../src/pickers';
@@ -287,7 +287,6 @@ function ResultsScreen() {
                 {!isClassTeacher ? (
                   <InfoNote message="Only the teacher answerable for this class writes its end-of-term remarks. You can read them here." />
                 ) : null}
-                <SuccessNote message={savedRemarks} />
                 <TextArea
                   label="Conduct" value={remarks.conduct} numberOfLines={2}
                   onChangeText={v => setRemarks(r => ({ ...r, conduct: v }))}
@@ -311,6 +310,12 @@ function ResultsScreen() {
                   onChangeText={v => setRemarks(r => ({ ...r, remarks: v }))}
                   placeholder="The remark printed on the report card"
                   editable={isClassTeacher}
+                />
+                {/* By the Save button in the sheet footer, which is what the
+                    reader is looking at when this appears. */}
+                <Flash
+                  success={savedRemarks} onClear={() => setSavedRemarks(null)}
+                  style={{ marginTop: spacing.sm, marginBottom: 0 }}
                 />
               </>
             )}

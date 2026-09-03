@@ -7,29 +7,35 @@
 // a wrong tab. The credential decides now: the server matches a staff username
 // first, then a parent's phone or email, and the app goes where the account
 // belongs.
+//
+// This screen used to carry a dark panel down one side with the product's
+// pitch on it: a headline, a paragraph about everything the app does, and eight
+// chips naming its features. None of that was for the person in front of it. A
+// teacher opening this at 6am already owns the software; a parent following a
+// link from the school does not need to be sold it. It is gone, and with it the
+// "or" divider, the two secondary buttons, the help sheet and the paragraph of
+// small print underneath. What is left is a crest, a name, two boxes and a
+// button — plus one quiet line for the two people the button cannot help: the
+// teacher who has forgotten a password, and the parent who has no account yet.
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '../src/auth';
 import { api, setRole } from '../src/api';
 import {
-  Card, Title, Heading, Body, Muted, Micro, Field, Button, IconButton, ErrorNote, InfoNote,
-  Gradient, IconTile, Badge, Crest, Sheet, MenuRow,
+  Card, Title, Muted, Field, Button, IconButton, ErrorNote, InfoNote, Crest,
 } from '../src/ui';
 import { Appear } from '../src/motion';
-import { channels as channelsFor, hrefFor, open as openLink } from '../src/contact';
 import { useBranding } from '../src/brand';
-import { ContactSchool } from '../src/actions';
-import { Icon } from '../src/icons';
 import { useLayout } from '../src/responsive';
-import { colors, palette, gradients, spacing, radius, shadow, type } from '../src/theme';
+import { colors, spacing, shadow, type } from '../src/theme';
 
 // Shown in the desktop's paired-devices list, so it should read like the thing
 // the person is actually holding.
 const DEVICE = Platform.OS === 'web' ? 'web browser' : Platform.OS + ' app';
 
 export default function Login() {
-  const { host, mode: conn, signIn } = useAuth();
+  const { mode: conn, signIn } = useAuth();
   const layout = useLayout();
   const brand = useBranding();
   const isCloud = conn === 'cloud';
@@ -37,7 +43,6 @@ export default function Login() {
   // child's school immediately; falling back to the product's own name is for
   // the first run, before a connection has been made.
   const schoolName = brand.school?.name || 'Nickland Edusoft';
-  const motto = brand.school?.motto || '';
 
   // 'signin' | 'register' | 'forgot' | 'claim'
   const [stage, setStage] = useState('signin');
@@ -47,7 +52,6 @@ export default function Login() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [reveal, setReveal] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const setR = (k, v) => setReset(p => ({ ...p, [k]: v }));
@@ -90,9 +94,7 @@ export default function Login() {
     setBusy(true); setError(null);
     try {
       await api.requestPasswordReset({ username: reset.username.trim(), reason: reset.reason });
-      setNotice(isCloud
-        ? 'Request sent. It reaches the school when its computer next syncs. An Administrator approves it and gives you a 6-digit code — come back here with it.'
-        : 'Request sent. An Administrator or Proprietor approves it and gives you a 6-digit code.');
+      setNotice('Request sent. An Administrator approves it and gives you a 6-digit code.');
       setStage('claim');
     } catch (e) { setError(e.message || 'Could not send the request.'); }
     finally { setBusy(false); }
@@ -117,235 +119,154 @@ export default function Login() {
     finally { setBusy(false); }
   }
 
-  const panel = (
-    <View style={{ gap: spacing.md }}>
-      {stage === 'signin' && (
-        <>
-          <View style={{ marginBottom: 2 }}>
-            <Title style={{ fontSize: 25 }}>Welcome back</Title>
-            <Muted style={{ marginTop: 3 }}>Staff, teachers and parents — the same box.</Muted>
-          </View>
-          <InfoNote message={notice} />
-          <Field
-            label="Username, phone or email"
-            value={form.identifier}
-            onChangeText={v => set('identifier', v)}
-            placeholder="Staff username, or 0244…"
-            icon="user"
-            autoComplete="username"
-            returnKeyType="next"
-          />
-          <Field
-            label="Password"
-            value={form.password}
-            onChangeText={v => set('password', v)}
-            secureTextEntry={!reveal}
-            placeholder="Your password"
-            autoComplete="current-password"
-            returnKeyType="go"
-            onSubmitEditing={submit}
-            icon="lock"
-            right={(
-              <IconButton
-                name="eye" size={30} tone="plain"
-                color={reveal ? colors.primary : colors.faint}
-                onPress={() => setReveal(r => !r)}
-                label={reveal ? 'Hide the password' : 'Show the password'}
-              />
-            )}
-          />
-          <TouchableOpacity onPress={() => goto('forgot')} style={{ alignSelf: 'flex-end', marginTop: -6, marginBottom: 4 }}>
-            <Text style={{ ...type.small, color: colors.primary, fontWeight: '700' }}>Forgot your password?</Text>
-          </TouchableOpacity>
-          <ErrorNote message={error} />
-          <Button title={busy ? 'Signing in…' : 'Sign in'} onPress={submit} busy={busy} size="lg" />
-
-          {/* The reference puts "or continue with" here and follows it with a
-              row of identity providers. This app has none — a school issues
-              its own accounts and a Google sign-in would let anybody with a
-              Gmail address knock on the door of a children's records. What
-              belongs in that slot is the two other ways a real person gets in. */}
-          <View style={styles.orRow}>
-            <View style={styles.orLine} />
-            <Text style={{ ...type.small, color: colors.muted, fontWeight: '600' }}>or</Text>
-            <View style={styles.orLine} />
-          </View>
-
-          <View style={{ flexDirection: layout.isCompact ? 'column' : 'row', gap: spacing.sm }}>
-            {!isCloud && (
-              <View style={{ flex: 1 }}>
-                <Button variant="outline" icon="user" title="Register" onPress={() => goto('register')} />
-              </View>
-            )}
-            <View style={{ flex: 1 }}>
-              <Button variant="outline" icon="whatsapp" title="Ask the school" onPress={() => setHelpOpen(true)} />
-            </View>
-          </View>
-          <Muted style={{ textAlign: 'center', marginTop: 2 }}>
-            {isCloud
-              ? 'Accounts are created at the school, not here.'
-              : 'A parent registers with the phone number the school has for their child.'}
-          </Muted>
-          {isCloud && (
-            <Muted style={{ marginTop: 4 }}>
-              Signing in over the internet. Registers, marks, class work, homework, lesson notes,
-              the canteen and your payslips all work; anything you write reaches the school when
-              its computer next syncs.
-            </Muted>
-          )}
-        </>
-      )}
-
-      {stage === 'register' && (
-        <>
-          <View>
-            <Title>Create a parent account</Title>
-            <Muted style={{ marginTop: 2 }}>Your phone or email must match the one the school has for your child.</Muted>
-          </View>
-          <Field label="Your name" value={form.full_name} onChangeText={v => set('full_name', v)} autoCapitalize="words" icon="user" />
-          <Field label="Phone" value={form.phone} onChangeText={v => set('phone', v)} keyboardType="phone-pad" placeholder="0244…" icon="phone" />
-          <Field label="Email (optional)" value={form.email} onChangeText={v => set('email', v)} keyboardType="email-address" icon="mail" />
-          <Field label="Choose a password" value={form.password} onChangeText={v => set('password', v)} secureTextEntry placeholder="At least 6 characters" />
-          <ErrorNote message={error} />
-          <Button title={busy ? 'Please wait…' : 'Create account'} onPress={submit} busy={busy} size="lg" />
-          <TouchableOpacity onPress={() => goto('signin')} style={{ alignItems: 'center', marginTop: 8 }}>
-            <Text style={{ color: colors.muted, fontWeight: '700', fontSize: 13.5 }}>← Back to sign in</Text>
-          </TouchableOpacity>
-        </>
-      )}
-
-      {(stage === 'forgot' || stage === 'claim') && (
-        <>
-          <View>
-            <Title>{stage === 'forgot' ? 'Reset your password' : 'Set your new password'}</Title>
-            <Muted style={{ marginTop: 2 }}>
-              For staff accounts. An Administrator at the school approves the request and hands you a code.
-            </Muted>
-          </View>
-          <InfoNote message={notice} />
-          <Field label="Staff username" value={reset.username} onChangeText={v => setR('username', v)} placeholder="Your staff username" icon="user" />
-          {stage === 'forgot' ? (
-            <Field label="Note for the approver (optional)" value={reset.reason} onChangeText={v => setR('reason', v)}
-              placeholder="e.g. forgot it over the holidays" />
-          ) : (
-            <>
-              <Field label="Approval code" value={reset.code} onChangeText={v => setR('code', v)}
-                placeholder="6-digit code from your Administrator" keyboardType="number-pad" maxLength={6} />
-              <Field label="New password" value={reset.next} onChangeText={v => setR('next', v)} secureTextEntry placeholder="At least 6 characters" />
-              <Field label="Confirm new password" value={reset.confirm} onChangeText={v => setR('confirm', v)} secureTextEntry placeholder="Type it again" />
-            </>
-          )}
-          <ErrorNote message={error} />
-          <Button
-            title={busy ? 'Please wait…' : stage === 'forgot' ? 'Send request' : 'Set new password'}
-            onPress={stage === 'forgot' ? askForReset : redeemCode} busy={busy} size="lg"
-          />
-          <TouchableOpacity onPress={() => goto(stage === 'forgot' ? 'claim' : 'forgot')} style={{ alignItems: 'center', marginTop: 10 }}>
-            <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13.5 }}>
-              {stage === 'forgot' ? 'I already have a code' : "I haven't asked for a reset yet"}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => goto('signin')} style={{ alignItems: 'center', marginTop: 8 }}>
-            <Text style={{ color: colors.muted, fontWeight: '700', fontSize: 13.5 }}>← Back to sign in</Text>
-          </TouchableOpacity>
-        </>
-      )}
-    </View>
-  );
-
-  // On a wide window the sign-in card sits beside the school's identity rather
-  // than alone in the middle of a grey field.
-  const split = layout.isDesktop;
-
   return (
-    <View style={{ flex: 1, flexDirection: split ? 'row' : 'column', backgroundColor: colors.bg }}>
-      <Gradient colors={gradients.chrome} angle={150} style={split ? { flex: 1.05, padding: 56, justifyContent: 'center' } : { padding: 24, paddingTop: 40, paddingBottom: 28 }}>
-        <View style={{ maxWidth: 460, gap: split ? spacing.lg : spacing.sm }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <Crest logo={brand.logo} size={split ? 56 : 44} tone="chrome" />
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text numberOfLines={2} style={{ color: '#fff', fontWeight: '800', fontSize: split ? 22 : 18, letterSpacing: -0.4 }}>
-                {schoolName}
-              </Text>
-              <Text numberOfLines={1} style={{ color: colors.onChromeMuted, fontSize: 12, fontWeight: '600' }}>
-                {motto || (isCloud ? 'School portal' : 'School network')}
-              </Text>
-            </View>
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <View style={{
+        flex: 1, justifyContent: 'center', alignItems: 'center',
+        paddingHorizontal: spacing.lg, paddingVertical: spacing.xl,
+      }}>
+        <View style={{ width: '100%', maxWidth: 400 }}>
+
+          {/* The school, quietly. A crest and a name — no motto, no address,
+              no strapline. The person already knows where they are. */}
+          <View style={{ alignItems: 'center', marginBottom: spacing.lg, gap: 10 }}>
+            <Crest logo={brand.logo} size={56} />
+            <Text numberOfLines={2} style={{
+              ...type.heading, color: colors.text, textAlign: 'center',
+            }}>{schoolName}</Text>
           </View>
 
-          {split && (
-            <>
-              <Text style={{ color: '#fff', fontSize: 34, fontWeight: '800', letterSpacing: -0.8, lineHeight: 42 }}>
-                The whole school,{'\n'}in your hand.
-              </Text>
-              <Text style={{ color: colors.onChromeMuted, fontSize: 15, lineHeight: 23, maxWidth: 400 }}>
-                Teachers take the register, enter class work and exam marks, write lesson notes, set
-                homework, run the morning canteen collection and print a report card. Parents follow
-                their child's marks, conduct, attendance, bills and balances — and message the school
-                when they need to.
-              </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                {['Register', 'Class work', 'Report cards', 'Lesson notes', 'Homework', 'Canteen', 'Bills', 'Notices'].map(t => (
-                  <View key={t} style={{
-                    paddingHorizontal: 11, paddingVertical: 6, borderRadius: radius.xs,
-                    backgroundColor: 'rgba(255,255,255,0.09)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
-                  }}>
-                    <Text style={{ color: 'rgba(255,255,255,0.86)', fontSize: 12, fontWeight: '700' }}>{t}</Text>
-                  </View>
-                ))}
+          <Appear distance={12}>
+            <Card style={layout.isDesktop ? shadow.raised : null}>
+              <View style={{ gap: spacing.md }}>
+
+                {stage === 'signin' && (
+                  <>
+                    <Title style={{ fontSize: 24 }}>Welcome back</Title>
+                    <InfoNote message={notice} />
+                    <Field
+                      label="Username, phone or email"
+                      value={form.identifier}
+                      onChangeText={v => set('identifier', v)}
+                      placeholder="Staff username, or 0244…"
+                      icon="user"
+                      autoComplete="username"
+                      returnKeyType="next"
+                    />
+                    <Field
+                      label="Password"
+                      value={form.password}
+                      onChangeText={v => set('password', v)}
+                      secureTextEntry={!reveal}
+                      placeholder="Your password"
+                      autoComplete="current-password"
+                      returnKeyType="go"
+                      onSubmitEditing={submit}
+                      icon="lock"
+                      right={(
+                        <IconButton
+                          name="eye" size={30} tone="plain"
+                          color={reveal ? colors.primary : colors.faint}
+                          onPress={() => setReveal(r => !r)}
+                          label={reveal ? 'Hide the password' : 'Show the password'}
+                        />
+                      )}
+                    />
+                    <ErrorNote message={error} />
+                    <Button title={busy ? 'Signing in…' : 'Sign in'} onPress={submit} busy={busy} size="lg" />
+
+                    {/* The two people the button cannot help, on one line and
+                        in small type. Everything else that used to live here —
+                        a second row of buttons, a help sheet, a paragraph of
+                        small print — has gone. */}
+                    <View style={{
+                      flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
+                      gap: spacing.md, marginTop: 2,
+                    }}>
+                      <TouchableOpacity onPress={() => goto('forgot')} accessibilityRole="button">
+                        <Text style={{ ...type.small, color: colors.textSoft, fontWeight: '600' }}>
+                          Forgot password
+                        </Text>
+                      </TouchableOpacity>
+                      {!isCloud && (
+                        <>
+                          <View style={{ width: 3, height: 3, borderRadius: 2, backgroundColor: colors.faint }} />
+                          <TouchableOpacity onPress={() => goto('register')} accessibilityRole="button">
+                            <Text style={{ ...type.small, color: colors.textSoft, fontWeight: '600' }}>
+                              New parent
+                            </Text>
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </View>
+                  </>
+                )}
+
+                {stage === 'register' && (
+                  <>
+                    <Title style={{ fontSize: 24 }}>New parent</Title>
+                    <Muted>Use the phone number the school has for your child.</Muted>
+                    <Field label="Your name" value={form.full_name} onChangeText={v => set('full_name', v)} autoCapitalize="words" icon="user" />
+                    <Field label="Phone" value={form.phone} onChangeText={v => set('phone', v)} keyboardType="phone-pad" placeholder="0244…" icon="phone" />
+                    <Field label="Email (optional)" value={form.email} onChangeText={v => set('email', v)} keyboardType="email-address" icon="mail" />
+                    <Field label="Choose a password" value={form.password} onChangeText={v => set('password', v)} secureTextEntry placeholder="At least 6 characters" icon="lock" />
+                    <ErrorNote message={error} />
+                    <Button title={busy ? 'Please wait…' : 'Create account'} onPress={submit} busy={busy} size="lg" />
+                    <BackToSignIn onPress={() => goto('signin')} />
+                  </>
+                )}
+
+                {(stage === 'forgot' || stage === 'claim') && (
+                  <>
+                    <Title style={{ fontSize: 24 }}>
+                      {stage === 'forgot' ? 'Forgot password' : 'New password'}
+                    </Title>
+                    <Muted>
+                      {stage === 'forgot'
+                        ? 'For staff. The school approves it and gives you a code.'
+                        : 'Enter the code the school gave you.'}
+                    </Muted>
+                    <InfoNote message={notice} />
+                    <Field label="Staff username" value={reset.username} onChangeText={v => setR('username', v)} placeholder="Your staff username" icon="user" />
+                    {stage === 'forgot' ? null : (
+                      <>
+                        <Field label="Code" value={reset.code} onChangeText={v => setR('code', v)}
+                          placeholder="6 digits" keyboardType="number-pad" maxLength={6} />
+                        <Field label="New password" value={reset.next} onChangeText={v => setR('next', v)} secureTextEntry placeholder="At least 6 characters" icon="lock" />
+                        <Field label="Type it again" value={reset.confirm} onChangeText={v => setR('confirm', v)} secureTextEntry icon="lock" />
+                      </>
+                    )}
+                    <ErrorNote message={error} />
+                    <Button
+                      title={busy ? 'Please wait…' : stage === 'forgot' ? 'Send request' : 'Save password'}
+                      onPress={stage === 'forgot' ? askForReset : redeemCode} busy={busy} size="lg"
+                    />
+                    <View style={{ alignItems: 'center' }}>
+                      <TouchableOpacity onPress={() => goto(stage === 'forgot' ? 'claim' : 'forgot')} accessibilityRole="button">
+                        <Text style={{ ...type.small, color: colors.textSoft, fontWeight: '600' }}>
+                          {stage === 'forgot' ? 'I already have a code' : 'I need a code'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                    <BackToSignIn onPress={() => goto('signin')} />
+                  </>
+                )}
+
               </View>
-            </>
-          )}
-
-          {host ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: split ? spacing.lg : 10 }}>
-              <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: palette.cyan300 }} />
-              <Text numberOfLines={1} style={{ color: colors.onChromeMuted, fontSize: 12, fontWeight: '600', flex: 1 }}>
-                {host}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-      </Gradient>
-
-      <View style={{ flex: split ? 1 : 1, justifyContent: 'center', padding: split ? 48 : 20 }}>
-        <View style={{ width: '100%', maxWidth: 440, alignSelf: 'center' }}>
-          <Appear distance={14}>
-            <Card style={split ? shadow.raised : null}>{panel}</Card>
+            </Card>
           </Appear>
-
-          <Sheet visible={helpOpen} onClose={() => setHelpOpen(false)} title="Can't get in?" width={460}>
-            <Body style={{ marginBottom: spacing.sm }}>
-              Accounts are created at the school, not here. If you have never been given one — or
-              your password no longer works and you have no code — the office is the only place
-              that can fix it.
-            </Body>
-            {(brand.channels || []).length === 0 ? (
-              <Muted>The school has not recorded a phone number or an email address yet.</Muted>
-            ) : (brand.channels || []).map((c, i, arr) => (
-              <MenuRow
-                key={c.key}
-                icon={c.key === 'whatsapp' ? 'whatsapp' : c.icon}
-                iconTone={c.key === 'whatsapp' ? 'success' : c.key === 'email' ? 'primary' : 'violet'}
-                label={c.label} hint={c.value} last={i === arr.length - 1}
-                onPress={() => { openLink(hrefFor(c, { subject: 'I cannot sign in', message: `Good day${brand.school?.name ? ` ${brand.school.name}` : ''}. I am unable to sign in to the school app and would like some help.` })); setHelpOpen(false); }}
-              />
-            ))}
-          </Sheet>
-
-          {/* Somebody who cannot get in needs the school, not a help page. */}
-          <View style={{ alignItems: 'center', marginTop: 16 }}>
-            <TouchableOpacity onPress={() => router.push('/connect')} accessibilityRole="button">
-              <Text style={{ ...type.small, color: colors.muted, fontWeight: '700' }}>Change school or address</Text>
-            </TouchableOpacity>
-          </View>
         </View>
       </View>
     </View>
   );
 }
 
-const styles = {
-  orRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginVertical: spacing.xs },
-  orLine: { flex: 1, height: 1, backgroundColor: colors.border },
-};
+function BackToSignIn({ onPress }) {
+  return (
+    <View style={{ alignItems: 'center' }}>
+      <TouchableOpacity onPress={onPress} accessibilityRole="button">
+        <Text style={{ ...type.small, color: colors.muted, fontWeight: '600' }}>Back to sign in</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
