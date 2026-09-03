@@ -132,15 +132,21 @@ def record_expense(db, actor, data):
             "payment_method": data.get("payment_method") or data.get("method") or "Cash",
             "reference": data.get("reference"), "date": data.get("date") or _today(),
             "recorded_by": actor["user_id"],
-            # Approving your own expenditure is how a school's books stop
-            # meaning anything. An account that may only record leaves it for
-            # somebody with `finance: manage` to sign off.
-            "approved_by": actor["user_id"] if security.can(actor, "finance", "edit") else None,
+            # NOBODY approves their own expenditure — not even an account that
+            # holds `finance: manage`, and not even the Super Admin.
+            #
+            # The desktop lets the person recording an expense sign it off in
+            # the same act, because the desktop is one machine in one office
+            # where the bursar and the head are the same two people all day.
+            # Online it is two acts by two accounts, which is the ordinary
+            # separation of duties every school's auditor asks about, and it
+            # costs one tap.
+            "approved_by": None,
         })
     security.audit(db, actor, "expense", row_id, "record_expense",
                    f"{category} {amount} — {description}")
-    return {"ok": True, "id": row_id,
-            "approved": security.can(actor, "finance", "edit")}
+    return {"ok": True, "id": row_id, "approved": False,
+            "message": "Recorded. Somebody else has to approve it."}
 
 
 def approve_expense(db, actor, expense_id):

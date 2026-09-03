@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import office
 from . import payments as cloud_payments
+from . import school_api
 from . import portal_auth as pauth
 from . import portals as portal_model
 from . import ratelimit
@@ -35,6 +36,11 @@ def create_app(store=None) -> FastAPI:
     app = FastAPI(title="Nickland Edusoft Cloud", docs_url=None, redoc_url=None)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.state.store = store or create_store()
+
+    # The online school itself: every module the offline system has, against
+    # that school's own Postgres schema. Mounted FIRST so it can never be
+    # shadowed by the catch-all that serves the web app's static files.
+    app.include_router(school_api.router)
 
     # Optional seed for dev / cross-language testing: provision a known school.
     seed_id, seed_key = os.environ.get("SEED_SCHOOL_ID"), os.environ.get("SEED_SCHOOL_KEY")

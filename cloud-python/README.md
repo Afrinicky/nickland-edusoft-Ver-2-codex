@@ -121,3 +121,53 @@ The image does **not** build the web app — that keeps deploys fast, and the ap
 is served by Vercel in the production shape described in
 [`../docs/WEB_APP.md`](../docs/WEB_APP.md). To have this service serve it too,
 mount a build and set `WEBAPP_DIR` to it.
+
+
+## The online school
+
+The service holds two things that used to be one.
+
+**The thin cloud** (`app/main.py`, `app/staff.py`, `app/office.py`) is the read
+model a school's desktop projects up so a teacher can work with the school's
+own machine switched off. It is unchanged.
+
+**The online school** (`app/school/`, `app/school_api.py`) is the whole system:
+every table the offline software has, every module it runs, in Postgres, one
+schema per school.
+
+    cloud-python/
+      schema/school.sql     GENERATED from electron/db/database.js
+      schema/seed.sql       GENERATED from its seedDefaults
+      app/school/db.py      one school's database; schema-per-tenant
+      app/school/access.py  the access ladder      (_access.js)
+      app/school/security.py permissions + audit   (auth.js, _security.js)
+      app/school/scope.py   whose class, whose subject (_scope.js)
+      app/school/session.py sign-in and sessions   (tokens.js)
+      app/school/…          students, academics, fees, billing, ledger,
+                            finance, payroll, staff, canteen, admin
+      app/school_api.py     80 routes, each behind a portal AND a permission
+
+### Regenerating the schema
+
+The offline system's schema is the original. Never edit `schema/school.sql`:
+
+    node scripts/schema-to-postgres.mjs
+
+It builds the offline database in memory — CREATE statements and every
+migration, exactly as a school's PC runs them — and renders the result for
+Postgres, along with the defaults a new school starts with.
+
+### Provisioning a school
+
+    python3 -c "from app.school import db; db.provision('sch_abc')"
+
+Creates the school's schema, applies all 81 tables and 127 foreign keys, and
+seeds the designations, classes, subjects, grading bands and settings.
+
+### Running the tests
+
+They need a real Postgres, because the faults worth catching are the ones where
+a route and a table disagree:
+
+    DATABASE_URL=postgresql://… ALLOW_DEV_SECRET=1 ALLOW_MEMORY_STORE=1 \
+        python3 tests/test_school.py
