@@ -13,6 +13,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Animated, Platform, Easing } from 'react-native';
 import { Redirect } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '../src/auth';
 import { useBranding } from '../src/brand';
 import { Crest } from '../src/ui';
@@ -70,6 +71,9 @@ export function Splash({ logo, school }) {
 
   return (
     <Gradient colors={gradients.chrome} angle={160} style={styles.screen}>
+      {/* The one dark screen in the app, so the one place the phone's own
+          status bar has to carry light content. */}
+      <StatusBar style="light" />
       <Animated.View style={{
         alignItems: 'center', gap: spacing.lg,
         opacity: rise,

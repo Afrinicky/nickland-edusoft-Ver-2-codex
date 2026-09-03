@@ -77,7 +77,7 @@ export default function UserAssignmentsModal({ user, onClose }) {
         {!user.staff_id && (
           <div className="card" style={{
             background: 'var(--warning-bg, #FEF3C7)',
-            border: '1px solid var(--warning)', marginBottom: 14, padding: 14,
+            borderLeft: '3px solid var(--warning)', marginBottom: 14, padding: 14,
           }}>
             <strong>Heads up:</strong> This user is not linked to a staff record yet.
             Edit the user first and link them to staff — only then can you assign classes/subjects.
@@ -86,7 +86,7 @@ export default function UserAssignmentsModal({ user, onClose }) {
 
         {user.staff_id && (
           <>
-            <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)', marginBottom: 14 }}>
+            <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)', marginBottom: 14 }}>
               <div className="text-sm" style={{ lineHeight: 1.7 }}>
                 <strong>Class only</strong> — the whole class, every subject in it.<br />
                 <strong>Class and subject</strong> — that subject in that class, nothing else in it.<br />

@@ -193,7 +193,7 @@ export default function ReceiptTemplates() {
         )}
       </div>
 
-      <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)', marginTop: 16 }}>
+      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)', marginTop: 16 }}>
         <strong>Optional: custom Word templates</strong>
         <div className="text-sm" style={{ marginTop: 8, lineHeight: 1.6 }}>
           <ol style={{ marginLeft: 20 }}>

@@ -30,10 +30,10 @@ function Branded() {
   const { host } = useAuth();
   return (
     <BrandingProvider host={host}>
-      {/* Dark chrome on the phone's own status bar, light content over it. The
-          splash, the drawer and the top bar are all dark; a black-on-white
-          status bar over them is unreadable. */}
-      <StatusBar style="light" />
+      {/* The app's chrome is white, so the phone's own status bar carries dark
+          content over it. The splash is the one dark screen and it sets its
+          own; see app/index.jsx. */}
+      <StatusBar style="dark" />
       <Stack screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor: colors.bg },

@@ -53,7 +53,7 @@ export default function CalendarTab() {
                 background:
                   d.day_type === 'school_day' ? 'var(--primary-50)' :
                   d.day_type === 'holiday' ? 'var(--surface-3)' :
-                  'var(--surface-1)',
+                  '#fff',
                 color: d.day_type === 'school_day' ? 'var(--primary)' : 'var(--muted)',
               }}>
               {new Date(d.date).getDate()}

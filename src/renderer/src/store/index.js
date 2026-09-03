@@ -128,22 +128,14 @@ export const useStore = create((set, get) => ({
 
   // ── Settings & Theme ─────────────────────────────────
   settings: {},
-  // The system's own defaults, in the same values as
-  // src/renderer/src/styles/index.css and mobile/src/theme.js. A school that
-  // has chosen its own colours overrides them below; a school that has not
-  // gets the product's, which are these.
-  //
-  // `fontFamily` is a KEY, not a font name: the fonts are resolved by
-  // FONT_STACKS at the bottom of this file and every one of them ends in a
-  // system sans. Nothing here may be fetched over a network.
   theme: {
-    primary: '#5B3FE0',
-    accent: '#C99A25',
-    background: '#F5F4FB',
-    foreground: '#14142B',
+    primary: '#1B3A6B',
+    accent: '#C9961A',
+    background: '#FFFFFF',
+    foreground: '#0F172A',
     fgMode: 'dark',
     themeMode: 'light',
-    fontFamily: 'system',
+    fontFamily: 'Inter',
     fontSize: 14,
   },
 
@@ -151,13 +143,13 @@ export const useStore = create((set, get) => ({
     const settings = await window.api.settings.getAll();
     const branding = settings.branding || {};
     const theme = {
-      primary:    branding.school_color_primary    || '#5B3FE0',
-      accent:     branding.school_color_accent     || '#C99A25',
-      background: branding.school_color_background || '#F5F4FB',
-      foreground: branding.school_color_foreground || '#14142B',
+      primary:    branding.school_color_primary    || '#1B3A6B',
+      accent:     branding.school_color_accent     || '#C9961A',
+      background: branding.school_color_background || '#FFFFFF',
+      foreground: branding.school_color_foreground || '#0F172A',
       fgMode:     branding.ui_foreground_mode      || 'dark',
       themeMode:  branding.ui_theme_mode           || 'light',
-      fontFamily: branding.ui_font_family          || 'system',
+      fontFamily: branding.ui_font_family          || 'Inter',
       fontSize:   parseInt(branding.ui_font_size_base || '14', 10),
     };
     applyTheme(theme);
@@ -217,64 +209,23 @@ export const useStore = create((set, get) => ({
 
 function applyTheme(theme) {
   const root = document.documentElement;
-  // A setting the school never filled in leaves the stylesheet's own value in
-  // place rather than overwriting it with nothing.
-  const put = (name, value) => {
-    if (value == null || value === '') return;
-    root.style.setProperty(name, value);
-  };
-  root.style.setProperty('--primary',     isHex(theme.primary) ? theme.primary : '#5B3FE0');
+  root.style.setProperty('--primary',     theme.primary);
   root.style.setProperty('--primary-50',  lighten(theme.primary, 0.92));
   root.style.setProperty('--primary-100', lighten(theme.primary, 0.85));
   root.style.setProperty('--primary-700', darken(theme.primary, 0.15));
   root.style.setProperty('--primary-900', darken(theme.primary, 0.3));
-  put('--accent',      isHex(theme.accent) ? theme.accent : '#C99A25');
+  root.style.setProperty('--accent',      theme.accent);
   root.style.setProperty('--accent-50',   lighten(theme.accent, 0.88));
   root.style.setProperty('--accent-700',  darken(theme.accent, 0.18));
-  put('--bg',          isHex(theme.background) ? theme.background : '#F5F4FB');
-  put('--fg',          isHex(theme.foreground) ? theme.foreground : '#14142B');
-  root.style.setProperty('--font-family', fontStack(theme.fontFamily));
+  root.style.setProperty('--bg',          theme.background);
+  root.style.setProperty('--fg',          theme.foreground);
+  root.style.setProperty('--font-family', `'${theme.fontFamily}', 'Cambria', Georgia, serif`);
   root.style.setProperty('--font-size-base', `${theme.fontSize}px`);
   root.setAttribute('data-fg',    theme.fgMode === 'light' ? 'light' : 'dark');
   root.setAttribute('data-theme', theme.themeMode === 'dark' ? 'dark' : 'light');
 }
 
-// ── Fonts ───────────────────────────────────────────────────────────────────
-// Every stack ends in a system sans, and NOTHING here is fetched over a
-// network. This used to append `'Cambria', Georgia, serif`, and the app used
-// to pull six families from Google Fonts in index.html — so on a school PC
-// with no internet at seven in the morning, every one of those requests failed
-// and the entire product rendered in CAMBRIA, a serif. That is most of why it
-// looked soft and unprofessional. A font that can fail to load has no business
-// being the thing the interface depends on.
-const SYSTEM_SANS = `system-ui, -apple-system, 'Roboto', 'Helvetica Neue', 'Liberation Sans', 'DejaVu Sans', 'Noto Sans', Arial, sans-serif`;
-
-export const FONT_STACKS = {
-  system:  `'Segoe UI Variable Text', 'Segoe UI', ${SYSTEM_SANS}`,
-  segoe:   `'Segoe UI Variable Text', 'Segoe UI', ${SYSTEM_SANS}`,
-  inter:   `'Inter', 'Segoe UI', ${SYSTEM_SANS}`,
-  roboto:  `'Roboto', 'Segoe UI', ${SYSTEM_SANS}`,
-  calibri: `'Calibri', 'Segoe UI', ${SYSTEM_SANS}`,
-  tahoma:  `'Tahoma', 'Segoe UI', ${SYSTEM_SANS}`,
-  verdana: `'Verdana', 'Segoe UI', ${SYSTEM_SANS}`,
-};
-
-export function fontStack(key) {
-  const k = String(key || 'system').trim().toLowerCase();
-  if (FONT_STACKS[k]) return FONT_STACKS[k];
-  // A school that typed a family name of its own still gets a real fallback
-  // rather than a serif — and a quote-mangling name cannot break the rule.
-  const safe = k.replace(/["'<>;{}]/g, '').slice(0, 40);
-  return safe ? `'${safe}', 'Segoe UI', ${SYSTEM_SANS}` : FONT_STACKS.system;
-}
-
-// A colour that is not a hex value — a token name, an empty setting — must not
-// reach the maths below: it produces NaN, `rgb(NaN,NaN,NaN)`, and a CSS
-// variable that resolves to nothing, which takes the whole palette with it.
-function isHex(v) { return /^#?[0-9a-f]{6}$/i.test(String(v || '').trim()); }
-
 function hexToRgb(hex) {
-  if (!isHex(hex)) return [91, 63, 224];
   const m = hex.replace('#','').match(/.{2}/g);
   return m ? m.map(x => parseInt(x,16)) : [0,0,0];
 }

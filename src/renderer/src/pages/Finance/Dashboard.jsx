@@ -129,7 +129,7 @@ export default function FinanceDashboard({ onSwitchTab }) {
           </div>
           {(!summary?.income_by_category || summary.income_by_category.length === 0)
             ? <div className="empty-state">No income recorded</div>
-            : <CategoryBars data={summary.income_by_category} color="var(--success)" total={summary.income_total} />
+            : <CategoryBars data={summary.income_by_category} color="#15803D" total={summary.income_total} />
           }
         </div>
         <div className="card">
@@ -139,7 +139,7 @@ export default function FinanceDashboard({ onSwitchTab }) {
           </div>
           {(!summary?.expense_by_category || summary.expense_by_category.length === 0)
             ? <div className="empty-state">No expenses recorded</div>
-            : <CategoryBars data={summary.expense_by_category} color="var(--danger)" total={summary.expense_total} />
+            : <CategoryBars data={summary.expense_by_category} color="#B91C1C" total={summary.expense_total} />
           }
         </div>
       </div>

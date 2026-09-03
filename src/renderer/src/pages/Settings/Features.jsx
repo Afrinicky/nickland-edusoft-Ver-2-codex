@@ -19,7 +19,7 @@ export default function Features() {
 
   return (
     <div className="features-settings">
-      <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)' }}>
+      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
         <strong>Why toggle features?</strong>
         <div className="text-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
           Some Ghanaian schools — especially smaller private schools — don't process PAYE tax,

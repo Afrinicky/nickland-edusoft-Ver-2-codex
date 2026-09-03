@@ -35,7 +35,7 @@ export default function AccessControl() {
 
   return (
     <div className="access-control">
-      <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)' }}>
+      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
         <strong>Who can do what</strong>
         <div className="text-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
           Pick a role or one person, then set how much access they have in each area.
@@ -158,7 +158,7 @@ function RolesTab({ catalogue, canManage, showToast }) {
             </div>
 
             {selected.always_full ? (
-              <div className="card" style={{ background: 'var(--warning-bg, #FEF3C7)', border: '1px solid var(--warning)' }}>
+              <div className="card" style={{ background: 'var(--warning-bg, #FEF3C7)', borderLeft: '3px solid var(--warning)' }}>
                 <strong>{selected.name} always has full access to everything.</strong>
                 <div className="text-sm" style={{ marginTop: 4 }}>
                   This is by design and cannot be reduced — every school needs at least one
@@ -246,7 +246,7 @@ function IndividualsTab({ catalogue, canManage, showToast, initialUser }) {
       {!access ? (
         <div className="card"><div className="empty-state"><p>Choose a person to see and adjust their access.</p></div></div>
       ) : access.always_full ? (
-        <div className="card" style={{ background: 'var(--warning-bg, #FEF3C7)', border: '1px solid var(--warning)' }}>
+        <div className="card" style={{ background: 'var(--warning-bg, #FEF3C7)', borderLeft: '3px solid var(--warning)' }}>
           <strong>{access.user.full_name} is {access.user.designation_name} — always full access.</strong>
           <div className="text-sm" style={{ marginTop: 4 }}>
             Overrides do not apply to this account. Change their role to limit them.

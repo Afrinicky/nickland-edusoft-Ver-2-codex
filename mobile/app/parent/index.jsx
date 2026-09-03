@@ -4,7 +4,7 @@ import React, { useCallback, useState } from 'react';
 import { View, Text, RefreshControl, TouchableOpacity } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../../src/auth';
-import { api, money } from '../../src/api';
+import { api, money, firstName } from '../../src/api';
 import {
   Screen, Card, Section, Title, Heading, Body, Muted, Micro, Badge, Avatar,
   ErrorNote, Skeleton, EmptyState, Grid, StatCard, Gradient, ProgressBar,
@@ -12,6 +12,7 @@ import {
 } from '../../src/ui';
 import { useBranding } from '../../src/brand';
 import { ContactSchool, SettleBalance } from '../../src/actions';
+import { Appear } from '../../src/motion';
 import { Icon } from '../../src/icons';
 import { useLayout } from '../../src/responsive';
 import { colors, gradients, spacing, radius, shadow, type } from '../../src/theme';
@@ -61,19 +62,42 @@ export default function Children() {
         </>
       ) : (
         <>
-          <Hero
-            crest={<Crest logo={brand.logo} size={layout.isPhone ? 46 : 58} tone="chrome" />}
-            eyebrow={brand.school?.name || 'Welcome'}
-            title={parentName || 'Welcome'}
-            subtitle={`${children.length} ${children.length === 1 ? 'child' : 'children'} at school · ${
-              owed > 0 ? `${money(owed)} outstanding across fees and canteen` : 'everything settled — nothing owing'
-            }`}
-            right={layout.isPhone ? null : (
-              <View style={{ gap: spacing.sm, alignItems: 'flex-end' }}>
-                <HeroStat label="Outstanding" value={money(owed)} tone={owed > 0 ? 'danger' : 'light'} />
+          {/* Greeting on the page, the figure on the card. The reference does
+              it this way and it is right: a slab of colour behind a person's
+              name says nothing, while a slab of colour behind the amount they
+              owe says exactly what it is for. */}
+          <Appear distance={10}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingTop: 2 }}>
+              <Crest logo={brand.logo} size={44} tone="light" />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text numberOfLines={1} style={{ ...type.title, color: colors.text, fontSize: layout.isCompact ? 20 : 23 }}>
+                  Hi, {firstName(parentName)}
+                </Text>
+                <Muted numberOfLines={1} style={{ marginTop: 2 }}>
+                  {brand.school?.name || 'Your school'} · {children.length} {children.length === 1 ? 'child' : 'children'}
+                </Muted>
               </View>
-            )}
-          />
+            </View>
+          </Appear>
+
+          <Appear distance={12} delay={60}>
+            <Gradient colors={owed > 0 ? gradients.brand : gradients.success} angle={128} style={[styles.summary, shadow.raised]}>
+              <View pointerEvents="none" style={styles.summaryGlow} />
+              <Text style={{ ...type.micro, color: 'rgba(255,255,255,0.72)' }}>
+                {owed > 0 ? 'OUTSTANDING' : 'EVERYTHING SETTLED'}
+              </Text>
+              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{
+                ...type.display, color: '#fff', fontSize: layout.isCompact ? 27 : 31, marginTop: 4,
+              }}>
+                {owed > 0 ? money(owed) : 'Nothing owing'}
+              </Text>
+              <Text style={{ ...type.small, color: 'rgba(255,255,255,0.78)', fontWeight: '600', marginTop: 5 }}>
+                {owed > 0
+                  ? 'Across school fees and the canteen. No payment is taken in the app.'
+                  : 'Fees and canteen are both clear this term.'}
+              </Text>
+            </Gradient>
+          </Appear>
 
           {/* The school is one tap away from the first screen a parent opens.
               Before this the only way to reach it was to find the class
@@ -178,3 +202,11 @@ function Money({ label, value }) {
     </View>
   );
 }
+
+const styles = {
+  summary: { borderRadius: radius.lg, padding: spacing.xl, overflow: 'hidden' },
+  summaryGlow: {
+    position: 'absolute', right: -60, top: -70, width: 210, height: 210,
+    borderRadius: 105, backgroundColor: 'rgba(255,255,255,0.09)',
+  },
+};

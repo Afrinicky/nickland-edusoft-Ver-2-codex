@@ -6,25 +6,26 @@ set of tokens; a sidebar on the phone; and printouts that are the office's own.
 
 ---
 
-## Why the desktop looked soft
+## What this does NOT touch
 
-It was rendering in **Cambria — a serif**, on every school PC, and had been for
-as long as the app has existed. Three things stacked up:
+**The desktop installer app (`src/renderer/`) is untouched.** An earlier pass
+restyled it; that has been reverted in full and the tree is byte-identical to
+where it was. It keeps its navy, its gold and its own type.
 
-1. `src/renderer/index.html` pulled **six families from Google Fonts**. A
-   school's internet is not dependable and is frequently simply off at seven in
-   the morning, so all six requests failed.
-2. `--font-family` read `'Inter', 'Cambria', 'Segoe UI', sans-serif`. With Inter
-   unavailable, the next name in the list is a serif.
-3. `store/index.js` then **overwrote the token at runtime** with
-   `'<theme font>', 'Cambria', Georgia, serif`, so fixing the stylesheet alone
-   would have changed nothing.
+One thing found there and deliberately left alone: `index.html` fetches six
+families from Google Fonts, `--font-family` falls back to `'Cambria'`, and
+`store/index.js` re-stamps a serif fallback at runtime — so on a school PC with
+no internet the desktop renders in a serif. It is a real bug and a one-line
+fix, but it is in the desktop app and nobody asked for it to change. Raised,
+not applied.
 
-An app whose first rule is "offline is the normal case" cannot have its
-typography depend on a CDN. The fonts are a system stack now, resolved through
-`FONT_STACKS`, every branch of which ends in a system sans. The Google Fonts
-link and its CSP allowances are gone; `connect-src 'self'` closes the door
-behind them. The Branding screen offers only families already on the machine.
+## Why the desktop web app looked soft
+
+The phone and browser app set no font family at all, so it took whatever
+react-native-web resolved by default and the weights sat wherever they landed.
+It now names a system stack (`mobile/src/theme.js`), every branch of which ends
+in a system sans, with tracking tuned per size. Nothing is fetched — the whole
+point of this app is that it works with the school's internet down.
 
 ## One document, not two
 
@@ -59,20 +60,25 @@ it would be a different document wearing the same name.
 `DESIGN.md` at the repo root is the written version; `mobile/src/theme.js` and
 `src/renderer/src/styles/index.css` are the two copies of it.
 
-**Colour is restrained**: tinted neutrals plus one accent. Violet marks the
-primary action and the current position, and nothing else. `#5B3FE0` sits at
+**Colour is restrained**: tinted neutrals plus one accent. `#5B3FE0` sits at
 7.1:1 on white, so one value works as a button fill *and* as a text colour
 instead of two that drift apart.
+
+**One screen is dark, and it is the splash.** The top bar, the drawer, the
+sidebar and the bottom bar are one white surface with hairline borders. Violet
+appears in three places and means the same thing in each: the pill on the item
+you are on, the primary button, and one card per screen carrying the figure
+that screen is about — or the header over a person's own profile. A dark rail
+down the side of a light screen is a slab of ink with nothing on it, and in
+Ghanaian daylight a dark panel is a mirror.
 
 **Contrast is checked, not assumed.** `npm run test:contrast` measures every
 pairing the system uses and fails the build below 4.5:1 — it caught the gold
 badge at 3.63:1. `faint` is the one token deliberately under the floor and the
 suite asserts it stays there so nobody promotes it to a body colour.
 
-**Banned and removed**: fourteen coloured side-stripes down the edges of cards
-(a stripe is what gets reached for when the hierarchy is not working), nested
-cards, and every hardcoded hex in the renderer — 18 files retinted onto tokens,
-which is why the palette had stopped being one.
+**Banned and removed**: coloured side-stripes down the edges of cards (a stripe
+is what gets reached for when the hierarchy is not working) and nested cards.
 
 **Motion** (`mobile/src/motion.jsx`, `--ease-*` on the desktop): ease-out only,
 120–400ms, no bounce. What moves is a screen arriving, a list settling (capped
@@ -110,6 +116,6 @@ fine. Figures step down to fit.
 
     npm test        # 632 checks + the contrast floor, all green
 
-Both apps were driven in a real browser at 390px and 1440px: 36 screens, zero
+The app was driven in a real browser at 390px and 1440px: 36 screens, zero
 console errors, and the printed report card compared against the desktop
-generator's own output.
+generator's own output. `git diff` against `src/renderer/` is empty.
