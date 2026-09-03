@@ -130,12 +130,12 @@ export default function StudentsDashboard({ onSwitchTab }) {
             <span className="text-sm text-muted">Active students</span>
           </div>
           <div className="gender-stats">
-            <GenderRow label="Male" count={male} pct={malePct} color="var(--primary-500)" />
-            <GenderRow label="Female" count={female} pct={femalePct} color="var(--accent)" />
+            <GenderRow label="Male" count={male} pct={malePct} color="#3B82F6" />
+            <GenderRow label="Female" count={female} pct={femalePct} color="#EC4899" />
           </div>
           <div className="gender-bar">
-            <div className="gender-bar-segment" style={{ width: `${malePct}%`, background: 'var(--primary-500)' }} />
-            <div className="gender-bar-segment" style={{ width: `${femalePct}%`, background: 'var(--accent)' }} />
+            <div className="gender-bar-segment" style={{ width: `${malePct}%`, background: '#3B82F6' }} />
+            <div className="gender-bar-segment" style={{ width: `${femalePct}%`, background: '#EC4899' }} />
           </div>
         </div>
       </div>

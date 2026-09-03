@@ -309,8 +309,8 @@ function IncomeExpenseChart({ income, expense }) {
   return (
     <div className="chart-container">
       <div className="chart-legend">
-        <span className="legend-item"><span className="legend-dot" style={{ background: 'var(--primary-500)' }} /> Income (GHS)</span>
-        <span className="legend-item"><span className="legend-dot" style={{ background: 'var(--warning)' }} /> Expenses (GHS)</span>
+        <span className="legend-item"><span className="legend-dot" style={{ background: '#3B82F6' }} /> Income (GHS)</span>
+        <span className="legend-item"><span className="legend-dot" style={{ background: '#F59E0B' }} /> Expenses (GHS)</span>
       </div>
       <div className="chart-svg-wrap">
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" width="100%" height="200">
@@ -321,26 +321,26 @@ function IncomeExpenseChart({ income, expense }) {
           {/* Expense area */}
           <polygon
             points={`0,${H} ${points(expenseData)} ${W},${H}`}
-            fill="var(--warning)" fillOpacity="0.15"
+            fill="#F59E0B" fillOpacity="0.15"
           />
           {/* Income area */}
           <polygon
             points={`0,${H} ${points(incomeData)} ${W},${H}`}
-            fill="var(--primary-500)" fillOpacity="0.15"
+            fill="#3B82F6" fillOpacity="0.15"
           />
           {/* Lines */}
-          <polyline points={points(expenseData)} fill="none" stroke="var(--warning)" strokeWidth="0.5" />
-          <polyline points={points(incomeData)} fill="none" stroke="var(--primary-500)" strokeWidth="0.5" />
+          <polyline points={points(expenseData)} fill="none" stroke="#F59E0B" strokeWidth="0.5" />
+          <polyline points={points(incomeData)} fill="none" stroke="#3B82F6" strokeWidth="0.5" />
           {/* Points */}
           {incomeData.map((v, i) => {
             const x = monthLabels.length === 1 ? W / 2 : (i / (monthLabels.length - 1)) * W;
             const y = H - (v / maxVal) * H;
-            return <circle key={`inc-${i}`} cx={x} cy={y} r="0.7" fill="var(--primary-500)" />;
+            return <circle key={`inc-${i}`} cx={x} cy={y} r="0.7" fill="#3B82F6" />;
           })}
           {expenseData.map((v, i) => {
             const x = monthLabels.length === 1 ? W / 2 : (i / (monthLabels.length - 1)) * W;
             const y = H - (v / maxVal) * H;
-            return <circle key={`exp-${i}`} cx={x} cy={y} r="0.7" fill="var(--warning)" />;
+            return <circle key={`exp-${i}`} cx={x} cy={y} r="0.7" fill="#F59E0B" />;
           })}
         </svg>
       </div>
@@ -405,7 +405,7 @@ function FeeCollectionDonut({ collected, outstanding, total, pct }) {
           </div>
         </div>
         <div className="legend-row">
-          <span className="legend-dot" style={{ background: 'var(--danger)' }} />
+          <span className="legend-dot" style={{ background: '#EF4444' }} />
           <div className="legend-text">
             <div className="legend-label">Outstanding</div>
             <div className="legend-val">{ghs(outstanding)} ({100 - pct}%)</div>

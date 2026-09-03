@@ -68,7 +68,7 @@ export default function Users() {
 
   return (
     <div className="users-settings">
-      <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)' }}>
+      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
         <strong>About user accounts</strong>
         <div className="text-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
           Each person who logs into Nickland Edusoft needs an account. Choose a designation
@@ -78,7 +78,7 @@ export default function Users() {
       </div>
 
       {requests.length > 0 && (
-        <div className="card" style={{ marginTop: 16, border: '1px solid var(--warning, #C9961A)' }}>
+        <div className="card" style={{ marginTop: 16, borderLeft: '3px solid var(--warning, #C9961A)' }}>
           <div className="section-header">
             <div className="section-title">
               Password requests waiting

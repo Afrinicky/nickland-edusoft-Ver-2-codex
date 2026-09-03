@@ -374,14 +374,14 @@ function PerformanceGraph({ terms }) {
           ))}
           <polygon
             points={`0,${H} ${points.map(p => `${p.x},${p.y}`).join(' ')} ${W},${H}`}
-            fill="var(--primary)" fillOpacity="0.15"
+            fill="#1B3A6B" fillOpacity="0.15"
           />
           <polyline
             points={points.map(p => `${p.x},${p.y}`).join(' ')}
-            fill="none" stroke="var(--primary)" strokeWidth="0.5"
+            fill="none" stroke="#1B3A6B" strokeWidth="0.5"
           />
           {points.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r="0.8" fill="var(--accent)" />
+            <circle key={i} cx={p.x} cy={p.y} r="0.8" fill="#C9961A" />
           ))}
         </svg>
       </div>
@@ -457,10 +457,10 @@ function AddEventModal({ studentId, onClose, onSaved }) {
 
 function avgColor(avg) {
   if (avg == null) return 'var(--muted)';
-  if (avg >= 80) return 'var(--success)';
+  if (avg >= 80) return '#15803D';
   if (avg >= 70) return '#0369A1';
   if (avg >= 60) return '#B45309';
-  return 'var(--danger)';
+  return '#B91C1C';
 }
 function IconUser({ size = 22 }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none">

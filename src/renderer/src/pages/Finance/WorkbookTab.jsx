@@ -90,7 +90,7 @@ export default function WorkbookTab() {
 
   return (
     <div className="workbook-tab">
-      <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)' }}>
+      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
         <strong>Keep running when the system is down</strong>
         <div className="text-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
           The finance workbook is one Excel file holding <b>fees, canteen, books, transport,

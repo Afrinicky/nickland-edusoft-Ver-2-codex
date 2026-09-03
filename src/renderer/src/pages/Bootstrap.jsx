@@ -33,8 +33,8 @@ export default function Bootstrap({ onDone }) {
         <div className="auth-logo-row">
           <div className="auth-app-badge">
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-              <rect width="32" height="32" rx="8" fill="var(--primary)"/>
-              <path d="M8 22L16 10L24 22H8Z" fill="var(--accent)"/>
+              <rect width="32" height="32" rx="8" fill="#1B3A6B"/>
+              <path d="M8 22L16 10L24 22H8Z" fill="#C9961A"/>
             </svg>
           </div>
           <div>

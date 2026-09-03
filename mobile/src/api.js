@@ -652,3 +652,18 @@ export function money(n) {
   const v = Number(n) || 0;
   return 'GHS ' + v.toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+/**
+ * The name a person is greeted by.
+ *
+ * "Good morning, Mr Kwabena Owusu" is a letter from a bank. Titles are dropped
+ * first, because "Hi, Mrs" — which is what taking the first word gives you for
+ * "Mrs Akua Mensah" — is worse than not greeting anybody at all.
+ */
+export function firstName(full, fallback = 'there') {
+  const cleaned = String(full || '')
+    .replace(/^((mr|mrs|miss|ms|dr|prof|rev|sr|fr|hon)\.?\s+)+/i, '')
+    .trim();
+  const first = cleaned.split(/\s+/).filter(Boolean)[0];
+  return first || fallback;
+}

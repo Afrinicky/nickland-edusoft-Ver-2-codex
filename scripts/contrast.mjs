@@ -51,9 +51,14 @@ const cases = [
   ['success figure on surface', T.green600, T.surface,  4.5],
   ['danger figure on surface',  T.red600,   T.surface,  4.5],
   ['warning figure on surface', T.amber600, T.surface,  4.5],
-  ['white on chrome (drawer)',  T.surface,  T.chrome,   4.5],
-  ['white on chrome-2',         T.surface,  T.chrome2,  4.5],
-  ['active marker on chrome',   T.violet300, T.chrome,  3.0],
+  // The app's chrome is light: one white surface for the top bar, the drawer
+  // and the sidebar, with the item you are on marked by a violet pill.
+  ['nav label on white',        T.ink700,   T.surface,  4.5],
+  ['nav group label on white',  T.ink500,   T.surface,  4.5],
+  ['active nav on violet pill', T.violet600, T.violet50, 4.5],
+  // The splash is the one dark screen in the product.
+  ['splash text on chrome',     T.surface,  T.chrome,   4.5],
+  ['splash text on chrome-2',   T.surface,  T.chrome2,  4.5],
   ['FAINT as text (must fail)', T.ink400,   T.surface,  4.5],
 ];
 

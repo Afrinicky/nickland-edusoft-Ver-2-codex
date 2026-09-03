@@ -21,13 +21,30 @@ nothing else.
 | Muted | `ink500` | `#61617E` | 5.6:1 — passes for body, so a caption is never below the floor. |
 | Faint | `ink400` | `#8A8AA3` | 3.4:1. **Decoration and icons only.** Never body text. |
 | Border | `line` | `#E7E5F2` | |
-| Chrome | `ink950` | `#15132B` | Splash, sidebar, profile header. |
+| Chrome | `ink950` | `#15132B` | **The splash, and nothing else.** |
 
 Judgement colours carry meaning, never decoration: `#12864A` good, `#B26205`
 attention, `#C7343A` wrong, `#0E8E8E` computed/live.
 
 **Contrast floor: 4.5:1 for anything a person reads.** `ink400` is the only
-token below it and it is barred from text.
+token below it and it is barred from text. `npm run test:contrast` measures
+every pairing and fails the build below the floor.
+
+### Where colour is allowed to be
+
+One screen in the app is dark, and it is the splash. The top bar, the drawer,
+the sidebar and the bottom bar are all one white surface with hairline borders.
+
+Violet appears in exactly three places and means the same thing in each:
+
+- the **pill** on the navigation item you are on, and on the active tab,
+- the **primary button**,
+- one **card** per screen, carrying the figure that screen is about — today's
+  progress, the amount outstanding — or the header over a person's own profile.
+
+A dark rail down the side of a light screen is a slab of ink with nothing on
+it, and in Ghanaian daylight a dark panel is a mirror. If a surface is not one
+of the three above, it is white.
 
 ## Type
 

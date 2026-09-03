@@ -18,7 +18,7 @@ import { View, Text, RefreshControl } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { useBranding } from '../../src/brand';
-import { api, money } from '../../src/api';
+import { api, money, firstName } from '../../src/api';
 import {
   Screen, Card, Section, Grid, StatCard, Heading, Title, Body, Muted, Micro,
   Button, Badge, ErrorNote, Skeleton, IconTile, EmptyState, ListRow, Divider,
@@ -39,13 +39,6 @@ function greeting() {
   if (h < 12) return 'Good morning';
   if (h < 17) return 'Good afternoon';
   return 'Good evening';
-}
-
-// The first name, which is what a person is greeted by. "Good morning, Mr
-// Kwabena Owusu" is a letter from a bank, not a greeting.
-function firstName(full) {
-  const parts = String(full || '').replace(/^(Mr|Mrs|Miss|Ms|Dr|Rev)\.?\s+/i, '').trim().split(/\s+/);
-  return parts[0] || 'there';
 }
 
 export default function Dashboard() {
@@ -155,49 +148,55 @@ export default function Dashboard() {
     }>
       <ErrorNote message={error} />
 
-      {/* Who, when, and the one figure worth a ring. */}
-      <Appear distance={12}>
-        <Gradient colors={gradients.brand} angle={128} style={[styles.hero, shadow.raised]}>
-          <View pointerEvents="none" style={styles.heroGlow} />
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
-            <Avatar name={name || 'Teacher'} photo={profile?.photo} size={46} tone="chrome" ring />
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text numberOfLines={1} style={{ ...type.title, color: '#fff', fontSize: layout.isCompact ? 20 : 23 }}>
-                Hi, {firstName(name)}
-              </Text>
-              <Text numberOfLines={1} style={{ ...type.small, color: 'rgba(255,255,255,0.74)', fontWeight: '600', marginTop: 2 }}>
-                {greeting()} · {DAY[now.getDay()]} {now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}
-              </Text>
-            </View>
+      {/* The greeting sits on the page, not on a slab of colour — the way the
+          reference has it. Violet appears once, on the card carrying the one
+          figure the screen is about. */}
+      <Appear distance={10}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingTop: 2 }}>
+          <Avatar name={name || 'Teacher'} photo={profile?.photo} size={46} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text numberOfLines={1} style={{ ...type.title, color: colors.text, fontSize: layout.isCompact ? 20 : 23 }}>
+              Hi, {firstName(name)}
+            </Text>
+            <Muted numberOfLines={1} style={{ marginTop: 2 }}>
+              {greeting()} · {now.toLocaleDateString('en-GB', {
+                weekday: layout.isCompact ? 'short' : 'long',
+                day: 'numeric',
+                month: layout.isCompact ? 'short' : 'long',
+              })}
+            </Muted>
           </View>
+          {hr?.has_staff && !clockedOut ? (
+            <Button
+              size="sm" variant={clockedIn ? 'outline' : 'primary'} full={false}
+              icon="clock" busy={clocking}
+              title={clockedIn ? 'Clock out' : 'Clock in'}
+              onPress={() => punch(clockedIn ? 'out' : 'in')}
+            />
+          ) : null}
+        </View>
+      </Appear>
 
-          <View style={styles.heroCard}>
+      <Appear distance={12} delay={60}>
+        <Gradient colors={gradients.brand} angle={128} style={[styles.progress, shadow.raised]}>
+          <View pointerEvents="none" style={styles.progressGlow} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg }}>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={{ ...type.micro, color: 'rgba(255,255,255,0.66)' }}>TODAY'S PROGRESS</Text>
-              <Text numberOfLines={2} style={{ ...type.body, color: '#fff', fontWeight: '700', marginTop: 5 }}>
+              <Text style={{ ...type.micro, color: 'rgba(255,255,255,0.72)' }}>TODAY'S PROGRESS</Text>
+              <Text numberOfLines={2} style={{ ...type.body, color: '#fff', fontWeight: '700', fontSize: 16, marginTop: 6 }}>
                 {jobs.length === 0
                   ? 'Nothing assigned to you yet'
                   : doneCount === jobs.length
                     ? "Everything on today's list is done."
                     : `${doneCount} of ${jobs.length} done — ${jobs.find(j => j.state !== 'done')?.label.toLowerCase()} next.`}
               </Text>
-              {data.term?.label ? (
-                <Text style={{ ...type.small, color: 'rgba(255,255,255,0.6)', marginTop: 4 }}>{data.term.label}</Text>
-              ) : null}
+              <Text numberOfLines={1} style={{ ...type.small, color: 'rgba(255,255,255,0.64)', marginTop: 5 }}>
+                {[data.term?.label, clockedIn ? `On duty since ${String(clockedIn).slice(0, 5)}` : null]
+                  .filter(Boolean).join('  ·  ')}
+              </Text>
             </View>
-            <ProgressRing value={pct} size={66} thickness={7} tone="chrome" />
+            <ProgressRing value={pct} size={74} thickness={8} tone="chrome" />
           </View>
-
-          {hr?.has_staff && !clockedOut ? (
-            <View style={{ marginTop: spacing.md }}>
-              <Button
-                size="sm" variant={clockedIn ? 'chrome' : 'gold'} full={false}
-                icon="clock" busy={clocking}
-                title={clockedIn ? `Clock out — on since ${String(clockedIn).slice(0, 5)}` : 'Clock in for the day'}
-                onPress={() => punch(clockedIn ? 'out' : 'in')}
-              />
-            </View>
-          ) : null}
         </Gradient>
       </Appear>
 
@@ -307,15 +306,9 @@ export default function Dashboard() {
 }
 
 const styles = {
-  hero: { borderRadius: radius.lg, padding: spacing.xl, overflow: 'hidden' },
-  heroGlow: {
-    position: 'absolute', right: -70, top: -80, width: 240, height: 240,
-    borderRadius: 120, backgroundColor: 'rgba(255,255,255,0.08)',
-  },
-  heroCard: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.lg,
-    backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: radius.md,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
-    padding: spacing.lg, marginTop: spacing.lg,
+  progress: { borderRadius: radius.lg, padding: spacing.xl, overflow: 'hidden' },
+  progressGlow: {
+    position: 'absolute', right: -60, top: -70, width: 210, height: 210,
+    borderRadius: 105, backgroundColor: 'rgba(255,255,255,0.09)',
   },
 };

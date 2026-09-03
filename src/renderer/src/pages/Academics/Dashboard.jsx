@@ -148,10 +148,10 @@ export default function AcademicsDashboard({ onSwitchTab }) {
 
 function avgColor(avg) {
   if (avg == null) return 'var(--muted)';
-  if (avg >= 80) return 'var(--success)';
+  if (avg >= 80) return '#15803D';
   if (avg >= 70) return '#0369A1';
   if (avg >= 60) return '#B45309';
-  return 'var(--danger)';
+  return '#B91C1C';
 }
 
 function IconClipboard() { return <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="6" y="4" width="12" height="18" rx="2" stroke="currentColor" strokeWidth="2" fill="none"/><rect x="9" y="2" width="6" height="4" rx="1" fill="currentColor"/><path d="M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.8"/></svg>; }

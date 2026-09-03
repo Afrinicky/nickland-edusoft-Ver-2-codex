@@ -4,8 +4,8 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 
-const NAVY = 'var(--primary)';
-const GOLD = 'var(--accent)';
+const NAVY = '#1B3A6B';
+const GOLD = '#C9961A';
 
 // `embedded` renders without the standalone page heading, for use as a tab
 // inside Academics (its natural home) while the component stays reusable.
@@ -57,7 +57,7 @@ export default function TimetableIndex({ embedded = false }) {
   return (
     <div style={embedded ? {} : { padding: 24, maxWidth: 1200 }}>
       {!embedded && <h1 style={{ color: NAVY, margin: '0 0 4px' }}>Timetable</h1>}
-      <p style={{ color: 'var(--muted)', marginTop: 0 }}>
+      <p style={{ color: '#64748B', marginTop: 0 }}>
         Set the school's daily periods once, then fill each class's weekly grid.
       </p>
 
@@ -134,13 +134,13 @@ function BellSchedule({ periods, canEdit, onChange, showToast }) {
       <h3 style={{ margin: '0 0 10px', color: NAVY }}>Bell schedule</h3>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
-          <tr style={{ textAlign: 'left', color: 'var(--muted)', fontSize: 13 }}>
+          <tr style={{ textAlign: 'left', color: '#64748B', fontSize: 13 }}>
             <th style={thStyle}>Period</th><th style={thStyle}>Start</th><th style={thStyle}>End</th><th style={thStyle}>Type</th><th style={thStyle}></th>
           </tr>
         </thead>
         <tbody>
           {periods.map(p => (
-            <tr key={p.id} style={{ borderTop: '1px solid var(--border)' }}>
+            <tr key={p.id} style={{ borderTop: '1px solid #E7EBF1' }}>
               <td style={tdStyle}>{p.label}</td>
               <td style={tdStyle}>{p.start_time}</td>
               <td style={tdStyle}>{p.end_time}</td>
@@ -157,7 +157,7 @@ function BellSchedule({ periods, canEdit, onChange, showToast }) {
           <input placeholder="Label (e.g. Period 1)" value={form.label} onChange={e => set('label', e.target.value)} style={inputStyle} />
           <input placeholder="08:00" value={form.start_time} onChange={e => set('start_time', e.target.value)} style={{ ...inputStyle, width: 90 }} />
           <input placeholder="08:40" value={form.end_time} onChange={e => set('end_time', e.target.value)} style={{ ...inputStyle, width: 90 }} />
-          <label style={{ fontSize: 13, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <label style={{ fontSize: 13, color: '#64748B', display: 'flex', alignItems: 'center', gap: 4 }}>
             <input type="checkbox" checked={form.is_break} onChange={e => set('is_break', e.target.checked)} /> Break
           </label>
           <button onClick={add} style={primaryBtn}>Add period</button>
@@ -195,7 +195,7 @@ function ClassGrid({ grid, subjects, teachers, classId, canEdit, onSaved, showTo
             <tr key={p.id}>
               <td style={{ ...gTd, background: '#F8FAFC', fontWeight: 600 }}>
                 <div>{p.label}</div>
-                <div style={{ fontSize: 11, color: 'var(--faint)' }}>{p.start_time}–{p.end_time}</div>
+                <div style={{ fontSize: 11, color: '#94A3B8' }}>{p.start_time}–{p.end_time}</div>
               </td>
               {p.is_break
                 ? <td colSpan={days.length} style={{ ...gTd, textAlign: 'center', color: GOLD, fontWeight: 700, background: '#FFFBEB' }}>{p.label}</td>
@@ -204,7 +204,7 @@ function ClassGrid({ grid, subjects, teachers, classId, canEdit, onSaved, showTo
                     const busy = saving === `${d.value}:${p.id}`;
                     if (!canEdit) {
                       return <td key={d.value} style={gTd}>
-                        {cell ? <><div style={{ fontWeight: 600 }}>{cell.subject_name || '—'}</div><div style={{ fontSize: 11, color: 'var(--muted)' }}>{cell.teacher_name || ''}</div></> : <span style={{ color: '#CBD5E1' }}>—</span>}
+                        {cell ? <><div style={{ fontWeight: 600 }}>{cell.subject_name || '—'}</div><div style={{ fontSize: 11, color: '#64748B' }}>{cell.teacher_name || ''}</div></> : <span style={{ color: '#CBD5E1' }}>—</span>}
                       </td>;
                     }
                     return (
@@ -224,19 +224,19 @@ function ClassGrid({ grid, subjects, teachers, classId, canEdit, onSaved, showTo
           ))}
         </tbody>
       </table>
-      {!canEdit && <p style={{ color: 'var(--faint)', fontSize: 13, marginTop: 10 }}>You have view-only access to the timetable.</p>}
+      {!canEdit && <p style={{ color: '#94A3B8', fontSize: 13, marginTop: 10 }}>You have view-only access to the timetable.</p>}
     </div>
   );
 }
 
-const cardStyle = { background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginTop: 12 };
+const cardStyle = { background: '#fff', border: '1px solid #E7EBF1', borderRadius: 12, padding: 16, marginTop: 12 };
 const thStyle = { padding: '6px 8px', fontWeight: 600 };
 const tdStyle = { padding: '8px' };
-const gTh = { padding: '8px', background: NAVY, color: 'var(--surface-1)', fontSize: 13, textAlign: 'left', border: '1px solid var(--border)' };
-const gTd = { padding: '6px', border: '1px solid var(--border)', verticalAlign: 'top', fontSize: 13 };
-const cellSel = { width: '100%', padding: '5px 6px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 };
-const selStyle = { padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, minWidth: 200 };
-const inputStyle = { padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, width: 160 };
-const primaryBtn = { background: NAVY, color: 'var(--surface-1)', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, cursor: 'pointer' };
-const ghostBtn = { background: 'var(--surface-1)', color: NAVY, border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', fontWeight: 600, cursor: 'pointer' };
-const linkBtn = { background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontWeight: 600 };
+const gTh = { padding: '8px', background: NAVY, color: '#fff', fontSize: 13, textAlign: 'left', border: '1px solid #E7EBF1' };
+const gTd = { padding: '6px', border: '1px solid #E7EBF1', verticalAlign: 'top', fontSize: 13 };
+const cellSel = { width: '100%', padding: '5px 6px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 12 };
+const selStyle = { padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 8, fontSize: 14, minWidth: 200 };
+const inputStyle = { padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 8, fontSize: 14, width: 160 };
+const primaryBtn = { background: NAVY, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, cursor: 'pointer' };
+const ghostBtn = { background: '#fff', color: NAVY, border: '1px solid #E2E8F0', borderRadius: 8, padding: '8px 14px', fontWeight: 600, cursor: 'pointer' };
+const linkBtn = { background: 'none', border: 'none', color: '#B91C1C', cursor: 'pointer', fontWeight: 600 };

@@ -6,7 +6,19 @@
 // tablet, and on a phone a bottom bar of four plus a drawer holding everything
 // else.
 //
-// ── Why the phone has both ──────────────────────────────────────────────────
+// ── Why the chrome is light ─────────────────────────────────────────────────
+//
+// One screen in this app is dark, and it is the splash. Everything else — the
+// top bar, the drawer, the sidebar, the bottom bar — is a white surface with
+// hairline borders, and colour appears only where it means something: the
+// violet pill on the item you are on, the violet card carrying the one figure
+// a screen is about, the violet header over a person's own profile.
+//
+// That is not a preference. The phone is used outdoors in Ghanaian daylight,
+// where a dark panel is a mirror, and a dark rail down the side of a light
+// screen is a slab of ink with nothing on it.
+//
+// ── Why the phone has both a bar and a drawer ───────────────────────────────
 //
 // A bottom bar can hold four or five destinations before the labels stop being
 // words. This app has fifteen. The first version put the other ten behind a
@@ -192,15 +204,15 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
   const labelled = layout.nav === 'sidebar';
   return withTitle(
     <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.bg }}>
-      <Gradient colors={gradients.chrome} angle={168} style={[styles.side, { width: layout.sidebarWidth, paddingTop: insets.top + 14 }]}>
+      <View style={[styles.side, { width: layout.sidebarWidth, paddingTop: insets.top + 14 }]}>
         <View style={[styles.brand, !labelled && { justifyContent: 'center' }]}>
-          <Crest logo={brand.logo} size={38} tone="chrome" />
+          <Crest logo={brand.logo} size={38} tone="light" />
           {labelled && (
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text numberOfLines={1} style={{ ...type.small, color: '#fff', fontWeight: '800', fontSize: 14.5, letterSpacing: -0.2 }}>
+              <Text numberOfLines={1} style={{ ...type.small, color: colors.text, fontWeight: '800', fontSize: 14.5, letterSpacing: -0.2 }}>
                 {schoolName}
               </Text>
-              <Text style={{ ...type.small, color: colors.onChromeMuted, fontSize: 11.5, fontWeight: '600' }}>{nav.title}</Text>
+              <Text style={{ ...type.small, color: colors.muted, fontSize: 11.5, fontWeight: '600' }}>{nav.title}</Text>
             </View>
           )}
         </View>
@@ -217,16 +229,16 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
         </ScrollView>
 
         <View style={[styles.sideUser, !labelled && { justifyContent: 'center' }]}>
-          <Avatar name={person} photo={photo} size={36} tone="chrome" />
+          <Avatar name={person} photo={photo} size={36} />
           {labelled && (
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text numberOfLines={1} style={{ ...type.small, color: '#fff', fontWeight: '700' }}>{person}</Text>
-              <Text numberOfLines={1} style={{ ...type.small, color: colors.onChromeMuted, fontSize: 11.5, fontWeight: '600' }}>{role}</Text>
+              <Text numberOfLines={1} style={{ ...type.small, color: colors.text, fontWeight: '700' }}>{person}</Text>
+              <Text numberOfLines={1} style={{ ...type.small, color: colors.muted, fontSize: 11.5, fontWeight: '600' }}>{role}</Text>
             </View>
           )}
-          {labelled && <IconButton name="logout" size={34} tone="chrome" onPress={signOut} label="Sign out" />}
+          {labelled && <IconButton name="logout" size={34} tone="plain" color={colors.danger} onPress={signOut} label="Sign out" />}
         </View>
-      </Gradient>
+      </View>
 
       <View style={{ flex: 1, minWidth: 0 }}>{body}</View>
       {chat}
@@ -239,11 +251,11 @@ function SideItem({ item, on, labelled, onPress }) {
   return (
     <Press onPress={onPress} accessibilityRole="link" accessibilityState={{ selected: on }}>
       <View style={[styles.sideItem, !labelled && styles.railItem, on && styles.sideItemOn]}>
-        {on && <View style={styles.sideMarker} />}
-        <Icon name={item.icon} size={19} color={on ? '#fff' : colors.onChromeMuted} />
+        <Icon name={item.icon} size={19} color={on ? colors.primary : colors.muted} />
         {labelled && (
           <Text numberOfLines={1} style={{
-            ...type.small, fontSize: 14, color: on ? '#fff' : colors.onChromeMuted, fontWeight: on ? '700' : '600',
+            ...type.small, fontSize: 14,
+            color: on ? colors.primary : colors.textSoft, fontWeight: on ? '700' : '600',
           }}>
             {item.label}
           </Text>
@@ -284,7 +296,7 @@ function NavDrawer({
 
   return (
     <View style={[StyleSheet.absoluteFill, { zIndex: z.drawer }]} pointerEvents={open ? 'auto' : 'none'}>
-      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(14,11,36,0.5)', opacity: t }]}>
+      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(20,20,43,0.38)', opacity: t }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close the menu" />
       </Animated.View>
 
@@ -296,16 +308,16 @@ function NavDrawer({
         },
       ]}>
         <View style={styles.drawerBrand}>
-          <Crest logo={logo} size={44} tone="chrome" />
+          <Crest logo={logo} size={44} tone="light" />
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text numberOfLines={2} style={{ ...type.body, color: '#fff', fontWeight: '800', fontSize: 15.5, letterSpacing: -0.2 }}>
+            <Text numberOfLines={2} style={{ ...type.body, color: colors.text, fontWeight: '800', fontSize: 15.5, letterSpacing: -0.2 }}>
               {school}
             </Text>
-            <Text numberOfLines={1} style={{ ...type.small, color: colors.onChromeMuted, fontSize: 11.5, fontWeight: '600', marginTop: 1 }}>
+            <Text numberOfLines={1} style={{ ...type.small, color: colors.muted, fontSize: 11.5, fontWeight: '600', marginTop: 1 }}>
               {motto || areaLabel}
             </Text>
           </View>
-          <IconButton name="close" size={34} tone="chrome" onPress={onClose} label="Close the menu" />
+          <IconButton name="close" size={34} tone="plain" color={colors.muted} onPress={onClose} label="Close the menu" />
         </View>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.md }}>
@@ -321,24 +333,24 @@ function NavDrawer({
 
         <View style={styles.drawerFoot}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <Avatar name={person} photo={photo} size={38} tone="chrome" />
+            <Avatar name={person} photo={photo} size={38} />
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text numberOfLines={1} style={{ ...type.small, color: '#fff', fontWeight: '700' }}>{person}</Text>
-              <Text numberOfLines={1} style={{ ...type.small, color: colors.onChromeMuted, fontSize: 11.5, fontWeight: '600' }}>{role}</Text>
+              <Text numberOfLines={1} style={{ ...type.small, color: colors.text, fontWeight: '700' }}>{person}</Text>
+              <Text numberOfLines={1} style={{ ...type.small, color: colors.muted, fontSize: 11.5, fontWeight: '600' }}>{role}</Text>
             </View>
           </View>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: spacing.md }}>
             {onChat ? (
               <Press onPress={onChat} style={{ flex: 1 }} accessibilityRole="button">
                 <View style={styles.drawerBtn}>
-                  <Icon name="whatsapp" size={17} color="#fff" />
-                  <Text style={{ ...type.small, color: '#fff', fontWeight: '700' }}>Message school</Text>
+                  <Icon name="whatsapp" size={17} color={colors.primary} />
+                  <Text style={{ ...type.small, color: colors.primary, fontWeight: '700' }}>Message school</Text>
                 </View>
               </Press>
             ) : null}
             <Press onPress={onSignOut} accessibilityRole="button" accessibilityLabel="Sign out">
-              <View style={[styles.drawerBtn, { backgroundColor: 'rgba(199,52,58,0.24)', paddingHorizontal: 14 }]}>
-                <Icon name="logout" size={17} color="#FFD9DA" />
+              <View style={[styles.drawerBtn, { backgroundColor: palette.red100, paddingHorizontal: 15 }]}>
+                <Icon name="logout" size={17} color={colors.danger} />
               </View>
             </Press>
           </View>
@@ -395,25 +407,24 @@ function TopBar({ title, subtitle, logo, pending, person, photo, onAccount, onCh
     <View style={[
       styles.topBar,
       { paddingTop: (phone ? insets.top + 10 : 0) + 12, paddingHorizontal: layout.gutter },
-      phone ? { backgroundColor: colors.chrome } : { backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border },
     ]}>
       {phone ? (
-        <IconButton name="menu" size={38} tone="chrome" onPress={onMenu} label="Open the menu" />
+        <IconButton name="menu" size={38} tone="subtle" onPress={onMenu} label="Open the menu" />
       ) : null}
-      {!phone ? null : <Crest logo={logo} size={32} tone="chrome" />}
+      {phone ? <Crest logo={logo} size={34} tone="light" /> : null}
       <View style={{ flex: 1, minWidth: 0 }}>
         {subtitle ? (
-          <Text numberOfLines={1} style={{ ...type.micro, color: phone ? colors.onChromeFaint : colors.muted }}>
+          <Text numberOfLines={1} style={{ ...type.micro, color: colors.muted }}>
             {String(subtitle).toUpperCase()}
           </Text>
         ) : null}
-        <Text numberOfLines={1} style={{ ...type.title, fontSize: phone ? 19 : 21, color: phone ? '#fff' : colors.text }}>
+        <Text numberOfLines={1} style={{ ...type.title, fontSize: phone ? 19 : 21, color: colors.text }}>
           {title}
         </Text>
       </View>
-      {pending > 0 ? <Badge tone={phone ? 'chrome' : 'data'} icon="refresh" label={`${pending} waiting`} /> : null}
+      {pending > 0 ? <Badge tone="data" icon="refresh" label={`${pending} waiting`} /> : null}
       {onChat ? (
-        <IconButton name="whatsapp" size={38} tone={phone ? 'chrome' : 'subtle'} onPress={onChat} label="Message the school" />
+        <IconButton name="whatsapp" size={38} tone="subtle" onPress={onChat} label="Message the school" />
       ) : null}
       {!phone ? (
         <TouchableOpacity onPress={onAccount} activeOpacity={0.8} style={{ marginLeft: spacing.xs }} accessibilityRole="button" accessibilityLabel="Your account">
@@ -425,12 +436,22 @@ function TopBar({ title, subtitle, logo, pending, person, photo, onAccount, onCh
 }
 
 const styles = StyleSheet.create({
-  topBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingBottom: 14 },
+  topBar: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingBottom: 14,
+    backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
 
-  side: { paddingHorizontal: 12, paddingBottom: 12 },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 6, paddingBottom: 12 },
+  side: {
+    paddingHorizontal: 12, paddingBottom: 12,
+    backgroundColor: colors.card, borderRightWidth: 1, borderRightColor: colors.border,
+  },
+  brand: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 6, paddingBottom: 14,
+    borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+  },
   sideGroup: {
-    ...type.micro, color: 'rgba(255,255,255,0.42)', fontSize: 10.5,
+    ...type.micro, color: colors.muted, fontSize: 10.5,
     paddingHorizontal: 12, marginBottom: 6, textTransform: 'uppercase',
   },
   sideItem: {
@@ -438,33 +459,32 @@ const styles = StyleSheet.create({
     paddingVertical: 11, paddingHorizontal: 12, borderRadius: radius.sm, marginBottom: 2, minHeight: 44,
   },
   railItem: { justifyContent: 'center', paddingHorizontal: 0 },
-  sideItemOn: { backgroundColor: 'rgba(255,255,255,0.13)' },
-  sideMarker: {
-    position: 'absolute', left: 0, top: 10, bottom: 10, width: 3,
-    borderRadius: 3, backgroundColor: palette.violet300,
-  },
+  // The item you are on is a violet pill — the same mark the bottom bar and the
+  // tab strip use, so "you are here" looks the same everywhere in the app.
+  sideItemOn: { backgroundColor: colors.primarySoft },
   sideUser: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingTop: 12, paddingHorizontal: 6,
-    borderTopWidth: 1, borderTopColor: colors.chromeLine,
+    borderTopWidth: 1, borderTopColor: colors.border,
   },
 
   drawer: {
     position: 'absolute', left: 0, top: 0, bottom: 0,
-    backgroundColor: colors.chrome, paddingHorizontal: 12,
+    backgroundColor: colors.card, paddingHorizontal: 12,
     borderTopRightRadius: radius.xl, borderBottomRightRadius: radius.xl,
+    borderRightWidth: 1, borderRightColor: colors.border,
   },
   drawerBrand: {
     flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 4, paddingBottom: 14,
-    borderBottomWidth: 1, borderBottomColor: colors.chromeLine,
+    borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
   },
   drawerFoot: {
     paddingTop: 14, paddingHorizontal: 4,
-    borderTopWidth: 1, borderTopColor: colors.chromeLine,
+    borderTopWidth: 1, borderTopColor: colors.border,
   },
   drawerBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-    backgroundColor: 'rgba(255,255,255,0.13)', borderRadius: radius.sm,
+    backgroundColor: colors.primarySoft, borderRadius: radius.sm,
     paddingVertical: 11, paddingHorizontal: 12, minHeight: 44,
   },
 

@@ -77,7 +77,7 @@ export default function Sidebar() {
           : <div className="sidebar-logo-placeholder">
               <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
                 <rect width="44" height="44" rx="10" fill="rgba(255,255,255,0.15)"/>
-                <path d="M10 32L22 14L34 32H10Z" fill="var(--accent)" opacity="0.8"/>
+                <path d="M10 32L22 14L34 32H10Z" fill="#C9961A" opacity="0.8"/>
               </svg>
             </div>
         }
