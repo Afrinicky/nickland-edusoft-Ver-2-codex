@@ -25,6 +25,14 @@ export const PORTALS = [
     blurb: 'Accounts, access levels, the audit trail, settings, sync and backups.' },
 ];
 
+// The Super Admin: the one account with overall control of the system itself.
+// A designation, not a permission tick — and not the Proprietor, who owns the
+// school and is elevated over its money but does not run the system.
+export const SUPER_ADMIN = 'Administrator';
+export const isSuperAdmin = (profile) => !!profile && (
+  profile.is_super === true || profile.designation === SUPER_ADMIN
+);
+
 const BY_KEY = new Map(PORTALS.map(p => [p.key, p]));
 export const portalMeta = (key) => BY_KEY.get(key) || null;
 
@@ -42,10 +50,16 @@ const allOf = (profile, pairs) => pairs.every(([m, a]) => allows(profile, m, a))
 function derive(profile) {
   if (!profile) return [];
   if (profile.role === 'parent') return ['parent'];
-  const out = ['teacher'];
+  const out = [];
+  // Teaching, or the canteen collection. Not everybody on the payroll: a
+  // bursar handed a register they may open and not use is exactly the thing
+  // the product's rule exists to prevent.
+  if (allows(profile, 'academics', 'view') || allows(profile, 'canteen', 'create')) out.push('teacher');
   if (anyOf(profile, [['fees', 'view'], ['finance', 'view'], ['payroll', 'view']])) out.push('finance');
   if (allOf(profile, [['staff', 'view'], ['students', 'edit']]) || allows(profile, 'settings', 'view')) out.push('admin');
-  if (profile.is_admin) out.push('system');
+  if (isSuperAdmin(profile)) out.push('system');
+  // An account with no module at all still has a payslip and a password.
+  if (!out.length) out.push('teacher');
   return out.sort((a, b) => BY_KEY.get(a).rank - BY_KEY.get(b).rank);
 }
 

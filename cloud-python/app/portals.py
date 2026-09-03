@@ -14,6 +14,19 @@ PORTALS = [
     {"key": "system",  "label": "System",         "rank": 4, "home": "/system",  "tagline": "The system itself"},
 ]
 
+# The Super Admin: the one account with overall control of the system itself.
+# A designation, not a permission tick. Not the Proprietor — they own the
+# school and are elevated over its money, but running the system is a different
+# job on purpose. See electron/ipc/_portals.js.
+SUPER_ADMIN = "Administrator"
+
+
+def is_super_admin(profile):
+    return bool(profile) and (
+        profile.get("is_super") is True or profile.get("designation") == SUPER_ADMIN
+    )
+
+
 _BY_KEY = {p["key"]: p for p in PORTALS}
 _ACTION_KEY = {"view": "canView", "create": "canCreate", "edit": "canEdit", "delete": "canDelete"}
 
@@ -40,13 +53,21 @@ def portals_for(profile):
         return []
     if profile.get("role") == "parent":
         return ["parent"]
-    out = ["teacher"]
+    out = []
+    # The working day belongs to people who teach or who run the canteen — not
+    # to everybody on the payroll. A bursar handed a register they may open and
+    # not use is the failure the whole product is written against.
+    if allows(profile, "academics", "view") or allows(profile, "canteen", "create"):
+        out.append("teacher")
     if _any_of(profile, [("fees", "view"), ("finance", "view"), ("payroll", "view")]):
         out.append("finance")
     if _all_of(profile, [("staff", "view"), ("students", "edit")]) or allows(profile, "settings", "view"):
         out.append("admin")
-    if profile.get("is_admin"):
+    if is_super_admin(profile):
         out.append("system")
+    # An account with no module at all still has a payslip and a password.
+    if not out:
+        out.append("teacher")
     return sorted(out, key=lambda k: _BY_KEY[k]["rank"])
 
 

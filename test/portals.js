@@ -17,9 +17,12 @@
 // actually has:
 //
 //   Mr Owusu     Class Teacher   — teaching only
-//   Mrs Asante   Accountant      — fees, finance, payroll; no academics
+//   Mrs Asante   Accountant      — fees, finance, payroll; NO teaching at all
 //   Mr Boateng   Head Teacher    — the school, but not the system
-//   Ms Adjei     Administrator   — everything, including the system
+//   Nana Amoah   Proprietor      — owns the school; elevated over its money,
+//                                  and still not the Super Admin
+//   Ms Adjei     Administrator   — the Super Admin: the system as well
+//   Mr Tetteh    Security        — no module at all; an account and a payslip
 //   Mrs Ansu     a parent        — one child, and nothing else at all
 
 const http = require('http');
@@ -89,7 +92,8 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
                   (2, 'ASANTE', 'Efua', 'Non-Teaching', 'Active', 'STAFF/0002', '0244000002', 2200),
                   (3, 'BOATENG', 'Yaw', 'Teaching', 'Active', 'STAFF/0003', '0244000003', 3000)`);
   db.exec(`INSERT INTO designations (id, name) VALUES
-             (1, 'Class Teacher'), (2, 'Accountant'), (3, 'Head Teacher'), (4, 'Administrator')`);
+             (1, 'Class Teacher'), (2, 'Accountant'), (3, 'Head Teacher'),
+             (4, 'Administrator'), (5, 'Proprietor'), (6, 'Security')`);
 
   // The permission ladder each designation is granted, written out rather than
   // inherited from the seed, so this test says what it depends on.
@@ -106,6 +110,10 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
              staff: 'full', notifications: 'full' });
   grant(4, { dashboard: 'full', students: 'full', academics: 'full', fees: 'full', canteen: 'full',
              staff: 'full', payroll: 'full', finance: 'full', notifications: 'full', settings: 'full' });
+  grant(5, { dashboard: 'full', students: 'full', academics: 'full', fees: 'full', canteen: 'full',
+             staff: 'full', payroll: 'full', finance: 'full', notifications: 'full', settings: 'full' });
+  // A security man: on the payroll, and granted nothing.
+  grant(6, {});
 
   const mkUser = (username, name, designationId, staffId) => {
     db.prepare(`INSERT INTO users (username, password_hash, full_name, designation_id, staff_id, is_active)
@@ -116,6 +124,8 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
   mkUser('asante', 'Mrs Asante', 2, 2);
   mkUser('boateng', 'Mr Boateng', 3, 3);
   mkUser('adjei', 'Ms Adjei', 4, null);
+  mkUser('amoah', 'Nana Amoah', 5, null);
+  mkUser('tetteh', 'Mr Tetteh', 6, null);
   db.exec('INSERT INTO staff_assignments (staff_id, class_group_id, subject_id, is_class_teacher) VALUES (1, 1, NULL, 1)');
 
   const pupils = [];
@@ -167,10 +177,12 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
   const bursar = await signIn('asante');
   const head = await signIn('boateng');
   const admin = await signIn('adjei');
+  const proprietor = await signIn('amoah');
+  const guard = await signIn('tetteh');
   const parentRes = await req(base, 'POST', '/api/v1/auth/parent/login',
     { body: { identifier: '0244111222', password: 'parent1234' } });
   const parent = parentRes.json && parentRes.json.token;
-  ck('every account signs in', !!(teacher && bursar && head && admin && parent));
+  ck('every account signs in', !!(teacher && bursar && head && admin && proprietor && guard && parent));
 
   // ── who is handed which portal ────────────────────────────────────────────
   const keysOf = (me) => (me.json.portals || []).map(p => p.key);
@@ -180,11 +192,21 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
     JSON.stringify(keysOf(r)) === JSON.stringify(['teacher']));
   ck('...and is landed in it', r.json.home_portal === 'teacher');
 
+  // The one that matters most. An accountant used to be handed the teaching
+  // portal along with everything else, and could open a register, a mark sheet
+  // and a broadsheet without being able to do a thing with any of them. Seeing
+  // what you may not do is the failure the product is written against.
   r = await req(base, 'GET', '/api/v1/me', { token: bursar });
-  ck('an accountant is given teaching and finance',
-    JSON.stringify(keysOf(r)) === JSON.stringify(['teacher', 'finance']));
+  ck('an accountant is given FINANCE AND NOTHING ELSE',
+    JSON.stringify(keysOf(r)) === JSON.stringify(['finance']));
+  ck('...and is never shown that a teaching portal exists',
+    !keysOf(r).includes('teacher'));
   ck('...and starts the morning in finance, not in a register',
     r.json.home_portal === 'finance');
+  r = await req(base, 'GET', '/api/v1/attendance?classId=1&date=2026-05-11', { token: bursar });
+  ck('...and cannot open a register by typing its address', r.status === 403);
+  r = await req(base, 'GET', '/api/v1/results?classId=1', { token: bursar });
+  ck('...nor a broadsheet', r.status === 403);
 
   r = await req(base, 'GET', '/api/v1/me', { token: head });
   ck('a head teacher is given administration as well',
@@ -192,10 +214,36 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
   ck('...but NOT the system itself', !keysOf(r).includes('system'));
 
   r = await req(base, 'GET', '/api/v1/me', { token: admin });
-  ck('an administrator is given all four staff portals',
+  ck('the Super Admin is given all four staff portals',
     JSON.stringify(keysOf(r)) === JSON.stringify(['teacher', 'finance', 'admin', 'system']));
   ck('...and still lands on the school rather than on the user table',
     r.json.home_portal === 'admin');
+
+  // The proprietor owns the school. They are elevated over its money — they
+  // may reverse a payment — and they are still not the Super Admin, because
+  // the person who signs the cheques should not also be the person who can
+  // quietly rewrite who may see that they were signed.
+  r = await req(base, 'GET', '/api/v1/me', { token: proprietor });
+  ck('the proprietor runs the school',
+    JSON.stringify(keysOf(r)) === JSON.stringify(['teacher', 'finance', 'admin']));
+  ck('...and is NOT the Super Admin', !keysOf(r).includes('system'));
+  r = await req(base, 'GET', '/api/v1/system/users', { token: proprietor });
+  ck('...so the user table is closed to them too', r.status === 403);
+  r = await req(base, 'GET', '/api/v1/admin/overview', { token: proprietor });
+  ck('...while the school itself is theirs', r.json.ok);
+
+  // Somebody with no module at all still has an account, a payslip and a
+  // password. They get a portal with nothing in it but their own record —
+  // which is not the same as being locked out of the app they were given.
+  r = await req(base, 'GET', '/api/v1/me', { token: guard });
+  ck('an account granted nothing still has somewhere to be',
+    JSON.stringify(keysOf(r)) === JSON.stringify(['teacher']));
+  r = await req(base, 'GET', '/api/v1/hr/me', { token: guard });
+  ck('...their own employment record', r.json.ok);
+  r = await req(base, 'GET', '/api/v1/students', { token: guard });
+  ck('...and nothing of the school at all', r.status === 403);
+  r = await req(base, 'GET', '/api/v1/finance/overview', { token: guard });
+  ck('...including the finance office', r.status === 403);
 
   r = await req(base, 'GET', '/api/v1/me', { token: parent });
   ck('a parent is given the parent portal and nothing else',
@@ -259,10 +307,10 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
   ck('even a bursar with full fees access cannot reverse a payment', r.status === 403);
   r = await req(base, 'POST', `/api/v1/finance/collections/${paymentId}/reverse`,
     { token: admin, body: { reason: '' } });
-  ck('an administrator cannot reverse one without saying why', r.status === 400);
+  ck('the Super Admin cannot reverse one without saying why', r.status === 400);
   r = await req(base, 'POST', `/api/v1/finance/collections/${paymentId}/reverse`,
     { token: admin, body: { reason: 'Paid into the wrong account' } });
-  ck('an administrator, with a reason, can', r.json.ok);
+  ck('an elevated account, with a reason, can', r.json.ok);
   ck('...and the reversal is its own ledger entry rather than a rubbed-out one',
     db.prepare("SELECT COUNT(*) c FROM expense_records WHERE category = 'refund'").get().c === 1);
   r = await req(base, 'POST', `/api/v1/finance/collections/${paymentId}/reverse`,
@@ -332,7 +380,8 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
     (r.json.classes.find(c => c.id === 1) || {}).average === 70);
 
   // ── the system portal ─────────────────────────────────────────────────────
-  for (const [who, token] of [['a class teacher', teacher], ['a bursar', bursar], ['a head teacher', head]]) {
+  for (const [who, token] of [['a class teacher', teacher], ['a bursar', bursar],
+                              ['a head teacher', head], ['the proprietor', proprietor]]) {
     r = await req(base, 'GET', '/api/v1/system/users', { token });
     ck(`${who} cannot read the user table`, r.status === 403);
     r = await req(base, 'GET', '/api/v1/system/audit', { token });
@@ -343,16 +392,16 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
   }
 
   r = await req(base, 'GET', '/api/v1/system/overview', { token: admin });
-  ck('an administrator sees the system', r.json.ok && r.json.counts.users === 4);
+  ck('the Super Admin sees the system', r.json.ok && r.json.counts.users === 6);
   r = await req(base, 'GET', '/api/v1/system/users', { token: admin });
-  ck('...and the accounts in it', r.json.ok && r.json.users.length === 4);
+  ck('...and the accounts in it', r.json.ok && r.json.users.length === 6);
 
   r = await req(base, 'POST', '/api/v1/system/users',
     { token: admin, body: { username: 'mensah', fullName: 'Mr Mensah', password: 'short', designationId: 1 } });
   ck('a new account cannot be given a five-character password', r.status === 400);
   r = await req(base, 'POST', '/api/v1/system/users',
     { token: admin, body: { username: 'mensah', fullName: 'Mr Mensah', password: 'abcd1234', designationId: 1 } });
-  ck('an administrator creates an account', r.json.ok && r.json.must_change_password === true);
+  ck('the Super Admin creates an account', r.json.ok && r.json.must_change_password === true);
   const newUser = r.json.id;
   r = await req(base, 'POST', '/api/v1/system/users',
     { token: admin, body: { username: 'mensah', fullName: 'Another', password: 'abcd1234' } });
@@ -400,7 +449,7 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
   // ── settings, and the secret that never comes back ────────────────────────
   r = await req(base, 'POST', '/api/v1/system/settings',
     { token: admin, body: { settings: { paystack_secret_key: 'sk_test_supersecret', payment_gateway: 'paystack', online_payments_enabled: 'true' } } });
-  ck('an administrator configures the gateway', r.json.ok);
+  ck('the Super Admin configures the gateway', r.json.ok);
   r = await req(base, 'GET', '/api/v1/system/settings', { token: admin });
   ck('...and the secret is never read back out of it',
     !('paystack_secret_key' in r.json.settings)
@@ -454,12 +503,13 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
       SELECT d.name FROM users u LEFT JOIN designations d ON d.id = u.designation_id WHERE u.id = ?
     `).get(id).name;
     return {
-      role: 'staff',
+      role: 'staff', designation: desig,
       is_admin: ['Proprietor', 'Administrator'].includes(desig),
       permissions: require(path.join(ROOT, 'electron/ipc/auth.js')).resolveEffectivePermissions(db, id),
     };
   };
-  for (const [username, token] of [['owusu', teacher], ['asante', bursar], ['boateng', head], ['adjei', admin]]) {
+  for (const [username, token] of [['owusu', teacher], ['asante', bursar], ['boateng', head],
+                                   ['adjei', admin], ['amoah', proprietor], ['tetteh', guard]]) {
     const fromServer = keysOf(await req(base, 'GET', '/api/v1/me', { token }));
     const fromModel = portals.portalsFor(permsOf(username));
     ck(`the portal model and the server agree about ${username}`,

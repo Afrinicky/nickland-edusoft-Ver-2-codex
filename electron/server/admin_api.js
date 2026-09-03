@@ -7,14 +7,16 @@
 //              Enrolment and pupil records, staff and leave, academic
 //              oversight, the approvals somebody has to actually make, notices.
 //
-//   /system/*  The system itself — the Proprietor and the Administrator only.
-//              User accounts, access levels, the audit trail, school settings,
-//              synchronisation and backups.
+//   /system/*  The system itself — the Super Admin alone. User accounts,
+//              access levels, the audit trail, school settings, sync, backups.
+//              Not the Proprietor: they own the school and are elevated over
+//              its money, but the person who can quietly rewrite who may see
+//              what is a different person on purpose.
 //
 // The portal split is not the security. Every route still checks the module
 // permission the desktop checks, and /system additionally requires the
-// designation itself — being the Proprietor or the Administrator, not merely
-// holding a `settings` tick that somebody granted by mistake.
+// designation itself — being the Super Admin, not merely holding a `settings`
+// tick that somebody granted by mistake.
 //
 // Three things are deliberately NOT here, and should not be added:
 //
@@ -70,13 +72,13 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     return true;
   };
 
-  // The system portal is the Proprietor and the Administrator, full stop.
-  // `is_admin` is resolved from the live user row on every request (see
-  // subjectContext in api.js), so a designation changed in the office takes
-  // effect on the next tap and not on the next sign-in.
+  // The system portal is the Super Admin, full stop. The designation is
+  // resolved from the live user row on every request (see subjectContext in
+  // api.js), so a role changed in the office takes effect on the next tap and
+  // not on the next sign-in.
   const systemGate = (ctx, res) => {
     if (!ctx || ctx.role !== 'staff') { deny(res, 'Staff only.'); return false; }
-    if (!ctx.is_admin || !portals.hasPortal(ctx, 'system')) { deny(res); return false; }
+    if (!portals.isSuperAdmin(ctx) || !portals.hasPortal(ctx, 'system')) { deny(res); return false; }
     return true;
   };
 

@@ -17,6 +17,10 @@ class MemoryStore:
         self._schools = {}    # school_id -> {name, key_hash, applied_cursor}
         self._snaps = {}      # school_id -> {entity_key: record}
         self._changes = {}    # school_id -> {"seq": int, "items": [ {id,type,payload} ]}
+        # Gateway credentials, kept OUT of the snapshot table on purpose.
+        # Snapshots are what the staff and parent endpoints read from; a secret
+        # kept among them is one forgotten filter away from being served.
+        self._payments = {}   # school_id -> {gateway, secret, public_key, ...}
         self._sid = 1
 
     def _ensure(self, sid):
@@ -67,6 +71,19 @@ class MemoryStore:
     def list_snapshots(self, sid, entity_type=None):
         m = self._snaps.get(sid, {})
         return [r for r in m.values() if not entity_type or r["entity_type"] == entity_type]
+
+    def set_payment_config(self, sid, cfg):
+        """Write-mostly. Set by the school's own desktop through the
+        school-key admin route; read only by the code that calls the gateway.
+        No endpoint returns ``secret``, and none should ever be added."""
+        if not cfg or cfg.get("gateway") == "none":
+            self._payments.pop(sid, None)
+            return True
+        self._payments[sid] = {**cfg, "updated_at": _now_iso()}
+        return True
+
+    def get_payment_config(self, sid):
+        return self._payments.get(sid)
 
     def enqueue_change(self, sid, ch):
         self._ensure(sid)
@@ -169,6 +186,36 @@ class PgStore:
         else:
             rows = self._q("SELECT entity_type, entity_key, uuid, op, version, payload, updated_at FROM snapshots WHERE school_id=%s", (sid,), "all")
         return [{"entity_type": r[0], "entity_key": r[1], "uuid": r[2], "op": r[3], "version": r[4], "payload": r[5], "updated_at": str(r[6])} for r in (rows or [])]
+
+    def set_payment_config(self, sid, cfg):
+        if not cfg or cfg.get("gateway") == "none":
+            self._q("DELETE FROM school_payments WHERE school_id=%s", (sid,))
+            return True
+        self._q(
+            """INSERT INTO school_payments (school_id, gateway, secret, public_key, base_url,
+                     currency, callback_url, min_amount, max_amount, enabled, updated_at)
+                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+               ON CONFLICT (school_id) DO UPDATE
+                 SET gateway=EXCLUDED.gateway, secret=EXCLUDED.secret,
+                     public_key=EXCLUDED.public_key, base_url=EXCLUDED.base_url,
+                     currency=EXCLUDED.currency, callback_url=EXCLUDED.callback_url,
+                     min_amount=EXCLUDED.min_amount, max_amount=EXCLUDED.max_amount,
+                     enabled=EXCLUDED.enabled, updated_at=now()""",
+            (sid, cfg["gateway"], cfg.get("secret", ""), cfg.get("public_key", ""),
+             cfg.get("base_url", ""), cfg.get("currency", "GHS"), cfg.get("callback_url", ""),
+             cfg.get("min_amount", 1), cfg.get("max_amount", 10000), cfg.get("enabled", True) is not False))
+        return True
+
+    def get_payment_config(self, sid):
+        row = self._q(
+            """SELECT gateway, secret, public_key, base_url, currency, callback_url,
+                      min_amount, max_amount, enabled
+                 FROM school_payments WHERE school_id=%s""", (sid,), "one")
+        if not row:
+            return None
+        keys = ["gateway", "secret", "public_key", "base_url", "currency",
+                "callback_url", "min_amount", "max_amount", "enabled"]
+        return dict(zip(keys, row))
 
     def enqueue_change(self, sid, ch):
         import json

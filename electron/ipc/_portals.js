@@ -10,8 +10,11 @@
 //   parent   — a parent, their own children, nothing else.
 //   teacher  — the working day: register, marks, canteen, notes, their record.
 //   finance  — money: collections, bills, arrears, expenses, payroll, online.
-//   admin    — running the school: pupils, staff, oversight, approvals.
+//   admin    — running the school: pupils, staff, oversight, approvals. This is
+//              the head teacher, the management, and the proprietor; a school
+//              names that person what it likes and they do the same job.
 //   system   — the system itself: accounts, access, audit, settings, backups.
+//              The Super Admin alone, and nobody else — see SUPER_ADMIN.
 //
 // A portal is a VIEW, never a right. Nothing here grants anything. Every
 // portal's screens are the same modules the desktop has always enforced, and
@@ -30,6 +33,24 @@
 //     "may this person see Finance" would be three answers within a year.
 //     cloud/src/portals.js and cloud-python/app/portals.py are translations of
 //     this file and must not drift from it.
+
+// The Super Admin: the one account with overall control of the system itself.
+// It is a designation, not a permission tick, because "who may create accounts
+// and rewrite everybody's access" is a decision a school makes about a person
+// and not something that should follow from a box somebody ticked.
+//
+// Note what this is NOT. The Proprietor owns the school and is elevated over
+// its money — they may reverse a payment and void a bill (see
+// _security.ELEVATED) — but running the SYSTEM is the Super Admin's, and a
+// proprietor who wants both is given both accounts or the Administrator
+// designation. Keeping them apart is the point: the person who signs the
+// cheques should not also be the person who can quietly rewrite who may see
+// that they were signed.
+const SUPER_ADMIN = 'Administrator';
+
+const isSuperAdmin = (profile) => !!profile && (
+  profile.is_super === true || profile.designation === SUPER_ADMIN
+);
 
 // Ranked lowest to highest. `rank` decides where an account lands when it
 // signs in: the most capable portal it holds, so a head teacher does not begin
@@ -98,11 +119,18 @@ function portalsFor(profile) {
 
   const out = [];
 
-  // Every member of staff has the working day. It is where lesson notes, the
-  // timetable, an own payslip and the account screen live, so an account with
-  // no module at all still has somewhere that belongs to it rather than a
-  // redirect loop between portals it may not enter.
-  out.push('teacher');
+  // The working day belongs to people who teach or who run the canteen.
+  //
+  // This used to be given to every member of staff, and it was wrong in a way
+  // that showed the moment a bursar signed in: they were handed a register, a
+  // mark sheet and a broadsheet they could open and not use. Seeing a thing
+  // you may not do is the failure the whole product is written against.
+  //
+  // `academics: view` is teaching. `canteen: create` is the morning collection,
+  // which is a cook's job and a class teacher's — and it is deliberately
+  // `create` rather than `view`, because an accountant who may look at canteen
+  // takings is not thereby somebody who collects them.
+  if (allows(profile, 'academics', 'view') || allows(profile, 'canteen', 'create')) out.push('teacher');
 
   // Money, in any of its three shapes. An accountant holds fees and finance; a
   // head teacher usually holds fees alone; a class teacher holds none of them
@@ -111,15 +139,20 @@ function portalsFor(profile) {
 
   // Running the school, as opposed to teaching in it: someone who may change
   // pupil records AND see the staff register, or who may open Settings at all.
-  // A subject teacher with academics passes neither test.
+  // A subject teacher with academics passes neither test. The head teacher, the
+  // management and the proprietor all land here.
   if (allOf(profile, [['staff', 'view'], ['students', 'edit']]) || allows(profile, 'settings', 'view')) {
     out.push('admin');
   }
 
-  // The system itself. Deliberately NOT "settings: full" — a designation can be
-  // granted settings by mistake; being the Proprietor or the Administrator is a
-  // decision somebody made about a person. Mirrors _security.ELEVATED.
-  if (profile.is_admin) out.push('system');
+  // The system itself: the Super Admin and nobody else.
+  if (isSuperAdmin(profile)) out.push('system');
+
+  // Somebody with no module at all — a security man, a cleaner — still has an
+  // account, a payslip, a leave request and a password to change. They get the
+  // working-day portal with nothing in it but their own record, rather than a
+  // redirect loop between portals they may not enter.
+  if (!out.length) out.push('teacher');
 
   return out.sort((a, b) => byKey.get(a).rank - byKey.get(b).rank);
 }
@@ -153,6 +186,6 @@ function hasPortal(profile, key) {
 }
 
 module.exports = {
-  PORTALS, PORTAL_KEYS,
-  allows, portalsFor, portalListFor, homePortal, hasPortal, portal,
+  PORTALS, PORTAL_KEYS, SUPER_ADMIN,
+  allows, isSuperAdmin, portalsFor, portalListFor, homePortal, hasPortal, portal,
 };

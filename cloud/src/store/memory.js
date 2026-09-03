@@ -6,6 +6,10 @@ function createMemoryStore() {
   const schools = new Map();   // school_id -> { name, key_hash, applied_cursor }
   const snapshots = new Map(); // school_id -> Map(entity_key -> record)
   const changes = new Map();   // school_id -> { seq, items:[{id,type,payload}] }
+  // Gateway credentials, kept OUT of the snapshot table on purpose. Snapshots
+  // are what the staff and parent endpoints read from; a secret that lives
+  // there is one forgotten filter away from being served to somebody.
+  const paymentConfig = new Map(); // school_id -> { gateway, secret, public_key, … }
   let sidSeq = 1;
 
   function ensure(id) {
@@ -57,6 +61,20 @@ function createMemoryStore() {
     async listSnapshots(school_id, entity_type) {
       const m = snapshots.get(school_id) || new Map();
       return [...m.values()].filter(r => !entity_type || r.entity_type === entity_type);
+    },
+
+    // ── Gateway configuration (write-mostly) ──
+    // Written only by the school's own desktop through the school-key admin
+    // route, and read only by the code that talks to the gateway. There is no
+    // endpoint that returns `secret`, and there must never be one.
+    async setPaymentConfig(school_id, cfg) {
+      if (!cfg || cfg.gateway === 'none') { paymentConfig.delete(school_id); return true; }
+      paymentConfig.set(school_id, { ...cfg, updated_at: new Date().toISOString() });
+      return true;
+    },
+
+    async getPaymentConfig(school_id) {
+      return paymentConfig.get(school_id) || null;
     },
 
     async enqueueChange(school_id, ch) {

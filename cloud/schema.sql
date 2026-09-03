@@ -45,3 +45,27 @@ CREATE INDEX IF NOT EXISTS idx_changes_pending ON cloud_changes(school_id, type,
 
 -- Row-level security is recommended in production so a leaked query can't cross
 -- tenants; the app also always scopes by school_id.
+
+-- A school's payment gateway, for taking fees over the internet when the
+-- school's own desktop is switched off. Written ONLY by that desktop, through
+-- the school-key admin route, and only when the school has deliberately turned
+-- internet payments on. Read only by the code that calls the gateway.
+--
+-- It is deliberately NOT a snapshot row. Snapshots are what the parent and
+-- staff endpoints read from; a secret kept among them is one forgotten filter
+-- away from being served to somebody. No endpoint returns `secret`, and none
+-- should ever be added — a school that needs to change its key re-enters it on
+-- its own desktop, which is where the key came from.
+CREATE TABLE IF NOT EXISTS school_payments (
+  school_id    TEXT PRIMARY KEY REFERENCES schools(school_id) ON DELETE CASCADE,
+  gateway      TEXT NOT NULL,
+  secret       TEXT NOT NULL,
+  public_key   TEXT,
+  base_url     TEXT,
+  currency     TEXT NOT NULL DEFAULT 'GHS',
+  callback_url TEXT,
+  min_amount   NUMERIC NOT NULL DEFAULT 1,
+  max_amount   NUMERIC NOT NULL DEFAULT 10000,
+  enabled      BOOLEAN NOT NULL DEFAULT true,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

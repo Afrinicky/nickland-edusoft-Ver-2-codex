@@ -19,6 +19,15 @@ const PORTALS = [
   { key: 'system',  label: 'System',         rank: 4, home: '/system',  tagline: 'The system itself' },
 ];
 
+// The Super Admin: the one account with overall control of the system itself.
+// A designation, not a permission tick. Not the Proprietor — they own the
+// school and are elevated over its money, but running the system is a
+// different job on purpose. See electron/ipc/_portals.js.
+const SUPER_ADMIN = 'Administrator';
+const isSuperAdmin = (profile) => !!profile && (
+  profile.is_super === true || profile.designation === SUPER_ADMIN
+);
+
 const byKey = new Map(PORTALS.map(p => [p.key, p]));
 const ACTION_KEY = { view: 'canView', create: 'canCreate', edit: 'canEdit', delete: 'canDelete' };
 
@@ -34,10 +43,16 @@ const allOf = (profile, pairs) => pairs.every(([m, a]) => allows(profile, m, a))
 function portalsFor(profile) {
   if (!profile) return [];
   if (profile.role === 'parent') return ['parent'];
-  const out = ['teacher'];
+  const out = [];
+  // The working day belongs to people who teach or who run the canteen — not
+  // to everybody on the payroll. A bursar handed a register they may open and
+  // not use is the failure the whole product is written against.
+  if (allows(profile, 'academics', 'view') || allows(profile, 'canteen', 'create')) out.push('teacher');
   if (anyOf(profile, [['fees', 'view'], ['finance', 'view'], ['payroll', 'view']])) out.push('finance');
   if (allOf(profile, [['staff', 'view'], ['students', 'edit']]) || allows(profile, 'settings', 'view')) out.push('admin');
-  if (profile.is_admin) out.push('system');
+  if (isSuperAdmin(profile)) out.push('system');
+  // An account with no module at all still has a payslip and a password.
+  if (!out.length) out.push('teacher');
   return out.sort((a, b) => byKey.get(a).rank - byKey.get(b).rank);
 }
 
@@ -57,4 +72,4 @@ function portalListFor(profile) {
 
 const hasPortal = (profile, key) => portalsFor(profile).includes(key);
 
-module.exports = { PORTALS, allows, portalsFor, portalListFor, homePortal, hasPortal };
+module.exports = { PORTALS, SUPER_ADMIN, allows, isSuperAdmin, portalsFor, portalListFor, homePortal, hasPortal };
