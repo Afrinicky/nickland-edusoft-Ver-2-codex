@@ -56,7 +56,7 @@ function emptyScope(scope) {
  * @param {string} deps.API             the version prefix, e.g. `/api/v1`
  * @param {(db, key, fallback) => string} deps.getSetting
  */
-function registerStaffRoutes({ add, db, json, can, API, getSetting, media, studentProfile }) {
+function registerStaffRoutes({ add, db, json, html, can, API, getSetting, media, studentProfile, getResourcePath }) {
   const deny = (res, msg) => json(res, 403, { ok: false, error: msg || 'Access denied.' });
   const bad = (res, msg) => json(res, 400, { ok: false, error: msg });
   const missing = (res, msg) => json(res, 404, { ok: false, error: msg || 'Not found.' });
@@ -956,6 +956,42 @@ function registerStaffRoutes({ add, db, json, can, API, getSetting, media, stude
         amount: rows.reduce((n, r) => n + r.amount_owed, 0),
       },
     });
+  });
+
+  // ── The printable documents, exactly as the office prints them ────────────
+  // A teacher stopped at the gate prints the same report card the bursar
+  // prints from the desktop, because it is the same function building it
+  // (electron/ipc/reports.js). The app holds no template of its own.
+  const printableDocs = () => { try { return require('../ipc/reports'); } catch (_) { return null; } };
+
+  add('GET', `${API}/results/student/:id/report.html`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!isStaff(ctx) || !can(ctx, 'academics', 'view')) return deny(res);
+    const sid = parseInt(params.id, 10);
+    if (!scopeLib.canAccessStudent(db, scopeOf(ctx), sid)) return missing(res, 'Student not found.');
+    const docs = printableDocs();
+    if (!docs || !docs.reportCardDocument) return json(res, 501, { ok: false, error: 'This school\u2019s system cannot print report cards yet.' });
+    const term = query.termId
+      ? db.prepare('SELECT id FROM terms WHERE id = ?').get(parseInt(query.termId, 10))
+      : currentTerm();
+    if (!term) return json(res, 404, { ok: false, error: 'No term to report on.' });
+    let r;
+    try { r = docs.reportCardDocument(db, getResourcePath, { studentId: sid, termId: term.id, colorMode: query.bw === '1' ? 'bw' : 'color' }); }
+    catch (e) { return json(res, 500, { ok: false, error: 'Could not build the report card.' }); }
+    if (!r.ok) return missing(res, r.error);
+    return html(res, 200, r.document);
+  });
+
+  add('GET', `${API}/students/:id/profile.html`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!isStaff(ctx) || !can(ctx, 'students', 'view')) return deny(res);
+    const sid = parseInt(params.id, 10);
+    if (!scopeLib.canAccessStudent(db, scopeOf(ctx), sid)) return missing(res, 'Student not found.');
+    const docs = printableDocs();
+    if (!docs || !docs.studentProfileDocument) return json(res, 501, { ok: false, error: 'This school\u2019s system cannot print profiles yet.' });
+    let r;
+    try { r = docs.studentProfileDocument(db, getResourcePath, sid, { colorMode: query.bw === '1' ? 'bw' : 'color' }); }
+    catch (e) { return json(res, 500, { ok: false, error: 'Could not build the profile.' }); }
+    if (!r.ok) return missing(res, r.error);
+    return html(res, 200, r.document);
   });
 
   // ── Conduct: commendations and incidents ──────────────────────────────────

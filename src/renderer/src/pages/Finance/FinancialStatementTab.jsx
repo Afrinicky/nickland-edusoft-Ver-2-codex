@@ -195,7 +195,7 @@ function StatementReport({ data, schoolName }) {
       <table className="statement-table" style={{ marginTop: 10 }}>
         <thead>
           <tr>
-            <th colSpan="3" className="statement-section-header" style={{ background: '#15803D' }}>
+            <th colSpan="3" className="statement-section-header" style={{ background: 'var(--success)' }}>
               INCOME
             </th>
           </tr>
@@ -211,7 +211,7 @@ function StatementReport({ data, schoolName }) {
                 </tr>
               ))
           }
-          <tr style={{ borderTop: '2px solid #333', background: '#dcfce7', fontWeight: 700 }}>
+          <tr style={{ borderTop: '2px solid #333', background: 'var(--success-bg)', fontWeight: 700 }}>
             <td style={{ paddingLeft: 12 }}>TOTAL INCOME</td>
             <td></td>
             <td className="text-right">{fmtCedi(data.total_income)}</td>
@@ -239,7 +239,7 @@ function StatementReport({ data, schoolName }) {
                 </tr>
               ))
           }
-          <tr style={{ borderTop: '2px solid #333', background: '#fee2e2', fontWeight: 700 }}>
+          <tr style={{ borderTop: '2px solid #333', background: 'var(--danger-bg)', fontWeight: 700 }}>
             <td style={{ paddingLeft: 12 }}>TOTAL EXPENDITURE</td>
             <td></td>
             <td className="text-right">{fmtCedi(data.total_expense)}</td>
@@ -251,7 +251,7 @@ function StatementReport({ data, schoolName }) {
       <table className="statement-table" style={{ marginTop: 14 }}>
         <tbody>
           <tr style={{
-            background: data.net_surplus >= 0 ? '#dcfce7' : '#fee2e2',
+            background: data.net_surplus >= 0 ? 'var(--success-bg)' : 'var(--danger-bg)',
             fontWeight: 700, fontSize: 14,
           }}>
             <td colSpan="2" style={{ padding: '8px 10px' }}>
@@ -262,7 +262,7 @@ function StatementReport({ data, schoolName }) {
             </td>
           </tr>
           <tr style={{
-            background: 'var(--primary)', color: '#fff',
+            background: 'var(--primary)', color: 'var(--surface-1)',
             fontWeight: 700, fontSize: 14,
           }}>
             <td colSpan="2" style={{ padding: '10px' }}>CLOSING BALANCE (carried forward)</td>
@@ -319,7 +319,7 @@ function StatementReport({ data, schoolName }) {
                   <td>{sp.label}</td>
                   <td className="text-right">{fmtCedi(sp.income)}</td>
                   <td className="text-right">{fmtCedi(sp.expense)}</td>
-                  <td className="text-right" style={{ fontWeight: 600, color: sp.net >= 0 ? '#15803D' : '#b91c1c' }}>
+                  <td className="text-right" style={{ fontWeight: 600, color: sp.net >= 0 ? 'var(--success)' : '#b91c1c' }}>
                     {fmtCedi(sp.net)}
                   </td>
                 </tr>

@@ -17,12 +17,12 @@ export default function Branding() {
 
   async function reset() {
     await updateTheme({
-      primary: '#1B3A6B',
-      accent: '#C9961A',
-      background: '#FFFFFF',
-      foreground: '#0F172A',
+      primary: '#5B3FE0',
+      accent: '#C99A25',
+      background: '#F5F4FB',
+      foreground: '#14142B',
       fgMode: 'dark',
-      fontFamily: 'Inter',
+      fontFamily: 'system',
       fontSize: 14,
     });
     showToast('Reset to default theme');
@@ -69,15 +69,22 @@ export default function Branding() {
         <div className="form-row">
           <div className="form-group">
             <label className="label">Font family</label>
+            {/* Only families that are already on the machine. The list used
+                to offer six Google fonts the app fetched over the internet;
+                on a school PC with no connection every one of them failed and
+                the app fell back to a serif. Nothing here has to load. */}
             <select className="select" value={local.fontFamily ?? ''}
               onChange={e => applyLive({ fontFamily: e.target.value })}>
-              <option value="Inter">Inter (default)</option>
-              <option value="Roboto">Roboto</option>
-              <option value="Open Sans">Open Sans</option>
-              <option value="Lato">Lato</option>
-              <option value="Poppins">Poppins</option>
-              <option value="Source Sans 3">Source Sans 3</option>
+              <option value="system">System (recommended)</option>
+              <option value="segoe">Segoe UI</option>
+              <option value="calibri">Calibri</option>
+              <option value="tahoma">Tahoma</option>
+              <option value="verdana">Verdana</option>
+              <option value="roboto">Roboto</option>
             </select>
+            <div className="form-hint">
+              Installed on the computer, so it works with the internet down.
+            </div>
           </div>
           <div className="form-group">
             <label className="label">Base font size: {local.fontSize}px</label>

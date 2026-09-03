@@ -39,7 +39,7 @@ import {
 } from '../../../src/ui';
 import { SettleBalance, PrintButton, ContactSchool } from '../../../src/actions';
 import { Trend, Bars, Meter, DayStrip, colorForScore, toneForScore } from '../../../src/charts';
-import { terminalReportHtml, studentProfileHtml, statementHtml } from '../../../src/print';
+import { statementHtml } from '../../../src/print';
 import { useLayout } from '../../../src/responsive';
 import { colors, palette, spacing, radius, type } from '../../../src/theme';
 
@@ -147,20 +147,12 @@ export default function ChildDetail() {
     email: brand.contact?.email, logo: brand.logo,
   };
 
-  const printReport = () => terminalReportHtml({
-    ...(report || {}),
-    student: report?.student || { name: c.name, index_number: c.index_number, class_name: c.class_name, photo: c.photo, class_teacher: c.class_teacher },
-    school: schoolHeader,
-  });
-
-  const printProfile = () => studentProfileHtml({
-    student: profileSheet || {
-      name: c.name, index_number: c.index_number, class_name: c.class_name, photo: c.photo,
-    },
-    school: schoolHeader,
-    term: c.term?.label,
-    fees: c.fees, canteen: c.canteen, attendance: att,
-  });
+  // The school's own documents, fetched from the desktop that built them. Not
+  // rebuilt here: a report card a parent prints at home has to be the report
+  // card the office prints, and the only way to guarantee that is to print the
+  // office's own file.
+  const fetchReport = () => api.childReportDocument(token, id, reportTermId);
+  const fetchProfile = () => api.childProfileDocument(token, id);
 
   const printStatement = () => statementHtml({
     school: schoolHeader,
@@ -203,18 +195,18 @@ export default function ChildDetail() {
         <Overview
           child={c} owed={owed} rate={rate} attendance={att} report={report} terms={terms}
           parentName={parentName} homework={homework} transport={transport}
-          onPrintProfile={printProfile} onOpen={setTab}
+          onPrintProfile={fetchProfile} onOpen={setTab}
         />
       )}
 
-      {tab === 'academics' && <Academics report={report} onPrint={printReport} />}
+      {tab === 'academics' && <Academics report={report} onPrint={fetchReport} />}
 
       {tab === 'conduct' && <Conduct events={conduct} summary={report?.summary} cloud={mode === 'cloud'} />}
 
       {tab === 'reports' && (
         <Reports
           terms={terms} report={report} reportTermId={reportTermId}
-          onOpenTerm={openTerm} onPrint={printReport} cloud={mode === 'cloud'}
+          onOpenTerm={openTerm} onPrint={fetchReport} cloud={mode === 'cloud'}
         />
       )}
 
@@ -333,7 +325,7 @@ function Overview({ child, owed, rate, attendance, report, terms, parentName, ho
 
       <Section title="The school's record" icon="note" subtitle="What the office holds for this pupil.">
         <Toolbar>
-          <PrintButton build={onPrintProfile} title="Print profile" />
+          <PrintButton fetch={onPrintProfile} title="Print profile" />
           <ContactSchool variant="outline" size="sm" title="Message the school" icon="whatsapp" />
         </Toolbar>
       </Section>
@@ -374,7 +366,7 @@ function Academics({ report, onPrint }) {
       <Section
         title={`Marks — ${report.term?.label || 'this term'}`} icon="award"
         subtitle="Class work and examination combined, against the school's grading scale."
-        action={<PrintButton build={onPrint} title="Print report" />}
+        action={<PrintButton fetch={onPrint} title="Print report" />}
       >
         <Bars items={subjects.map(s => ({
           label: s.subject,
@@ -489,7 +481,7 @@ function Reports({ terms, report, reportTermId, onOpenTerm, onPrint, cloud }) {
       {report === null ? <Card><Skeleton rows={5} /></Card> : (
         <Section
           title={`Report card — ${report.term?.label || 'this term'}`} icon="print"
-          action={<PrintButton build={onPrint} title="Print" />}
+          action={<PrintButton fetch={onPrint} title="Print" />}
         >
           <ErrorNote message={report.error} />
           <KeyValue items={[

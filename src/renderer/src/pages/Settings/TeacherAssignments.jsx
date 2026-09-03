@@ -60,7 +60,7 @@ export default function TeacherAssignments() {
 
   return (
     <div>
-      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
+      <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)' }}>
         <strong>Teaching assignments</strong>
         <div className="text-sm" style={{ marginTop: 6, lineHeight: 1.7 }}>
           What each teacher can open. A teacher given a class sees that whole class; one given a
@@ -72,7 +72,7 @@ export default function TeacherAssignments() {
       </div>
 
       {!loading && unstaffed.length > 0 && (
-        <div className="card" style={{ marginTop: 16, borderLeft: '3px solid var(--warning, #C9961A)' }}>
+        <div className="card" style={{ marginTop: 16, border: '1px solid var(--warning, #C9961A)' }}>
           <div className="section-title">
             Classes with no class teacher
             <span className="badge badge-warning" style={{ marginLeft: 8 }}>{unstaffed.length}</span>

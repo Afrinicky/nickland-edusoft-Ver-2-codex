@@ -19,8 +19,8 @@ import React, { useState } from 'react';
 import { View, Text } from 'react-native';
 import { useBranding } from './brand';
 import { channels as channelsFor, hrefFor, open as openLink, settleMessage, generalMessage } from './contact';
-import { canPrint, printHtml, NOT_ON_PHONE } from './print';
-import { Button, IconButton, Sheet, Muted, Micro, ListRow, InfoNote, Badge, Card } from './ui';
+import { canPrint, printHtml, printFromSchool, NOT_ON_PHONE } from './print';
+import { Button, IconButton, Sheet, Muted, Micro, ListRow, InfoNote, ErrorNote, Badge, Card } from './ui';
 import { useLayout } from './responsive';
 import { colors, spacing, radius, shadow, type } from './theme';
 import { Icon } from './icons';
@@ -154,20 +154,41 @@ export function SettleBalance({ child, owed, term, parentName, variant = 'primar
  * string so a screen holding a large report does not rebuild the whole document
  * on every render of a button nobody has pressed.
  */
-export function PrintButton({ build, title = 'Print', variant = 'outline', size = 'sm', full = false, icon = 'print', disabled }) {
-  const [told, setTold] = useState(false);
+export function PrintButton({
+  build, fetch: fetchDoc, title = 'Print', variant = 'outline', size = 'sm',
+  full = false, icon = 'print', disabled,
+}) {
+  const [note, setNote] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function go() {
+    if (!canPrint) { setNote({ tone: 'info', text: NOT_ON_PHONE }); return; }
+
+    // The school's own document — fetched from the desktop's report generator
+    // so what comes out of the printer here is what comes out of the printer in
+    // the office. It costs a round trip, hence the busy state.
+    if (fetchDoc) {
+      setBusy(true);
+      const r = await printFromSchool(fetchDoc);
+      setBusy(false);
+      if (!r.ok) setNote({ tone: 'error', text: r.error });
+      return;
+    }
+
+    const html = typeof build === 'function' ? build() : build;
+    if (html) printHtml(html);
+  }
+
   return (
     <>
       <Button
-        variant={variant} size={size} title={title} icon={icon} full={full} disabled={disabled}
-        onPress={() => {
-          if (!canPrint) { setTold(true); return; }
-          const html = typeof build === 'function' ? build() : build;
-          if (html) printHtml(html);
-        }}
+        variant={variant} size={size} title={busy ? 'Preparing…' : title} icon={icon}
+        full={full} disabled={disabled} busy={busy} onPress={go}
       />
-      <Sheet visible={told} onClose={() => setTold(false)} title="Printing" width={440}>
-        <InfoNote message={NOT_ON_PHONE} />
+      <Sheet visible={!!note} onClose={() => setNote(null)} title="Printing" width={440}>
+        {note?.tone === 'error'
+          ? <ErrorNote message={note.text} />
+          : <InfoNote message={note?.text} />}
       </Sheet>
     </>
   );

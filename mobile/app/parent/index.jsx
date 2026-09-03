@@ -168,9 +168,13 @@ function Money({ label, value }) {
   return (
     <View style={{ flex: 1, backgroundColor: colors.surfaceAlt, borderRadius: radius.md, padding: spacing.md }}>
       <Micro>{label}</Micro>
-      <Text style={{ ...type.body, fontWeight: '800', marginTop: 3, color: value > 0 ? colors.danger : colors.success, fontVariant: ['tabular-nums'] }}>
-        {money(value)}
-      </Text>
+      <Text
+        numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}
+        style={{
+          ...type.body, fontWeight: '800', marginTop: 3, fontSize: 15,
+          color: value > 0 ? colors.danger : colors.success, fontVariant: ['tabular-nums'],
+        }}
+      >{money(value)}</Text>
     </View>
   );
 }

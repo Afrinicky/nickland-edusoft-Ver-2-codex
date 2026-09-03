@@ -68,7 +68,7 @@ export default function MobileApp() {
   return (
     <div className="mobile-app-settings">
       {/* Overview */}
-      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
+      <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)' }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
           <span style={{ fontSize: 22 }}>📱</span>
           <div className="text-sm" style={{ lineHeight: 1.6 }}>

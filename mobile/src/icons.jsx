@@ -358,6 +358,50 @@ const DRAW = {
     <R {...p} x={0.12} y={0.32} w={0.76} h={0.52} radius={0.06} />
     <Bar {...p} x={0.12} y={0.46} w={0.76} />
   </>),
+
+  // ── the drawer, the onboarding, the pupil's day ──
+  // Three rules. The middle one is shorter, which is what stops it reading as
+  // a stack of list items.
+  menu: (p) => (<>
+    <Bar {...p} x={0.16} y={0.28} w={0.68} />
+    <Bar {...p} x={0.16} y={0.49} w={0.48} />
+    <Bar {...p} x={0.16} y={0.70} w={0.68} />
+  </>),
+  // An arrow leading on — "Next", "Get started".
+  arrow: (p) => (<>
+    <Bar {...p} x={0.14} y={0.49} w={0.60} />
+    <Bar {...p} x={0.56} y={0.34} w={0.26} rotate={45} />
+    <Bar {...p} x={0.56} y={0.64} w={0.26} rotate={-45} />
+  </>),
+  // A crown — the school's own standing, a top place in class.
+  crown: (p) => (<>
+    <Tri {...p} x={0.08} y={0.24} w={0.28} h={0.30} />
+    <Tri {...p} x={0.36} y={0.16} w={0.28} h={0.38} />
+    <Tri {...p} x={0.64} y={0.24} w={0.28} h={0.30} />
+    <R {...p} x={0.12} y={0.60} w={0.76} h={0.20} radius={0.04} fill />
+  </>),
+  // A padlock — a password field, anything held shut.
+  lock: (p) => (<>
+    <R {...p} x={0.18} y={0.44} w={0.64} h={0.42} radius={0.08} />
+    <Ring {...p} cx={0.5} cy={0.34} r={0.20} />
+    <R {...p} x={0.28} y={0.26} w={0.44} h={0.22} radius={0} fill opacity={0} />
+  </>),
+  // An open eye — reveal what was typed.
+  eye: (p) => (<>
+    <Ring {...p} cx={0.5} cy={0.5} r={0.20} />
+    <Ring {...p} cx={0.5} cy={0.5} r={0.07} fill />
+    <Bar {...p} x={0.06} y={0.36} w={0.24} rotate={26} />
+    <Bar {...p} x={0.70} y={0.36} w={0.24} rotate={-26} />
+    <Bar {...p} x={0.06} y={0.64} w={0.24} rotate={-26} />
+    <Bar {...p} x={0.70} y={0.64} w={0.24} rotate={26} />
+  </>),
+  // A rosette — a school, an achievement, the app's own mark at rest.
+  spark: (p) => (<>
+    <Ring {...p} cx={0.5} cy={0.42} r={0.26} />
+    <Ring {...p} cx={0.5} cy={0.42} r={0.10} fill />
+    <Bar {...p} x={0.30} y={0.80} w={0.18} rotate={70} />
+    <Bar {...p} x={0.52} y={0.80} w={0.18} rotate={-70} />
+  </>),
 };
 
 /**

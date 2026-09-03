@@ -30,6 +30,9 @@ function Branded() {
   const { host } = useAuth();
   return (
     <BrandingProvider host={host}>
+      {/* Dark chrome on the phone's own status bar, light content over it. The
+          splash, the drawer and the top bar are all dark; a black-on-white
+          status bar over them is unreadable. */}
       <StatusBar style="light" />
       <Stack screenOptions={{
         headerShown: false,
@@ -37,6 +40,7 @@ function Branded() {
         animation: 'fade',
       }}>
         <Stack.Screen name="index" />
+        <Stack.Screen name="welcome" />
         <Stack.Screen name="connect" />
         <Stack.Screen name="login" />
         <Stack.Screen name="parent" />

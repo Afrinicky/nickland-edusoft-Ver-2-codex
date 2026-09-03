@@ -20,7 +20,7 @@ import {
 import { ClassPicker, useClasses } from '../../src/pickers';
 import { useBranding } from '../../src/brand';
 import { PrintButton } from '../../src/actions';
-import { terminalReportHtml } from '../../src/print';
+
 import { Bars, Trend, toneForScore as scoreTone } from '../../src/charts';
 import { useLayout, pageWidth } from '../../src/responsive';
 import { colors, palette, spacing, radius, type } from '../../src/theme';
@@ -185,13 +185,7 @@ function ResultsScreen() {
           <>
             <Button variant="outline" title="Close" onPress={() => setOpen(null)} full={false} />
             <PrintButton
-              build={() => terminalReportHtml({
-                ...(report || {}),
-                school: report?.school || {
-                  name: brand.school?.name, motto: brand.school?.motto, address: brand.school?.address,
-                  phone: brand.contact?.phone, email: brand.contact?.email, logo: brand.logo,
-                },
-              })}
+              fetch={() => api.reportCardDocument(token, open.id, report?.term?.id)}
               title="Print report card" variant="primary" size="md"
               disabled={!report || !(report.subjects || []).length}
             />

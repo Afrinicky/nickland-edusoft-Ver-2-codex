@@ -13,9 +13,11 @@ import { router } from 'expo-router';
 import { useAuth } from '../src/auth';
 import { api, setRole } from '../src/api';
 import {
-  Card, Title, Heading, Body, Muted, Micro, Field, Button, ErrorNote, InfoNote,
-  Gradient, IconTile, Badge, Crest,
+  Card, Title, Heading, Body, Muted, Micro, Field, Button, IconButton, ErrorNote, InfoNote,
+  Gradient, IconTile, Badge, Crest, Sheet, MenuRow,
 } from '../src/ui';
+import { Appear } from '../src/motion';
+import { channels as channelsFor, hrefFor, open as openLink } from '../src/contact';
 import { useBranding } from '../src/brand';
 import { ContactSchool } from '../src/actions';
 import { Icon } from '../src/icons';
@@ -45,6 +47,7 @@ export default function Login() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [reveal, setReveal] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const setR = (k, v) => setReset(p => ({ ...p, [k]: v }));
@@ -118,9 +121,9 @@ export default function Login() {
     <View style={{ gap: spacing.md }}>
       {stage === 'signin' && (
         <>
-          <View>
-            <Title>Sign in</Title>
-            <Muted style={{ marginTop: 2 }}>Staff, teachers and parents — the same box.</Muted>
+          <View style={{ marginBottom: 2 }}>
+            <Title style={{ fontSize: 25 }}>Welcome back</Title>
+            <Muted style={{ marginTop: 3 }}>Staff, teachers and parents — the same box.</Muted>
           </View>
           <InfoNote message={notice} />
           <Field
@@ -141,25 +144,48 @@ export default function Login() {
             autoComplete="current-password"
             returnKeyType="go"
             onSubmitEditing={submit}
+            icon="lock"
             right={(
-              <TouchableOpacity onPress={() => setReveal(r => !r)} accessibilityRole="button"
-                accessibilityLabel={reveal ? 'Hide password' : 'Show password'}>
-                <Micro style={{ color: colors.primary }}>{reveal ? 'HIDE' : 'SHOW'}</Micro>
-              </TouchableOpacity>
+              <IconButton
+                name="eye" size={30} tone="plain"
+                color={reveal ? colors.primary : colors.faint}
+                onPress={() => setReveal(r => !r)}
+                label={reveal ? 'Hide the password' : 'Show the password'}
+              />
             )}
           />
+          <TouchableOpacity onPress={() => goto('forgot')} style={{ alignSelf: 'flex-end', marginTop: -6, marginBottom: 4 }}>
+            <Text style={{ ...type.small, color: colors.primary, fontWeight: '700' }}>Forgot your password?</Text>
+          </TouchableOpacity>
           <ErrorNote message={error} />
-          <Button title={busy ? 'Signing in…' : 'Sign in'} onPress={submit} busy={busy} size="lg" iconRight="chevron" />
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
-            <TouchableOpacity onPress={() => goto('forgot')}>
-              <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13.5 }}>Forgot your password?</Text>
-            </TouchableOpacity>
-            {!isCloud && (
-              <TouchableOpacity onPress={() => goto('register')}>
-                <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13.5 }}>Parent? Register</Text>
-              </TouchableOpacity>
-            )}
+          <Button title={busy ? 'Signing in…' : 'Sign in'} onPress={submit} busy={busy} size="lg" />
+
+          {/* The reference puts "or continue with" here and follows it with a
+              row of identity providers. This app has none — a school issues
+              its own accounts and a Google sign-in would let anybody with a
+              Gmail address knock on the door of a children's records. What
+              belongs in that slot is the two other ways a real person gets in. */}
+          <View style={styles.orRow}>
+            <View style={styles.orLine} />
+            <Text style={{ ...type.small, color: colors.muted, fontWeight: '600' }}>or</Text>
+            <View style={styles.orLine} />
           </View>
+
+          <View style={{ flexDirection: layout.isCompact ? 'column' : 'row', gap: spacing.sm }}>
+            {!isCloud && (
+              <View style={{ flex: 1 }}>
+                <Button variant="outline" icon="user" title="Register" onPress={() => goto('register')} />
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              <Button variant="outline" icon="whatsapp" title="Ask the school" onPress={() => setHelpOpen(true)} />
+            </View>
+          </View>
+          <Muted style={{ textAlign: 'center', marginTop: 2 }}>
+            {isCloud
+              ? 'Accounts are created at the school, not here.'
+              : 'A parent registers with the phone number the school has for their child.'}
+          </Muted>
           {isCloud && (
             <Muted style={{ marginTop: 4 }}>
               Signing in over the internet. Registers, marks, class work, homework, lesson notes,
@@ -284,15 +310,33 @@ export default function Login() {
 
       <View style={{ flex: split ? 1 : 1, justifyContent: 'center', padding: split ? 48 : 20 }}>
         <View style={{ width: '100%', maxWidth: 440, alignSelf: 'center' }}>
-          <Card style={split ? shadow.raised : null}>{panel}</Card>
+          <Appear distance={14}>
+            <Card style={split ? shadow.raised : null}>{panel}</Card>
+          </Appear>
+
+          <Sheet visible={helpOpen} onClose={() => setHelpOpen(false)} title="Can't get in?" width={460}>
+            <Body style={{ marginBottom: spacing.sm }}>
+              Accounts are created at the school, not here. If you have never been given one — or
+              your password no longer works and you have no code — the office is the only place
+              that can fix it.
+            </Body>
+            {(brand.channels || []).length === 0 ? (
+              <Muted>The school has not recorded a phone number or an email address yet.</Muted>
+            ) : (brand.channels || []).map((c, i, arr) => (
+              <MenuRow
+                key={c.key}
+                icon={c.key === 'whatsapp' ? 'whatsapp' : c.icon}
+                iconTone={c.key === 'whatsapp' ? 'success' : c.key === 'email' ? 'primary' : 'violet'}
+                label={c.label} hint={c.value} last={i === arr.length - 1}
+                onPress={() => { openLink(hrefFor(c, { subject: 'I cannot sign in', message: `Good day${brand.school?.name ? ` ${brand.school.name}` : ''}. I am unable to sign in to the school app and would like some help.` })); setHelpOpen(false); }}
+              />
+            ))}
+          </Sheet>
 
           {/* Somebody who cannot get in needs the school, not a help page. */}
-          <View style={{ alignItems: 'center', marginTop: 14, gap: 10 }}>
-            {brand.channels && brand.channels.length ? (
-              <ContactSchool variant="ghost" size="sm" title="Message the school" icon="whatsapp" />
-            ) : null}
-            <TouchableOpacity onPress={() => router.push('/connect')}>
-              <Text style={{ color: colors.muted, fontWeight: '700', fontSize: 12.5 }}>Change school or address</Text>
+          <View style={{ alignItems: 'center', marginTop: 16 }}>
+            <TouchableOpacity onPress={() => router.push('/connect')} accessibilityRole="button">
+              <Text style={{ ...type.small, color: colors.muted, fontWeight: '700' }}>Change school or address</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -300,3 +344,8 @@ export default function Login() {
     </View>
   );
 }
+
+const styles = {
+  orRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginVertical: spacing.xs },
+  orLine: { flex: 1, height: 1, backgroundColor: colors.border },
+};

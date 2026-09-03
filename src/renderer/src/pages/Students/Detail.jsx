@@ -342,9 +342,9 @@ function CanteenView({ canteen, student, onReload }) {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               background:
                 d.status === 'paid' ? 'var(--success)' :
-                d.status === 'unpaid' ? '#fee2e2' :
+                d.status === 'unpaid' ? 'var(--danger-bg)' :
                 d.day_type !== 'school_day' ? 'var(--surface-3)' : 'transparent',
-              color: d.status === 'paid' ? '#fff' : 'var(--muted)',
+              color: d.status === 'paid' ? 'var(--surface-1)' : 'var(--muted)',
             }}>
             {new Date(d.date).getDate()}
           </div>

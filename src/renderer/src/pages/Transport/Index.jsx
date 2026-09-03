@@ -138,7 +138,7 @@ function StopsPanel({ routeId, canEdit, showToast }) {
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Stops</div>
       {stops.length === 0 && <div style={{ color: 'var(--muted)', fontSize: 13 }}>No stops yet.</div>}
       {stops.map(s => (
-        <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--line, #E7EBF1)' }}>
+        <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--line, var(--border))' }}>
           <span>{s.name}</span>
           <span style={{ color: 'var(--muted)', fontSize: 13 }}>
             {s.pickup_time || ''} {canEdit && <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={() => del(s.id)}>✕</button>}

@@ -106,7 +106,7 @@ const MODULES = [
       <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
         <path d="M6 12c0-6 5-8 12-8s12 2 12 8v10l4 4H2l4-4V12Z" fill="currentColor" opacity="0.7"/>
         <path d="M14 30a4 4 0 008 0" stroke="currentColor" strokeWidth="2.5" fill="none" opacity="0.5"/>
-        <circle cx="26" cy="8" r="5" fill="#C9961A"/>
+        <circle cx="26" cy="8" r="5" fill="var(--accent)"/>
         <text x="26" y="12" textAnchor="middle" fontSize="7" fill="white" fontWeight="bold">8</text>
       </svg>
     ),

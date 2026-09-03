@@ -163,7 +163,7 @@ export default function Login({ onLogin }) {
             : <div className="login-school-logo-placeholder">
                 <svg width="52" height="52" viewBox="0 0 52 52" fill="none">
                   <rect width="52" height="52" rx="12" fill="#E8EFF9"/>
-                  <path d="M14 36L26 18L38 36H14Z" fill="#1B3A6B" opacity="0.4"/>
+                  <path d="M14 36L26 18L38 36H14Z" fill="var(--primary)" opacity="0.4"/>
                 </svg>
               </div>
           }

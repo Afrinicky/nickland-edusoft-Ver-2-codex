@@ -28,7 +28,7 @@ export default function Signatures() {
 
   return (
     <div className="signatures-settings">
-      <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
+      <div className="card" style={{ background: 'var(--info-bg)', border: '1px solid var(--info)' }}>
         <strong>How signatures work:</strong>
         <ul style={{ marginTop: 8, marginLeft: 20, fontSize: 13, lineHeight: 1.6 }}>
           <li>Upload the signature image (PNG with transparent background recommended).</li>

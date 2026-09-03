@@ -4,10 +4,22 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Nickland Edusoft</title>
+  <!--
+    No web fonts, and no network in the policy that would allow any.
+
+    This used to pull six families from Google Fonts. A school's internet is
+    not dependable and is frequently simply off at seven in the morning, so
+    every one of those requests failed and the whole app fell back down its
+    stack to Cambria — a SERIF — which is most of why it looked soft and
+    unprofessional. An app whose first rule is "offline is the normal case"
+    cannot have its typography depend on a CDN.
+
+    The type is a system stack now (see --font-family in styles/index.css and
+    FONT_STACKS in store/index.js). Segoe UI is on every Windows machine this
+    ships to, weight and tracking carry the hierarchy, and nothing has to load.
+  -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://rsms.me; font-src 'self' https://fonts.gstatic.com https://rsms.me; img-src 'self' file: data:;" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Lato:wght@400;700&family=Open+Sans:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet" />
+    content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' file: data:; connect-src 'self';" />
 </head>
 <body>
   <div id="root"></div>
