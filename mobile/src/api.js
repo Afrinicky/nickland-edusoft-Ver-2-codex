@@ -48,6 +48,24 @@ export function setBaseUrl(url) { setConnection({ baseUrl: url, mode: 'host' });
 export function getBaseUrl() { return BASE; }
 export function getMode() { return MODE; }
 
+// A printable document, fetched as the HTML the desktop's own report generator
+// produced. Not JSON: the caller hands the string straight to the printer.
+async function requestHtml(path, { token } = {}) {
+  if (!BASE) throw new Error('No host configured. Connect to your school first.');
+  const headers = {};
+  if (token) headers.Authorization = 'Bearer ' + token;
+  let res;
+  try { res = await fetch(`${BASE}/api/v1${path}`, { headers }); }
+  catch (e) { throw new Error("Cannot reach the school. Check the address and Wi-Fi."); }
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = `Could not fetch the document (${res.status}).`;
+    try { const j = JSON.parse(text); if (j && j.error) msg = j.error; } catch (_) {}
+    const err = new Error(msg); err.status = res.status; throw err;
+  }
+  return text;
+}
+
 async function request(path, { method = 'GET', token, body } = {}) {
   if (!BASE) throw new Error('No host configured. Connect to your school first.');
   const headers = { 'Content-Type': 'application/json' };
@@ -475,6 +493,32 @@ export const api = {
   canteenStudent: (token, studentId) => request(staffPath(`/canteen/student/${studentId}`), { token }),
   canteenCollect: (token, { student_id, amount, payment_method, notes }) =>
     request(staffPath('/canteen/collect'), { method: 'POST', token, body: { student_id, amount, payment_method, notes } }),
+
+  // ── Printable documents ──
+  // The school's own report card and profile sheet, built by the desktop's
+  // report generator and printed verbatim. The app deliberately has no
+  // template of its own: a school that hands out two documents with the same
+  // title and different layouts has a problem no feature makes up for.
+  //
+  // Host-only, and it says so. The projection the internet portal carries has
+  // no crest, no signatures and no grading scale, so a report card built from
+  // it would be a different document wearing the same name.
+  reportCardDocument: (token, studentId, termId) =>
+    MODE === 'cloud'
+      ? hostOnly('Printing a report card')()
+      : requestHtml(`/results/student/${studentId}/report.html${termId ? `?termId=${termId}` : ''}`, { token }),
+  studentProfileDocument: (token, studentId) =>
+    MODE === 'cloud'
+      ? hostOnly('Printing a pupil profile')()
+      : requestHtml(`/students/${studentId}/profile.html`, { token }),
+  childReportDocument: (token, childId, termId) =>
+    MODE === 'cloud'
+      ? hostOnly('Printing a report card')()
+      : requestHtml(`/parent/children/${childId}/report.html${termId ? `?termId=${termId}` : ''}`, { token }),
+  childProfileDocument: (token, childId) =>
+    MODE === 'cloud'
+      ? hostOnly('Printing a profile')()
+      : requestHtml(`/parent/children/${childId}/profile.html`, { token }),
 
   // ── Conduct: commendations and incidents ──
   // The desktop has kept this per pupil since the first release and neither

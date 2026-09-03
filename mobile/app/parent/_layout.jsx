@@ -8,9 +8,15 @@ import { Redirect } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { Loading } from '../../src/ui';
 import { AppShell } from '../../src/shell';
-import { PARENT_NAV, PARENT_PRIMARY } from '../../src/nav';
+import { PARENT_NAV, PARENT_PRIMARY, PARENT_QUICK } from '../../src/nav';
 
-const NAV = { title: 'Parent', items: PARENT_NAV, primary: PARENT_PRIMARY, accountHref: '/parent/account' };
+const NAV = {
+  title: 'Parent', items: PARENT_NAV, primary: PARENT_PRIMARY, quick: PARENT_QUICK,
+  accountHref: '/parent/account',
+  actionIcon: 'chat',
+  actionLabel: 'Reach the school',
+  actionHint: 'A question, an absence, a bill — start here.',
+};
 
 export default function ParentLayout() {
   const { ready, token, profile } = useAuth();

@@ -127,7 +127,7 @@ export default function FeesDashboard({ onSwitchTab }) {
                             <div className="avg-bar">
                               <div
                                 className="avg-bar-fill"
-                                style={{ width: `${pct}%`, background: pct >= 70 ? '#15803D' : pct >= 40 ? '#B45309' : '#B91C1C' }}
+                                style={{ width: `${pct}%`, background: pct >= 70 ? 'var(--success)' : pct >= 40 ? '#B45309' : 'var(--danger)' }}
                               />
                             </div>
                             <div className="text-xs text-muted" style={{ marginTop: 2 }}>{pct}%</div>

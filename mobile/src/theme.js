@@ -1,150 +1,195 @@
 // Nickland Edusoft — design tokens for the phone and the browser.
 // Copyright © 2026 Nickland Sales. All rights reserved.
 //
-// One palette, one type scale, one set of elevations, used by every screen.
-// The identity is the desktop's — deep navy and gold — carried forward and
-// given the depth a 2026 app is expected to have: layered navies for chrome,
-// hairline borders instead of heavy strokes, and a single cyan reserved for
-// live data so it means something when it appears.
+// One palette, one type scale, one set of elevations, used by every screen and
+// mirrored by the desktop's CSS (src/renderer/src/styles/index.css) and the
+// print stylesheet. Change a value here and change it in all three.
 //
-// The rule for colour here: a hue is either structural (navy), an action
-// (primary), a value judgement (success / warning / danger) or data (cyan).
-// Nothing is coloured because it looked nice; a screen that uses six accents
-// has told the reader nothing.
+// ── Why it looks like this ──────────────────────────────────────────────────
+//
+// The phone is used OUTDOORS, in Ghanaian daylight, at arm's length, one-handed,
+// while something else is happening: a queue of children at the canteen door, a
+// parent at the gate. That single fact decides almost everything below.
+//
+//   Light, not dark. A dark screen in direct sun is a mirror. Dark appears only
+//   where it means something — the splash, the app's chrome, a profile header.
+//
+//   Hard contrast, not elegant grey. Body text sits at 9.6:1 and the muted tone
+//   at 5.6:1, so nothing a person reads is below the 4.5:1 floor even at noon.
+//   `ink400` is the one token under it and it is barred from text.
+//
+//   One accent doing real work. Violet marks the primary action and the current
+//   position and nothing else. A screen using six accents has told the reader
+//   nothing.
+//
+// The palette is restrained: tinted neutrals plus that one accent. The neutrals
+// carry ~0.012 chroma toward violet — not toward warm, which is how every
+// interface ends up the same shade of beige.
 
 // ── raw palette ─────────────────────────────────────────────────────────────
 export const palette = {
-  // Navy, dark to light. The chrome — sidebar, headers, the signed-out shell.
-  navy900: '#07142B',
-  navy800: '#0B1E3D',
-  navy700: '#12294F',
-  navy600: '#1B3A6B',   // the brand navy, unchanged from the desktop
-  navy500: '#27508C',
-  navy400: '#3E6BAE',
-  navy300: '#7C9BCB',
+  // Violet. The action colour. 600 reads at 7.1:1 on white, so the same hue
+  // works as a button fill AND as a text colour — one value instead of two
+  // that drift apart.
+  violet50:  '#F4F2FE',
+  violet100: '#E9E4FD',
+  violet200: '#D5CBFB',
+  violet300: '#B8A6F7',
+  violet400: '#957CF1',
+  violet500: '#7455E9',
+  violet600: '#5B3FE0',   // primary
+  violet700: '#4A2FC7',   // pressed
+  violet800: '#3B259E',
+  violet900: '#2A1A6E',
 
-  // Gold. The school's mark: used sparingly, for emphasis and never for text
-  // on white, where it does not carry enough contrast.
-  gold600: '#A97C12',
-  gold500: '#C9961A',
-  gold400: '#E0AE2E',
-  gold200: '#F5DFA6',
+  // Ink. Near-black with a violet cast, so text sits in the same family as the
+  // accent rather than looking like it was pasted in from another design.
+  ink950: '#15132B',   // chrome: splash, sidebar, profile header
+  ink900: '#14142B',   // headings, figures            15.8:1 on white
+  ink800: '#26263F',
+  ink700: '#3A3A55',   // body                          9.6:1
+  ink600: '#4C4C69',
+  ink500: '#61617E',   // muted — still passes as body  5.6:1
+  ink400: '#8A8AA3',   // DECORATION AND ICONS ONLY     3.4:1
+  ink300: '#B4B4C8',
+  ink200: '#D6D5E4',
 
-  // Cyan. Reserved for live and computed values — a sync badge, a chart line,
-  // a "pending" pill. It is the only cool accent, so it always reads as data.
-  cyan600: '#0E9AA7',
-  cyan500: '#17B8C4',
-  cyan300: '#7BE0E8',
+  line:      '#E7E5F2',
+  lineSoft:  '#F0EEF8',
+  surface:   '#FFFFFF',
+  surfaceAlt:'#FAF9FE',
+  canvas:    '#F5F4FB',
 
-  // Neutrals.
-  ink900: '#0B1220',
-  ink700: '#1E293B',
-  ink500: '#475569',
-  ink400: '#64748B',
-  ink300: '#94A3B8',
-  line: '#E4EAF2',
-  lineSoft: '#EFF3F9',
-  surface: '#FFFFFF',
-  surfaceAlt: '#F8FAFD',
-  canvas: '#F2F5FA',
-
-  green600: '#0E8F5B',
-  green500: '#10B981',
-  green100: '#DCFCE7',
-  amber600: '#B45309',
-  amber500: '#F59E0B',
-  amber100: '#FEF3C7',
-  red600: '#B91C1C',
-  red500: '#DC2626',
-  red100: '#FEE2E2',
-  blue600: '#1D4ED8',
-  blue500: '#3B82F6',
-  blue100: '#DBEAFE',
-  violet500: '#7C3AED',
-  violet100: '#EDE9FE',
+  // Judgement. Each of these means something; none is decorative.
+  green700: '#0B6B3C', green600: '#12864A', green500: '#1CA85E', green100: '#DCF5E7',
+  amber700: '#8A4B04', amber600: '#B26205', amber500: '#E08A0B', amber100: '#FDF0D8',
+  red700:   '#9F262B', red600:   '#C7343A', red500:   '#E14B51', red100:   '#FDE4E5',
+  teal700:  '#0A6E6E', teal600:  '#0E8E8E', teal500:  '#14A8A8', teal100:  '#D6F2F2',
+  pink600:  '#C43B7A', pink500:  '#E1568F', pink100:  '#FCE3EE',
+  gold700:  '#7A5810', gold600:  '#A0761A', gold500:  '#C99A25', gold400:  '#E3B845', gold100:  '#FBF0D5',
 };
 
 // ── semantic colours ────────────────────────────────────────────────────────
 // Screens use these, never the raw palette, so the identity can change in one
-// place. The first block keeps the names the original screens were written
-// against, so nothing had to be rewritten to adopt the rest.
+// place. Names kept from the first version so no screen had to be rewritten.
 export const colors = {
-  primary: palette.navy600,
-  primaryDark: palette.navy700,
-  accent: palette.gold500,
-  bg: palette.canvas,
-  card: palette.surface,
-  text: palette.ink900,
-  muted: palette.ink400,
-  success: palette.green600,
-  danger: palette.red600,
-  border: palette.line,
+  primary:     palette.violet600,
+  primaryDark: palette.violet700,
+  primarySoft: palette.violet50,
+  primaryLine: palette.violet200,
+  accent:      palette.gold500,
+  accentSoft:  palette.gold100,
 
-  // Added
-  primarySoft: '#EAF0FA',
-  accentSoft: '#FBF3DF',
-  textSoft: palette.ink700,
-  faint: palette.ink300,
-  borderSoft: palette.lineSoft,
+  bg:         palette.canvas,
+  card:       palette.surface,
   surfaceAlt: palette.surfaceAlt,
+
+  text:     palette.ink900,
+  textSoft: palette.ink700,
+  muted:    palette.ink500,
+  faint:    palette.ink400,   // never body text
+
+  border:     palette.line,
+  borderSoft: palette.lineSoft,
+
+  success: palette.green600,
   warning: palette.amber600,
-  info: palette.blue600,
-  data: palette.cyan600,
+  danger:  palette.red600,
+  info:    palette.violet600,
+  data:    palette.teal600,
 
   // Chrome — the dark shell the app is framed in.
-  chrome: palette.navy900,
-  chromeAlt: palette.navy800,
-  chromeLine: 'rgba(255,255,255,0.10)',
-  onChrome: '#FFFFFF',
-  onChromeMuted: 'rgba(255,255,255,0.62)',
+  chrome:        palette.ink950,
+  chromeAlt:     '#221D45',
+  chromeLine:    'rgba(255,255,255,0.09)',
+  onChrome:      '#FFFFFF',
+  onChromeMuted: 'rgba(255,255,255,0.64)',
+  onChromeFaint: 'rgba(255,255,255,0.40)',
 };
 
 // ── gradients ───────────────────────────────────────────────────────────────
-// react-native-web renders these as CSS; on the phone they are approximated by
-// a two-tone stack, so each one is defined as an ordered pair rather than a
-// string, and the `Gradient` component in ui.jsx decides how to draw it.
+// Used sparingly and only on chrome: a hero, a profile header, the splash.
+// Never behind text that has to be read at a glance in sunlight.
 export const gradients = {
-  chrome: [palette.navy900, palette.navy700],
-  brand: [palette.navy700, palette.navy500],
-  gold: [palette.gold600, palette.gold400],
-  data: [palette.cyan600, palette.navy500],
-  success: ['#0E8F5B', '#34D399'],
-  danger: ['#B91C1C', '#F87171'],
+  chrome:  [palette.ink950, '#2A2160'],
+  brand:   [palette.violet700, palette.violet500],
+  violet:  [palette.violet600, palette.violet400],
+  gold:    [palette.gold600, palette.gold400],
+  data:    [palette.teal600, palette.violet500],
+  success: [palette.green700, palette.green500],
+  danger:  [palette.red700, palette.red500],
 };
 
-// ── type scale ──────────────────────────────────────────────────────────────
-// Five sizes and nothing between them. Tight letter-spacing on the large
-// weights is what stops a system font at 28px looking like a word processor.
+// ── type ────────────────────────────────────────────────────────────────────
+// A system stack, deliberately. The school's PC has no internet at seven in the
+// morning, and a web font that fails to load falls back to whatever is next in
+// the list — which on the desktop was Cambria, a SERIF. Every screen in the
+// office was rendering in the wrong kind of typeface. Weight and tracking carry
+// the hierarchy instead of a downloaded family.
+export const fontFamily = [
+  'Segoe UI Variable Text', 'Segoe UI', 'system-ui', '-apple-system',
+  'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif',
+].join(', ');
+
+const face = { fontFamily };
+
+// Six sizes and nothing between them.
 export const type = {
-  display: { fontSize: 30, fontWeight: '800', letterSpacing: -0.6, lineHeight: 36 },
-  title:   { fontSize: 22, fontWeight: '800', letterSpacing: -0.4, lineHeight: 28 },
-  heading: { fontSize: 17, fontWeight: '700', letterSpacing: -0.2, lineHeight: 23 },
-  body:    { fontSize: 15, fontWeight: '500', lineHeight: 21 },
-  small:   { fontSize: 13, fontWeight: '500', lineHeight: 18 },
-  micro:   { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, lineHeight: 14 },
-  // For figures — a balance, a mark, a count. Tabular so columns line up.
-  numeric: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
+  display: { ...face, fontSize: 30, fontWeight: '800', letterSpacing: -0.7, lineHeight: 36 },
+  title:   { ...face, fontSize: 22, fontWeight: '800', letterSpacing: -0.45, lineHeight: 28 },
+  heading: { ...face, fontSize: 17, fontWeight: '700', letterSpacing: -0.2, lineHeight: 23 },
+  body:    { ...face, fontSize: 15, fontWeight: '500', lineHeight: 21.5 },
+  small:   { ...face, fontSize: 13, fontWeight: '500', lineHeight: 18.5 },
+  micro:   { ...face, fontSize: 11, fontWeight: '700', letterSpacing: 0.5, lineHeight: 14 },
+  // Figures — a balance, a mark, a count. Tabular so columns line up.
+  numeric: { ...face, fontSize: 24, fontWeight: '800', letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
 };
 
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 };
-export const radius = { xs: 6, sm: 10, md: 14, lg: 20, xl: 28, pill: 999 };
+
+// Soft, not round. A card is 20, a row inside it is 12, a button is 14.
+export const radius = { xs: 8, sm: 12, md: 16, lg: 20, xl: 28, pill: 999 };
 
 // ── elevation ───────────────────────────────────────────────────────────────
-// Three levels, no more. Shadows carry meaning — resting, raised, floating —
-// and a screen where everything floats has no hierarchy at all.
+// Three levels: resting, raised, floating. Borders do the structural work;
+// shadow is only for things that genuinely sit above the page. A screen where
+// everything floats has no hierarchy at all.
 export const shadow = {
   rest: {
-    shadowColor: '#0B1220', shadowOpacity: 0.05, shadowRadius: 10,
+    shadowColor: '#1B1740', shadowOpacity: 0.04, shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 }, elevation: 1,
   },
   raised: {
-    shadowColor: '#0B1220', shadowOpacity: 0.09, shadowRadius: 20,
+    shadowColor: '#1B1740', shadowOpacity: 0.08, shadowRadius: 20,
     shadowOffset: { width: 0, height: 6 }, elevation: 4,
   },
   floating: {
-    shadowColor: '#07142B', shadowOpacity: 0.20, shadowRadius: 34,
-    shadowOffset: { width: 0, height: 14 }, elevation: 12,
+    shadowColor: '#100C2A', shadowOpacity: 0.22, shadowRadius: 36,
+    shadowOffset: { width: 0, height: 16 }, elevation: 14,
   },
+};
+
+// ── motion ──────────────────────────────────────────────────────────────────
+// Ease-out only. No bounce, no elastic: this is a school's records, not a game.
+// See src/motion.jsx for the components that consume these.
+export const motion = {
+  fast:   120,
+  base:   180,
+  medium: 260,
+  slow:   400,
+  // cubic-bezier(0.16, 1, 0.3, 1) — the same curve the desktop CSS uses.
+  easeOut: { x1: 0.16, y1: 1, x2: 0.3, y2: 1 },
+  // How far apart the items of one list enter, and where staggering stops
+  // being charming and starts being a wait.
+  stagger: 45,
+  staggerMax: 8,
+};
+
+// ── z-index ─────────────────────────────────────────────────────────────────
+// Named, so nothing is ever 9999.
+export const z = {
+  base: 0, sticky: 10, drawerScrim: 40, drawer: 50,
+  sheetScrim: 60, sheet: 70, toast: 80, tooltip: 90,
 };
 
 // ── breakpoints ─────────────────────────────────────────────────────────────
@@ -152,4 +197,4 @@ export const shadow = {
 // the same source. These are the three shapes it takes; see src/responsive.js.
 export const breakpoints = { phone: 0, tablet: 768, desktop: 1180, wide: 1600 };
 
-export default { palette, colors, gradients, type, spacing, radius, shadow, breakpoints };
+export default { palette, colors, gradients, type, fontFamily, spacing, radius, shadow, motion, z, breakpoints };

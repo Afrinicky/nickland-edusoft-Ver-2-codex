@@ -21,7 +21,7 @@ import {
 } from '../../../src/ui';
 import { useBranding } from '../../../src/brand';
 import { PrintButton } from '../../../src/actions';
-import { studentProfileHtml, terminalReportHtml } from '../../../src/print';
+
 import { Bars, Meter, DayStrip, toneForScore } from '../../../src/charts';
 import { whatsappHref, telHref, open as openLink } from '../../../src/contact';
 import { useLayout } from '../../../src/responsive';
@@ -97,21 +97,10 @@ function StudentScreen() {
   const att = data.attendance || {};
   const rate = att.total ? Math.round(((att.present || 0) / att.total) * 100) : null;
 
-  const schoolHeader = report?.school || {
-    name: brand.school?.name, motto: brand.school?.motto, address: brand.school?.address,
-    phone: brand.contact?.phone, email: brand.contact?.email, logo: brand.logo,
-  };
-
-  const printProfile = () => studentProfileHtml({
-    student: data.profile || {
-      ...s, guardians: data.guardians,
-    },
-    school: schoolHeader,
-    term: data.term?.label,
-    fees: data.fees, canteen: data.canteen, attendance: att,
-  });
-
-  const printReport = () => terminalReportHtml({ ...(report || {}), school: schoolHeader });
+  // The office's own documents, fetched rather than rebuilt — a report card
+  // printed at the gate is the report card printed in the office.
+  const fetchProfile = () => api.studentProfileDocument(token, id);
+  const fetchReport = () => api.reportCardDocument(token, id, report?.term?.id);
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
@@ -138,9 +127,9 @@ function StudentScreen() {
           report card and their profile sheet, both printed from here. */}
       <Card>
         <Toolbar>
-          <PrintButton build={printProfile} title="Print profile" />
+          <PrintButton fetch={fetchProfile} title="Print profile" />
           {report && (report.subjects || []).length ? (
-            <PrintButton build={printReport} title="Print report card" variant="subtle" />
+            <PrintButton fetch={fetchReport} title="Print report card" variant="subtle" />
           ) : null}
           <Button
             size="sm" variant="ghost" icon="award" title="Report & remarks" full={false}
@@ -203,7 +192,7 @@ function StudentScreen() {
 
       {(data.subjects || []).length > 0 && (
         <Section title="This term's marks" icon="award" subtitle={data.term?.label}
-          action={report && (report.subjects || []).length ? <PrintButton build={printReport} title="Print" /> : null}>
+          action={report && (report.subjects || []).length ? <PrintButton fetch={fetchReport} title="Print" /> : null}>
           <View style={{ marginBottom: spacing.lg }}>
             <Bars items={(data.subjects || []).map(sub => ({
               label: sub.subject, value: sub.total_score,

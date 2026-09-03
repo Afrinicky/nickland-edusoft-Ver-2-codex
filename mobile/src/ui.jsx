@@ -2,32 +2,41 @@
 // Copyright © 2026 Nickland Sales. All rights reserved.
 //
 // Every screen in the phone app and the browser app is assembled from these.
-// Two things they are built to do that the first version did not:
+// The shapes come from one reference language and are used consistently:
 //
-//   Fit the machine they are on. The old Screen capped itself at 640px on the
-//   web and stopped — which made a laptop show a phone-shaped column down the
-//   middle of a 27-inch monitor. Width is now a decision each component takes
-//   from `useLayout()`: the same Card is full-bleed on a handset and one cell
-//   of a grid on a desktop, and a table renders as a table where there is room
-//   and as stacked rows where there is not.
+//   A surface is white, hairline-bordered, and 20px round. Structure is carried
+//   by borders, not by shadow — shadow is reserved for things that genuinely
+//   sit above the page (a sheet, a drawer, the floating action).
 //
-//   Say what kind of thing they are. A figure is set in tabular numerals, a
-//   status is a coloured pill, work not yet at the school is marked pending,
-//   and a destructive button does not look like a save. Colour follows the
-//   rules in theme.js: structure, action, judgement, data — nothing decorative.
+//   A row inside a surface is 12px round and 44px tall at minimum, because it
+//   is tapped by a thumb while its owner is holding something else.
+//
+//   Violet means "act" or "you are here". It is never decorative. A screen with
+//   six accent colours has told the reader nothing.
+//
+//   Nothing a person reads sits below 4.5:1. `colors.faint` is under the floor
+//   and is barred from text — it draws icons and rules and nothing else.
+//
+// Three things this file deliberately does NOT do, each of which it used to:
+//   • a coloured 3px stripe down the left edge of a card (an accent that is
+//     never a deliberate choice — it is what you reach for when the hierarchy
+//     is not working),
+//   • gradients behind body text,
+//   • cards nested inside cards.
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View, Text as RNText, TextInput, TouchableOpacity, ActivityIndicator,
-  StyleSheet, ScrollView, Platform, Modal as RNModal, Pressable, Image,
+  StyleSheet, ScrollView, Platform, Modal as RNModal, Pressable, Image, Animated,
 } from 'react-native';
-import { colors, palette, gradients, type, spacing, radius, shadow } from './theme';
+import { colors, palette, gradients, type, fontFamily, spacing, radius, shadow, motion, z } from './theme';
 import { useLayout, pageWidth } from './responsive';
 import { Icon } from './icons';
+import { Appear, AppearList, Press, useEased, useReducedMotion } from './motion';
 
 // ── gradients without a native dependency ───────────────────────────────────
-// The browser gets a real CSS gradient. The phone gets the base colour with two
-// soft bands laid over it, which reads as the same object without pulling in a
+// The browser gets a real CSS gradient. The phone gets the base colour with a
+// soft band laid over it, which reads as the same object without pulling in a
 // native module for the sake of a header.
 export function Gradient({ colors: stops = gradients.brand, angle = 135, style, children, pointerEvents }) {
   const [from, to] = stops;
@@ -37,10 +46,7 @@ export function Gradient({ colors: stops = gradients.brand, angle = 135, style, 
   return (
     <View pointerEvents={pointerEvents} style={[{ backgroundColor: from, overflow: 'hidden' }, web, style]}>
       {Platform.OS !== 'web' && (
-        <>
-          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: to, opacity: 0.55 }]} />
-          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: from, opacity: 0.45 }]} />
-        </>
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: to, opacity: 0.5 }]} />
       )}
       {children}
     </View>
@@ -48,17 +54,42 @@ export function Gradient({ colors: stops = gradients.brand, angle = 135, style, 
 }
 
 // ── text ────────────────────────────────────────────────────────────────────
-export function Display({ children, style, color }) { return <RNText style={[type.display, { color: color || colors.text }, style]}>{children}</RNText>; }
-export function Title({ children, style, color }) { return <RNText style={[type.title, { color: color || colors.text }, style]}>{children}</RNText>; }
-export function Heading({ children, style, color }) { return <RNText style={[type.heading, { color: color || colors.text }, style]}>{children}</RNText>; }
+export function Display({ children, style, color, numberOfLines }) { return <RNText numberOfLines={numberOfLines} style={[type.display, { color: color || colors.text }, style]}>{children}</RNText>; }
+export function Title({ children, style, color, numberOfLines }) { return <RNText numberOfLines={numberOfLines} style={[type.title, { color: color || colors.text }, style]}>{children}</RNText>; }
+export function Heading({ children, style, color, numberOfLines }) { return <RNText numberOfLines={numberOfLines} style={[type.heading, { color: color || colors.text }, style]}>{children}</RNText>; }
 export function Body({ children, style, color, numberOfLines }) { return <RNText numberOfLines={numberOfLines} style={[type.body, { color: color || colors.textSoft }, style]}>{children}</RNText>; }
 export function Muted({ children, style, numberOfLines }) { return <RNText numberOfLines={numberOfLines} style={[type.small, { color: colors.muted }, style]}>{children}</RNText>; }
-export function Micro({ children, style, color }) { return <RNText style={[type.micro, { color: color || colors.faint, textTransform: 'uppercase' }, style]}>{children}</RNText>; }
-export function Figure({ children, style, color }) { return <RNText style={[type.numeric, { color: color || colors.text }, style]}>{children}</RNText>; }
+export function Micro({ children, style, color }) { return <RNText style={[type.micro, { color: color || colors.muted, textTransform: 'uppercase' }, style]}>{children}</RNText>; }
+export function Figure({ children, style, color, numberOfLines, fit }) {
+  return (
+    <RNText
+      numberOfLines={numberOfLines}
+      style={[type.numeric, fit ? { fontSize: figureSize(children) } : null, { color: color || colors.text }, style]}
+    >{children}</RNText>
+  );
+}
 
 // Kept so screens written against the first version still render.
 export const H1 = Title;
 export const H2 = Heading;
+
+/**
+ * The size a figure has to be to fit the space it is given.
+ *
+ * "GHS 1,240.00" set at 24px in a 118px-wide tile truncates to "GHS 1,2…",
+ * and a balance a parent cannot read is a broken screen — worse than a broken
+ * one, because it looks fine. Long figures step down rather than being cut.
+ * Money is never wrapped or abbreviated: "GHS 1.2k" on a school fee is not an
+ * answer to "how much do I owe".
+ */
+export function figureSize(value, base = 24) {
+  const n = String(value ?? '').length;
+  if (n <= 6) return base;
+  if (n <= 9) return Math.round(base * 0.88);
+  if (n <= 12) return Math.round(base * 0.76);
+  if (n <= 15) return Math.round(base * 0.64);
+  return Math.round(base * 0.56);
+}
 
 // ── page frame ──────────────────────────────────────────────────────────────
 /**
@@ -69,48 +100,67 @@ export const H2 = Heading;
  *   reading  a single column of prose or a form, up to 760px
  *   full     edge to edge; for a table or a chat thread that owns the width
  */
-export function Screen({ children, scroll = true, refreshControl, variant = 'page', padded = true, style }) {
+export function Screen({ children, scroll = true, refreshControl, variant = 'page', padded = true, style, footer }) {
   const layout = useLayout();
   const width = variant === 'full' ? { width: '100%' } : pageWidth(layout, variant);
   const pad = padded ? { padding: layout.gutter, gap: spacing.md } : null;
   const Body = scroll ? ScrollView : View;
   const props = scroll
-    ? { contentContainerStyle: [styles.screenBody, width, pad, style], refreshControl, showsVerticalScrollIndicator: false }
+    ? { contentContainerStyle: [styles.screenBody, width, pad, style], refreshControl, showsVerticalScrollIndicator: false, keyboardShouldPersistTaps: 'handled' }
     : { style: [styles.screenBody, width, pad, style] };
-  return <Body style={styles.screen} {...props}>{children}</Body>;
+  return (
+    <View style={styles.screen}>
+      <Body style={styles.screenScroll} {...props}>{children}</Body>
+      {footer}
+    </View>
+  );
 }
 
 // ── surfaces ────────────────────────────────────────────────────────────────
-export function Card({ children, style, tone, padded = true, onPress, elevated }) {
-  const toneStyle = tone === 'accent' ? { borderLeftWidth: 3, borderLeftColor: colors.accent }
-    : tone === 'danger' ? { borderLeftWidth: 3, borderLeftColor: colors.danger }
-    : tone === 'success' ? { borderLeftWidth: 3, borderLeftColor: colors.success }
-    : tone === 'data' ? { borderLeftWidth: 3, borderLeftColor: colors.data }
-    : null;
+/**
+ * A white surface with a hairline border.
+ *
+ * `tone` used to draw a 3px coloured stripe down the left edge. It doesn't any
+ * more: a side stripe is what you reach for when the hierarchy is not working,
+ * and it never is the answer. A toned card now tints its whole border and
+ * background very slightly, so the emphasis reads as a property of the card
+ * rather than as a bar stuck to it.
+ */
+export function Card({ children, style, tone, padded = true, onPress, elevated, appear }) {
+  const toned = {
+    accent:  { borderColor: palette.gold400,   backgroundColor: '#FEFBF3' },
+    danger:  { borderColor: palette.red500,    backgroundColor: '#FFF8F8' },
+    success: { borderColor: palette.green500,  backgroundColor: '#F5FDF8' },
+    data:    { borderColor: palette.teal500,   backgroundColor: '#F4FDFD' },
+    primary: { borderColor: colors.primaryLine, backgroundColor: colors.primarySoft },
+  }[tone] || null;
+
   const body = (
-    <View style={[styles.card, elevated ? shadow.raised : shadow.rest, padded && styles.cardPad, toneStyle, style]}>
+    <View style={[styles.card, elevated ? shadow.raised : shadow.rest, padded && styles.cardPad, toned, style]}>
       {children}
     </View>
   );
-  if (!onPress) return body;
-  return <TouchableOpacity activeOpacity={0.82} onPress={onPress}>{body}</TouchableOpacity>;
+  const wrapped = onPress
+    ? <Press onPress={onPress} accessibilityRole="button">{body}</Press>
+    : body;
+  return appear ? <Appear delay={appear === true ? 0 : appear}>{wrapped}</Appear> : wrapped;
 }
 
 // A titled block. Saves every screen re-inventing "heading, optional action,
 // then content" and keeps the spacing between them identical everywhere.
-export function Section({ title, subtitle, action, children, style, tone, icon }) {
+export function Section({ title, subtitle, action, children, style, tone, icon, padded = true, appear }) {
   return (
-    <Card style={style} tone={tone}>
+    <Card style={style} tone={tone} padded={padded} appear={appear}>
       {(title || action) && (
         <View style={styles.sectionHead}>
-          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-            {icon ? <IconTile name={icon} size={30} /> : null}
-            <View style={{ flex: 1 }}>
-              {title ? <Heading>{title}</Heading> : null}
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md, minWidth: 0 }}>
+            {icon ? <IconTile name={icon} size={34} /> : null}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              {title ? <Heading numberOfLines={2}>{title}</Heading> : null}
               {subtitle ? <Muted style={{ marginTop: 2 }}>{subtitle}</Muted> : null}
             </View>
           </View>
-          {action || null}
+          {action ? <View style={{ flexShrink: 0 }}>{action}</View> : null}
         </View>
       )}
       {children}
@@ -120,94 +170,132 @@ export function Section({ title, subtitle, action, children, style, tone, icon }
 
 // A small tinted square holding an icon. The app's most repeated motif: it
 // gives a row a fixed left edge so a list of them reads as a column.
-export function IconTile({ name, size = 36, tone = 'primary', color }) {
-  const tones = {
-    primary: { bg: colors.primarySoft, fg: colors.primary },
-    gold: { bg: colors.accentSoft, fg: palette.gold600 },
-    success: { bg: palette.green100, fg: palette.green600 },
-    danger: { bg: palette.red100, fg: palette.red600 },
-    warning: { bg: palette.amber100, fg: palette.amber600 },
-    info: { bg: palette.blue100, fg: palette.blue600 },
-    violet: { bg: palette.violet100, fg: palette.violet500 },
-    data: { bg: '#DFF6F8', fg: palette.cyan600 },
-    chrome: { bg: 'rgba(255,255,255,0.12)', fg: '#FFFFFF' },
-  };
-  const t = tones[tone] || tones.primary;
+const TILE_TONES = {
+  primary: { bg: colors.primarySoft, fg: colors.primary },
+  gold:    { bg: palette.gold100,   fg: palette.gold600 },
+  success: { bg: palette.green100,  fg: palette.green600 },
+  danger:  { bg: palette.red100,    fg: palette.red600 },
+  warning: { bg: palette.amber100,  fg: palette.amber600 },
+  info:    { bg: colors.primarySoft, fg: colors.primary },
+  violet:  { bg: palette.violet100, fg: palette.violet700 },
+  pink:    { bg: palette.pink100,   fg: palette.pink600 },
+  data:    { bg: palette.teal100,   fg: palette.teal600 },
+  neutral: { bg: colors.borderSoft, fg: colors.muted },
+  chrome:  { bg: 'rgba(255,255,255,0.13)', fg: '#FFFFFF' },
+};
+
+export function IconTile({ name, size = 38, tone = 'primary', color }) {
+  const t = TILE_TONES[tone] || TILE_TONES.primary;
   return (
     <View style={{
-      width: size, height: size, borderRadius: size * 0.32,
-      backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center',
+      width: size, height: size, borderRadius: size * 0.3,
+      backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center', flexShrink: 0,
     }}>
-      <Icon name={name} size={size * 0.55} color={color || t.fg} />
+      <Icon name={name} size={Math.round(size * 0.52)} color={color || t.fg} />
+    </View>
+  );
+}
+
+// A numbered circle. The reference's own device for an ordered list, and the
+// only place a number is set in a filled disc.
+export function StepNumber({ n, size = 28, tone = 'primary' }) {
+  const t = TILE_TONES[tone] || TILE_TONES.primary;
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size / 2,
+      backgroundColor: tone === 'primary' ? colors.primary : t.fg,
+      alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    }}>
+      <RNText style={{ ...type.small, fontWeight: '800', color: '#fff', fontSize: size * 0.46 }}>{n}</RNText>
     </View>
   );
 }
 
 // ── buttons ─────────────────────────────────────────────────────────────────
 const BUTTON_TONES = {
-  primary: { bg: colors.primary, fg: '#fff', border: 'transparent' },
-  gold: { bg: palette.gold500, fg: '#1B1300', border: 'transparent' },
-  danger: { bg: colors.danger, fg: '#fff', border: 'transparent' },
-  success: { bg: colors.success, fg: '#fff', border: 'transparent' },
-  outline: { bg: 'transparent', fg: colors.primary, border: colors.border },
-  subtle: { bg: colors.primarySoft, fg: colors.primary, border: 'transparent' },
-  ghost: { bg: 'transparent', fg: colors.primary, border: 'transparent' },
+  primary: { bg: colors.primary,     fg: '#fff',           border: 'transparent' },
+  gold:    { bg: palette.gold500,    fg: '#241900',        border: 'transparent' },
+  danger:  { bg: colors.danger,      fg: '#fff',           border: 'transparent' },
+  success: { bg: colors.success,     fg: '#fff',           border: 'transparent' },
+  outline: { bg: 'transparent',      fg: colors.primary,   border: colors.primaryLine },
+  subtle:  { bg: colors.primarySoft, fg: colors.primary,   border: 'transparent' },
+  ghost:   { bg: 'transparent',      fg: colors.primary,   border: 'transparent' },
+  chrome:  { bg: 'rgba(255,255,255,0.14)', fg: '#fff',     border: 'rgba(255,255,255,0.22)' },
 };
 
 export function Button({
   title, onPress, disabled, busy, variant = 'primary', size = 'md',
-  icon, iconRight, full = true, style,
+  icon, iconRight, full = true, style, accessibilityLabel,
 }) {
   const t = BUTTON_TONES[variant] || BUTTON_TONES.primary;
   const dims = size === 'sm'
-    ? { paddingVertical: 8, paddingHorizontal: 12, fontSize: 13, icon: 15 }
+    ? { pv: 9,  ph: 14, fs: 13,   icon: 15, r: radius.sm }
     : size === 'lg'
-      ? { paddingVertical: 15, paddingHorizontal: 20, fontSize: 16, icon: 20 }
-      : { paddingVertical: 12, paddingHorizontal: 16, fontSize: 15, icon: 17 };
+      ? { pv: 16, ph: 22, fs: 16, icon: 20, r: radius.md }
+      : { pv: 13, ph: 18, fs: 15, icon: 17, r: radius.sm + 2 };
   const off = disabled || busy;
+
   return (
-    <TouchableOpacity
-      accessibilityRole="button"
-      onPress={onPress}
+    <Press
+      onPress={off ? undefined : onPress}
       disabled={off}
-      activeOpacity={0.85}
-      style={[
-        styles.btn,
-        {
-          backgroundColor: t.bg,
-          borderColor: t.border,
-          borderWidth: t.border === 'transparent' ? 0 : 1,
-          paddingVertical: dims.paddingVertical,
-          paddingHorizontal: dims.paddingHorizontal,
-          opacity: off ? 0.5 : 1,
-          alignSelf: full ? 'stretch' : 'flex-start',
-        },
-        variant === 'primary' && !off ? shadow.rest : null,
-        style,
-      ]}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || title}
+      accessibilityState={{ disabled: !!off, busy: !!busy }}
+      style={{ alignSelf: full ? 'stretch' : 'flex-start' }}
     >
-      {busy ? <ActivityIndicator size="small" color={t.fg} /> : (icon ? <Icon name={icon} size={dims.icon} color={t.fg} /> : null)}
-      <RNText style={{ color: t.fg, fontWeight: '700', fontSize: dims.fontSize, letterSpacing: -0.1 }}>{title}</RNText>
-      {iconRight ? <Icon name={iconRight} size={dims.icon} color={t.fg} /> : null}
-    </TouchableOpacity>
+      <View
+        style={[
+          styles.btn,
+          {
+            backgroundColor: t.bg,
+            borderColor: t.border,
+            borderWidth: t.border === 'transparent' ? 0 : 1,
+            paddingVertical: dims.pv,
+            paddingHorizontal: dims.ph,
+            borderRadius: dims.r,
+            opacity: off ? 0.45 : 1,
+          },
+          variant === 'primary' && !off ? shadow.rest : null,
+          style,
+        ]}
+      >
+        {busy
+          ? <ActivityIndicator size="small" color={t.fg} />
+          : (icon ? <Icon name={icon} size={dims.icon} color={t.fg} /> : null)}
+        <RNText numberOfLines={1} style={{ ...type.body, color: t.fg, fontWeight: '700', fontSize: dims.fs, letterSpacing: -0.1 }}>
+          {title}
+        </RNText>
+        {iconRight ? <Icon name={iconRight} size={dims.icon} color={t.fg} /> : null}
+      </View>
+    </Press>
   );
 }
 
-export function IconButton({ name, onPress, tone = 'subtle', size = 38, color, disabled, label }) {
-  const bg = tone === 'chrome' ? 'rgba(255,255,255,0.12)' : tone === 'plain' ? 'transparent' : colors.primarySoft;
-  const fg = color || (tone === 'chrome' ? '#fff' : colors.primary);
+export function IconButton({ name, onPress, tone = 'subtle', size = 40, color, disabled, label, badge }) {
+  const t = tone === 'chrome'
+    ? { bg: 'rgba(255,255,255,0.13)', fg: '#fff' }
+    : tone === 'plain'
+      ? { bg: 'transparent', fg: colors.muted }
+      : tone === 'surface'
+        ? { bg: colors.card, fg: colors.text }
+        : { bg: colors.primarySoft, fg: colors.primary };
   return (
-    <TouchableOpacity
-      accessibilityRole="button" accessibilityLabel={label}
-      onPress={onPress} disabled={disabled} activeOpacity={0.75}
-      style={{
-        width: size, height: size, borderRadius: size * 0.32,
-        backgroundColor: bg, alignItems: 'center', justifyContent: 'center',
-        opacity: disabled ? 0.45 : 1,
-      }}
+    <Press
+      onPress={disabled ? undefined : onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={{ opacity: disabled ? 0.45 : 1 }}
     >
-      <Icon name={name} size={size * 0.5} color={fg} />
-    </TouchableOpacity>
+      <View style={{
+        width: size, height: size, borderRadius: size * 0.3,
+        backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Icon name={name} size={Math.round(size * 0.48)} color={color || t.fg} />
+        {badge ? <View style={styles.dotBadge} /> : null}
+      </View>
+    </Press>
   );
 }
 
@@ -217,14 +305,14 @@ export function Fab({ name = 'plus', label, onPress }) {
   const layout = useLayout();
   if (!layout.isPhone) return null;
   return (
-    <TouchableOpacity
-      accessibilityRole="button" accessibilityLabel={label}
-      onPress={onPress} activeOpacity={0.88}
-      style={[styles.fab, shadow.floating]}
-    >
-      <Icon name={name} size={22} color="#fff" />
-      {label ? <RNText style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>{label}</RNText> : null}
-    </TouchableOpacity>
+    <Appear from="down" distance={16} delay={120}>
+      <Press onPress={onPress} accessibilityRole="button" accessibilityLabel={label} style={styles.fabWrap}>
+        <View style={[styles.fab, shadow.floating]}>
+          <Icon name={name} size={22} color="#fff" />
+          {label ? <RNText style={{ ...type.body, color: '#fff', fontWeight: '700' }}>{label}</RNText> : null}
+        </View>
+      </Press>
+    </Appear>
   );
 }
 
@@ -233,27 +321,29 @@ export function Field({ label, value, onChangeText, hint, error, icon, right, st
   const [focused, setFocused] = useState(false);
   return (
     <View style={[{ marginBottom: spacing.md }, style]}>
-      {label ? <Micro style={{ marginBottom: 6, color: colors.muted }}>{label}</Micro> : null}
+      {label ? (
+        <RNText style={[type.small, { color: colors.textSoft, fontWeight: '600', marginBottom: 7 }]}>{label}</RNText>
+      ) : null}
       <View style={[
         styles.inputWrap,
-        focused && { borderColor: colors.primary, backgroundColor: '#fff' },
-        error && { borderColor: colors.danger },
+        focused && { borderColor: colors.primary, backgroundColor: '#fff', ...shadow.rest },
+        error && { borderColor: colors.danger, backgroundColor: '#FFFAFA' },
       ]}>
         {icon ? <Icon name={icon} size={17} color={focused ? colors.primary : colors.faint} /> : null}
         <TextInput
-          style={[styles.input, inputStyle]}
-          value={value == null ? '' : String(value)}
+          value={value}
           onChangeText={onChangeText}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          placeholderTextColor={colors.faint}
-          autoCapitalize="none"
+          placeholderTextColor={colors.muted}
+          style={[styles.input, inputStyle]}
           {...rest}
         />
         {right || null}
       </View>
-      {error ? <Muted style={{ color: colors.danger, marginTop: 4 }}>{error}</Muted>
-        : hint ? <Muted style={{ marginTop: 4 }}>{hint}</Muted> : null}
+      {error
+        ? <RNText style={[type.small, { color: colors.danger, marginTop: 5 }]}>{error}</RNText>
+        : hint ? <Muted style={{ marginTop: 5 }}>{hint}</Muted> : null}
     </View>
   );
 }
@@ -264,57 +354,53 @@ export function TextArea(props) {
       {...props}
       multiline
       numberOfLines={props.numberOfLines || 4}
-      autoCapitalize="sentences"
-      inputStyle={[{ minHeight: (props.numberOfLines || 4) * 22, textAlignVertical: 'top', paddingTop: 6 }, props.inputStyle]}
+      inputStyle={[{ minHeight: (props.numberOfLines || 4) * 21, paddingTop: 10, textAlignVertical: 'top' }, props.inputStyle]}
     />
   );
 }
 
 /**
- * A picker built from pills rather than a native select.
- *
- * A native picker means a platform module and three different behaviours; a
- * teacher choosing between six classes is better served by seeing all six.
- * Long lists fall back to a scrolling row.
+ * A choice, as a row of pills. Below four options it lays out flat; above it
+ * wraps. A native picker was rejected on purpose: on Android it is a modal
+ * with a different visual language, and a teacher choosing a class fifty times
+ * a day should not be opening a dialog to do it.
  */
 export function Select({ label, value, options, onChange, hint, empty = 'Nothing to choose from.', columns }) {
-  const layout = useLayout();
-  const wrap = columns || (layout.isPhone ? 2 : 4);
-  const opts = options || [];
+  const list = options || [];
   return (
     <View style={{ marginBottom: spacing.md }}>
-      {label ? <Micro style={{ marginBottom: 6, color: colors.muted }}>{label}</Micro> : null}
-      {opts.length === 0
-        ? <Muted>{empty}</Muted>
-        : (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {opts.map((o) => {
-              const active = String(o.value) === String(value);
-              return (
-                <TouchableOpacity
-                  key={String(o.value)}
-                  accessibilityRole="button"
-                  onPress={() => onChange(o.value)}
-                  activeOpacity={0.8}
-                  style={[
-                    styles.selectPill,
-                    { minWidth: wrap <= 2 ? '48%' : undefined },
-                    active && { backgroundColor: colors.primary, borderColor: colors.primary },
-                  ]}
-                >
-                  <RNText numberOfLines={1} style={{ color: active ? '#fff' : colors.textSoft, fontWeight: '600', fontSize: 14 }}>
-                    {o.label}
-                  </RNText>
+      {label ? (
+        <RNText style={[type.small, { color: colors.textSoft, fontWeight: '600', marginBottom: 7 }]}>{label}</RNText>
+      ) : null}
+      {list.length === 0 ? <Muted>{empty}</Muted> : (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>
+          {list.map(o => {
+            const on = String(o.value) === String(value);
+            return (
+              <Press
+                key={String(o.value)}
+                onPress={() => onChange(o.value)}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: on }}
+                style={columns ? { flexBasis: `${Math.floor(100 / columns) - 2}%`, flexGrow: 1 } : null}
+              >
+                <View style={[styles.choice, on && styles.choiceOn]}>
+                  <RNText numberOfLines={1} style={{
+                    ...type.small, fontWeight: '700',
+                    color: on ? '#fff' : colors.textSoft,
+                  }}>{o.label}</RNText>
                   {o.note ? (
-                    <RNText style={{ color: active ? 'rgba(255,255,255,0.75)' : colors.faint, fontSize: 11, fontWeight: '600' }}>
-                      {o.note}
-                    </RNText>
+                    <RNText numberOfLines={1} style={{
+                      ...type.small, fontSize: 11,
+                      color: on ? 'rgba(255,255,255,0.78)' : colors.muted,
+                    }}>{o.note}</RNText>
                   ) : null}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
+                </View>
+              </Press>
+            );
+          })}
+        </View>
+      )}
       {hint ? <Muted style={{ marginTop: 6 }}>{hint}</Muted> : null}
     </View>
   );
@@ -322,22 +408,25 @@ export function Select({ label, value, options, onChange, hint, empty = 'Nothing
 
 export function SearchField({ value, onChangeText, placeholder = 'Search…', onClear }) {
   return (
-    <View style={styles.searchWrap}>
+    <View style={styles.search}>
       <Icon name="search" size={17} color={colors.faint} />
       <TextInput
-        style={[styles.input, { paddingVertical: Platform.OS === 'web' ? 10 : 8 }]}
-        value={value} onChangeText={onChangeText}
-        placeholder={placeholder} placeholderTextColor={colors.faint}
-        autoCapitalize="none" returnKeyType="search"
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={colors.muted}
+        style={[styles.input, { paddingVertical: Platform.OS === 'web' ? 11 : 9 }]}
+        returnKeyType="search"
+        accessibilityLabel={placeholder}
       />
-      {value ? <IconButton name="close" size={28} tone="plain" color={colors.faint} onPress={() => (onClear ? onClear() : onChangeText(''))} label="Clear search" /> : null}
+      {value ? (
+        <IconButton name="close" size={26} tone="plain" color={colors.muted}
+          onPress={() => (onClear ? onClear() : onChangeText(''))} label="Clear search" />
+      ) : null}
     </View>
   );
 }
 
-// A date as typed text, validated on the way out. A native date picker is a
-// platform module per platform; a school types 2026-09-14 faster than it
-// spins three wheels.
 export function DateField({ label, value, onChange, hint }) {
   return (
     <Field
@@ -352,76 +441,104 @@ export function DateField({ label, value, onChange, hint }) {
 export function Row({ left, right, onPress, style }) {
   const body = (
     <View style={[styles.row, style]}>
-      <View style={{ flex: 1 }}>{left}</View>
+      <View style={{ flex: 1, minWidth: 0 }}>{left}</View>
       <View style={{ alignItems: 'flex-end' }}>{right}</View>
     </View>
   );
-  return onPress ? <TouchableOpacity activeOpacity={0.7} onPress={onPress}>{body}</TouchableOpacity> : body;
+  return onPress ? <Press onPress={onPress}>{body}</Press> : body;
 }
 
-export function ListRow({ title, subtitle, meta, icon, iconTone, right, onPress, badge, avatar, style }) {
+/**
+ * The workhorse row: a mark on the left, a name and a line of detail, and
+ * whatever the row is worth on the right. A face beats an icon wherever there
+ * is one — a teacher scanning a roll recognises the photograph long before the
+ * name.
+ */
+export function ListRow({ title, subtitle, meta, icon, iconTone, right, onPress, badge, avatar, style, last }) {
   const body = (
-    <View style={[styles.listRow, style]}>
-      {/* A face beats an icon wherever there is one: a teacher scanning a roll
-          for a child recognises the photograph long before the name. */}
+    <View style={[styles.listRow, !last && styles.listRowDivider, style]}>
       {avatar || (icon ? <IconTile name={icon} tone={iconTone} size={38} /> : null)}
       <View style={{ flex: 1, minWidth: 0 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <RNText numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text, flexShrink: 1 }}>{title}</RNText>
-          {badge || null}
+          <RNText numberOfLines={2} style={{ ...type.body, fontWeight: '700', color: colors.text, flexShrink: 1 }}>{title}</RNText>
+          {badge ? <View style={{ flexShrink: 0 }}>{badge}</View> : null}
         </View>
-        {subtitle ? <Muted numberOfLines={1} style={{ marginTop: 1 }}>{subtitle}</Muted> : null}
+        {subtitle ? <Muted numberOfLines={1} style={{ marginTop: 2 }}>{subtitle}</Muted> : null}
         {meta ? <View style={{ marginTop: 6 }}>{meta}</View> : null}
       </View>
-      {right ? <View style={{ alignItems: 'flex-end' }}>{right}</View> : null}
+      {right ? <View style={{ alignItems: 'flex-end', flexShrink: 0 }}>{right}</View> : null}
       {onPress ? <Icon name="chevron" size={16} color={colors.faint} /> : null}
     </View>
   );
-  return onPress ? <TouchableOpacity activeOpacity={0.72} onPress={onPress}>{body}</TouchableOpacity> : body;
+  return onPress ? <Press onPress={onPress} accessibilityRole="button">{body}</Press> : body;
+}
+
+/**
+ * A settings-style row: tinted icon, label, chevron. Distinct from ListRow —
+ * this one is navigation, so it has no subtitle, no figure, and a fixed height
+ * that makes a column of them scan as a menu rather than as data.
+ */
+export function MenuRow({ icon, label, iconTone = 'primary', onPress, right, danger, last, hint }) {
+  return (
+    <Press onPress={onPress} accessibilityRole="button" accessibilityLabel={label}>
+      <View style={[styles.menuRow, !last && styles.listRowDivider]}>
+        <IconTile name={icon} tone={danger ? 'danger' : iconTone} size={34} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <RNText numberOfLines={1} style={{
+            ...type.body, fontWeight: '600',
+            color: danger ? colors.danger : colors.text,
+          }}>{label}</RNText>
+          {hint ? <Muted numberOfLines={1} style={{ marginTop: 1 }}>{hint}</Muted> : null}
+        </View>
+        {right || null}
+        {onPress && !danger ? <Icon name="chevron" size={15} color={colors.faint} /> : null}
+      </View>
+    </Press>
+  );
 }
 
 export function Divider({ style }) { return <View style={[styles.divider, style]} />; }
 
 /**
  * A table where there is room for one, and stacked rows where there is not.
- *
- * `columns` is [{ key, label, width?, align?, render? }]. On a phone the first
- * column becomes the row's title and the rest become labelled lines beneath it,
- * so a broadsheet is readable on a handset instead of scrolling sideways
- * forever.
+ * A broadsheet of thirteen subjects has to be readable on a handset, and a
+ * table squeezed to 360px is not it.
  */
 export function DataTable({ columns, rows, keyExtractor, onRowPress, empty = 'Nothing to show.', dense }) {
   const layout = useLayout();
-  if (!rows || rows.length === 0) return <Muted>{empty}</Muted>;
   const key = keyExtractor || ((r, i) => String(r.id ?? i));
 
+  if (!rows || rows.length === 0) {
+    return <View style={{ paddingVertical: spacing.lg }}><Muted>{empty}</Muted></View>;
+  }
+
   if (!layout.canTable) {
-    const [first, ...rest] = columns;
     return (
-      <View>
+      <AppearList style={{ gap: 8 }}>
         {rows.map((r, i) => {
           const body = (
-            <View key={key(r, i)} style={styles.stackRow}>
-              <RNText style={{ ...type.body, fontWeight: '700', color: colors.text }}>
-                {first.render ? first.render(r) : r[first.key]}
-              </RNText>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 6 }}>
-                {rest.map(c => (
-                  <View key={c.key} style={{ minWidth: 92 }}>
-                    <Micro>{c.label}</Micro>
-                    <RNText style={{ ...type.small, color: colors.textSoft, marginTop: 1 }}>
-                      {c.render ? c.render(r) : (r[c.key] ?? '—')}
-                    </RNText>
+            <View style={styles.stackCard}>
+              {columns.map(c => {
+                const v = c.render ? c.render(r) : r[c.key];
+                if (v == null || v === '') return null;
+                return (
+                  <View key={c.key} style={styles.stackLine}>
+                    <Micro style={{ flexShrink: 0 }}>{c.label}</Micro>
+                    <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                      {typeof v === 'string' || typeof v === 'number'
+                        ? <RNText numberOfLines={2} style={{ ...type.small, fontWeight: '600', color: colors.text, textAlign: 'right' }}>{v}</RNText>
+                        : v}
+                    </View>
                   </View>
-                ))}
-              </View>
+                );
+              })}
             </View>
           );
           return onRowPress
-            ? <TouchableOpacity key={key(r, i)} activeOpacity={0.72} onPress={() => onRowPress(r)}>{body}</TouchableOpacity>
-            : body;
+            ? <Press key={key(r, i)} onPress={() => onRowPress(r)}>{body}</Press>
+            : <View key={key(r, i)}>{body}</View>;
         })}
-      </View>
+      </AppearList>
     );
   }
 
@@ -430,31 +547,33 @@ export function DataTable({ columns, rows, keyExtractor, onRowPress, empty = 'No
       <View style={{ flex: 1, minWidth: '100%' }}>
         <View style={styles.tableHead}>
           {columns.map(c => (
-            <View key={c.key} style={{ width: c.width, flex: c.width ? undefined : 1, paddingHorizontal: 6 }}>
-              <Micro style={{ textAlign: c.align || 'left' }}>{c.label}</Micro>
+            <View key={c.key} style={{ width: c.width, flex: c.width ? undefined : 1, alignItems: align(c.align) }}>
+              <Micro>{c.label}</Micro>
             </View>
           ))}
         </View>
         {rows.map((r, i) => {
           const body = (
-            <View style={[styles.tableRow, dense && { paddingVertical: 7 }]}>
+            <View style={[styles.tableRow, dense && { paddingVertical: 8 }]}>
               {columns.map(c => (
-                <View key={c.key} style={{ width: c.width, flex: c.width ? undefined : 1, paddingHorizontal: 6 }}>
+                <View key={c.key} style={{ width: c.width, flex: c.width ? undefined : 1, alignItems: align(c.align) }}>
                   {c.render
-                    ? <View style={{ alignItems: c.align === 'right' ? 'flex-end' : c.align === 'center' ? 'center' : 'flex-start' }}>{c.render(r)}</View>
-                    : <RNText numberOfLines={1} style={{ ...type.small, color: colors.textSoft, textAlign: c.align || 'left' }}>{r[c.key] ?? '—'}</RNText>}
+                    ? c.render(r)
+                    : <RNText numberOfLines={1} style={{ ...type.small, color: colors.textSoft, fontWeight: '500' }}>{r[c.key] ?? '—'}</RNText>}
                 </View>
               ))}
             </View>
           );
           return onRowPress
-            ? <TouchableOpacity key={key(r, i)} activeOpacity={0.72} onPress={() => onRowPress(r)}>{body}</TouchableOpacity>
+            ? <Press key={key(r, i)} onPress={() => onRowPress(r)}>{body}</Press>
             : <View key={key(r, i)}>{body}</View>;
         })}
       </View>
     </ScrollView>
   );
 }
+
+const align = (a) => (a === 'right' ? 'flex-end' : a === 'center' ? 'center' : 'flex-start');
 
 // ── figures ─────────────────────────────────────────────────────────────────
 export function StatCard({ label, value, tone, icon, note, onPress, style }) {
@@ -465,66 +584,166 @@ export function StatCard({ label, value, tone, icon, note, onPress, style }) {
     : colors.text;
   const body = (
     <View style={[styles.stat, shadow.rest, style]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Micro>{label}</Micro>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <Micro numberOfLines={1} style={{ flexShrink: 1 }}>{label}</Micro>
         {icon ? <Icon name={icon} size={16} color={colors.faint} /> : null}
       </View>
-      <Figure color={fg} style={{ marginTop: 8 }}>{value}</Figure>
-      {note ? <Muted style={{ marginTop: 2 }}>{note}</Muted> : null}
+      <RNText
+        numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}
+        style={{ ...type.numeric, fontSize: figureSize(value), color: fg, marginTop: 9 }}
+      >{value}</RNText>
+      {note ? <Muted numberOfLines={2} style={{ marginTop: 3 }}>{note}</Muted> : null}
     </View>
   );
-  return onPress ? <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={{ flexGrow: 1, flexBasis: 0 }}>{body}</TouchableOpacity> : body;
+  return onPress
+    ? <Press onPress={onPress} accessibilityRole="button" style={{ flexGrow: 1 }}>{body}</Press>
+    : body;
 }
 
-// Lays cards out in the number of columns the window can take.
-//
-// The width is measured rather than expressed as a percentage. A percentage
-// basis of 25% for four columns plus three 12px gaps comes to more than the
-// container, so the fourth card wrapped onto its own line and every four-card
-// row in the app rendered as three-and-one. Measuring costs one extra render
-// on mount and gets it right at every window size.
-export function Grid({ children, min = 160, gap = spacing.md, columns }) {
+/**
+ * Lays cards out in the number of columns the window can take.
+ *
+ * The width is measured rather than expressed as a percentage. A percentage
+ * basis of 25% for four columns plus three 12px gaps comes to more than the
+ * container, so the fourth card wrapped onto its own line and every four-card
+ * row in the app rendered as three-and-one.
+ */
+export function Grid({ children, min = 168, gap = spacing.md, columns, stagger = true }) {
   const layout = useLayout();
   const [width, setWidth] = useState(0);
   const items = React.Children.toArray(children).filter(Boolean);
   const wanted = columns || layout.columns;
 
-  // Never more columns than the content can bear at `min`, and never more than
-  // there are cards — three cards across four columns leaves a hole.
   const fit = width > 0 ? Math.max(1, Math.floor((width + gap) / (min + gap))) : wanted;
   const cols = Math.max(1, Math.min(wanted, fit, items.length || 1));
   const basis = width > 0 ? (width - gap * (cols - 1)) / cols : undefined;
 
   return (
-    <View
-      onLayout={e => setWidth(e.nativeEvent.layout.width)}
-      style={{ flexDirection: 'row', flexWrap: 'wrap', gap }}
-    >
-      {items.map((child, i) => (
-        <View
-          key={i}
-          style={basis
-            ? { width: basis, flexGrow: 0, flexShrink: 0 }
-            : { flexGrow: 1, flexBasis: `${Math.floor(1000 / cols) / 10}%`, minWidth: min }}
-        >
-          {child}
-        </View>
-      ))}
+    <View onLayout={e => setWidth(e.nativeEvent.layout.width)} style={{ flexDirection: 'row', flexWrap: 'wrap', gap }}>
+      {items.map((child, i) => {
+        const cell = (
+          <View
+            key={i}
+            style={basis
+              ? { width: basis, flexGrow: 0, flexShrink: 0 }
+              : { flexGrow: 1, flexBasis: `${Math.floor(1000 / cols) / 10}%`, minWidth: min }}
+          >
+            {child}
+          </View>
+        );
+        return stagger
+          ? <Appear key={i} delay={Math.min(i, motion.staggerMax) * motion.stagger} distance={8}
+              style={basis ? { width: basis } : { flexGrow: 1, flexBasis: `${Math.floor(1000 / cols) / 10}%`, minWidth: min }}>
+              {child}
+            </Appear>
+          : cell;
+      })}
     </View>
   );
 }
 
-export function ProgressBar({ value, max = 100, tone = 'primary', height = 8, label }) {
+export function ProgressBar({ value, max = 100, tone = 'primary', height = 9, label }) {
   const pct = Math.max(0, Math.min(100, max > 0 ? (value / max) * 100 : 0));
+  const w = useEased(pct);
   const fill = tone === 'success' ? colors.success : tone === 'danger' ? colors.danger
     : tone === 'warning' ? colors.warning : colors.primary;
   return (
     <View>
-      {label ? <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-        <Muted>{label}</Muted><Muted>{Math.round(pct)}%</Muted>
-      </View> : null}
-      <View style={{ height, borderRadius: height, backgroundColor: colors.borderSoft, overflow: 'hidden' }}>
-        <View style={{ width: `${pct}%`, height: '100%', borderRadius: height, backgroundColor: fill }} />
+      {label ? (
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
+          <Muted numberOfLines={1} style={{ flexShrink: 1 }}>{label}</Muted>
+          <RNText style={{ ...type.small, fontWeight: '700', color: colors.text, fontVariant: ['tabular-nums'] }}>{Math.round(pct)}%</RNText>
+        </View>
+      ) : null}
+      <View
+        accessibilityRole="progressbar"
+        accessibilityValue={{ min: 0, max: 100, now: Math.round(pct) }}
+        style={{ height, borderRadius: height, backgroundColor: colors.borderSoft, overflow: 'hidden' }}
+      >
+        <Animated.View style={{
+          width: w.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] }),
+          height: '100%', borderRadius: height, backgroundColor: fill,
+        }} />
+      </View>
+    </View>
+  );
+}
+
+/**
+ * A proportion as a ring, for the one figure a screen is really about.
+ *
+ * Drawn as a dial of segments rather than as two clipped half-discs. The
+ * half-disc trick is the usual way to do this without SVG and it needs
+ * `transformOrigin`, which the React Native version this app ships does not
+ * support — the first build of this component rendered a full ring at 0%,
+ * which is the worst possible failure for a progress indicator. Segments have
+ * no such trap: each one is a bar placed by trigonometry, so what you compute
+ * is exactly what is drawn, on a handset and in a browser alike.
+ */
+export function ProgressRing({ value = 0, size = 76, thickness = 8, tone = 'primary', label, segments = 44 }) {
+  const reduced = useReducedMotion();
+  const pct = Math.max(0, Math.min(100, Number(value) || 0));
+  const fill = tone === 'success' ? colors.success : tone === 'danger' ? colors.danger
+    : tone === 'warning' ? colors.warning : tone === 'chrome' ? '#fff' : colors.primary;
+  const track = tone === 'chrome' ? 'rgba(255,255,255,0.24)' : colors.borderSoft;
+
+  // Sweeps up to its value once, so the figure lands rather than appears.
+  const [shown, setShown] = useState(reduced ? pct : 0);
+  const raf = useRef(null);
+  React.useEffect(() => {
+    if (reduced) { setShown(pct); return undefined; }
+    const from = shown; const t0 = Date.now();
+    const tick = () => {
+      const p = Math.min(1, (Date.now() - t0) / motion.slow);
+      setShown(from + (pct - from) * (1 - Math.pow(1 - p, 4)));
+      if (p < 1) raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+    return () => { if (raf.current) cancelAnimationFrame(raf.current); };
+    // `shown` is read once as a starting point, deliberately not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pct, reduced]);
+
+  const lit = Math.round((shown / 100) * segments);
+  const r = (size - thickness) / 2;
+  const len = Math.max(4, thickness * 1.05);
+
+  return (
+    <View
+      style={{ width: size, height: size }}
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      accessibilityValue={{ min: 0, max: 100, now: Math.round(pct) }}
+    >
+      {Array.from({ length: segments }).map((_, i) => {
+        // Twelve o'clock is 0 and it runs clockwise, the way a person reads a
+        // dial rather than the way trigonometry numbers one.
+        const a = (i / segments) * Math.PI * 2 - Math.PI / 2;
+        return (
+          <View
+            key={i}
+            style={{
+              position: 'absolute',
+              left: size / 2 + Math.cos(a) * r - len / 2,
+              top: size / 2 + Math.sin(a) * r - thickness / 2,
+              width: len, height: thickness, borderRadius: thickness / 2,
+              backgroundColor: i < lit ? fill : track,
+              transform: [{ rotateZ: `${(a * 180) / Math.PI + 90}deg` }],
+            }}
+          />
+        );
+      })}
+      <View style={{ ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' }}>
+        <RNText style={{
+          ...type.body, fontWeight: '800', fontSize: Math.round(size * 0.25),
+          color: tone === 'chrome' ? '#fff' : colors.text, fontVariant: ['tabular-nums'],
+        }}>{Math.round(shown)}%</RNText>
+        {label ? (
+          <RNText numberOfLines={1} style={{
+            ...type.small, fontSize: 9.5,
+            color: tone === 'chrome' ? 'rgba(255,255,255,0.72)' : colors.muted,
+          }}>{label}</RNText>
+        ) : null}
       </View>
     </View>
   );
@@ -532,15 +751,16 @@ export function ProgressBar({ value, max = 100, tone = 'primary', height = 8, la
 
 // ── labels ──────────────────────────────────────────────────────────────────
 const BADGE_TONES = {
-  neutral: { bg: colors.borderSoft, fg: colors.muted },
+  neutral: { bg: colors.borderSoft,  fg: colors.muted },
   primary: { bg: colors.primarySoft, fg: colors.primary },
-  success: { bg: palette.green100, fg: palette.green600 },
-  danger: { bg: palette.red100, fg: palette.red600 },
-  warning: { bg: palette.amber100, fg: palette.amber600 },
-  info: { bg: palette.blue100, fg: palette.blue600 },
-  gold: { bg: colors.accentSoft, fg: palette.gold600 },
-  data: { bg: '#DFF6F8', fg: palette.cyan600 },
-  chrome: { bg: 'rgba(255,255,255,0.14)', fg: '#fff' },
+  success: { bg: palette.green100,   fg: palette.green700 },
+  danger:  { bg: palette.red100,     fg: palette.red700 },
+  warning: { bg: palette.amber100,   fg: palette.amber700 },
+  info:    { bg: colors.primarySoft, fg: colors.primary },
+  gold:    { bg: palette.gold100,    fg: palette.gold700 },
+  data:    { bg: palette.teal100,    fg: palette.teal700 },
+  pink:    { bg: palette.pink100,    fg: palette.pink600 },
+  chrome:  { bg: 'rgba(255,255,255,0.16)', fg: '#fff' },
 };
 
 export function Badge({ label, tone = 'neutral', icon, style }) {
@@ -548,7 +768,7 @@ export function Badge({ label, tone = 'neutral', icon, style }) {
   return (
     <View style={[styles.badge, { backgroundColor: t.bg }, style]}>
       {icon ? <Icon name={icon} size={11} color={t.fg} /> : null}
-      <RNText style={{ color: t.fg, fontSize: 11, fontWeight: '800', letterSpacing: 0.3 }}>{label}</RNText>
+      <RNText numberOfLines={1} style={{ ...type.small, fontSize: 11, color: t.fg, fontWeight: '700', letterSpacing: 0.1 }}>{label}</RNText>
     </View>
   );
 }
@@ -560,87 +780,202 @@ export function PendingBadge({ label = 'Waiting to sync' }) {
   return <Badge tone="data" icon="refresh" label={label} />;
 }
 
+/**
+ * Two to four mutually exclusive views, with the selection sliding rather than
+ * jumping. Above four, use `Tabs` — this one divides its width evenly and at
+ * five options nothing is readable.
+ */
 export function SegmentedControl({ value, options, onChange, style }) {
+  const [w, setW] = useState(0);
+  const idx = Math.max(0, options.findIndex(o => String(o.value) === String(value)));
+  const x = useEased(idx);
+  const cell = options.length ? (w - 8) / options.length : 0;
+
   return (
-    <View style={[styles.segment, style]}>
+    <View style={[styles.segment, style]} onLayout={e => setW(e.nativeEvent.layout.width)}>
+      {cell > 0 ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.segmentThumb, shadow.rest, {
+            width: cell,
+            transform: [{ translateX: x.interpolate({ inputRange: [0, 1], outputRange: [0, cell] }) }],
+          }]}
+        />
+      ) : null}
       {options.map(o => {
-        const active = String(o.value) === String(value);
+        const on = String(o.value) === String(value);
         return (
-          <TouchableOpacity
-            key={String(o.value)} accessibilityRole="tab" accessibilityState={{ selected: active }}
-            onPress={() => onChange(o.value)} activeOpacity={0.8}
-            style={[styles.segmentItem, active && styles.segmentItemActive]}
+          <Pressable
+            key={String(o.value)} accessibilityRole="tab" accessibilityState={{ selected: on }}
+            onPress={() => onChange(o.value)} style={styles.segmentItem}
           >
-            {o.icon ? <Icon name={o.icon} size={15} color={active ? colors.primary : colors.muted} /> : null}
-            <RNText numberOfLines={1} style={{ fontSize: 13.5, fontWeight: '700', color: active ? colors.primary : colors.muted }}>
+            {o.icon ? <Icon name={o.icon} size={15} color={on ? colors.primary : colors.muted} /> : null}
+            <RNText numberOfLines={1} style={{ ...type.small, fontWeight: '700', color: on ? colors.primary : colors.muted }}>
               {o.label}
             </RNText>
-          </TouchableOpacity>
+          </Pressable>
         );
       })}
     </View>
   );
 }
 
-// A face where there is one, initials where there is not.
-//
-// The `photo` prop has been on this component since the first version and was
-// never once read: every screen passed a pupil's or a teacher's picture in and
-// got two letters in a circle back. It is read now — the server sends the image
-// itself rather than a path into the school's hard disk — and a photograph that
-// fails to decode falls back to the initials rather than to an empty hole.
+/**
+ * Many views. Scrolls instead of squeezing — a child's record has eight
+ * sections and a segmented control at eight is unreadable.
+ */
+export function Tabs({ value, options, onChange, style }) {
+  return (
+    <ScrollView
+      horizontal showsHorizontalScrollIndicator={false}
+      contentContainerStyle={[{ gap: 7, paddingVertical: 2 }, style]}
+    >
+      {options.map(o => {
+        const on = String(o.value) === String(value);
+        return (
+          <Press key={String(o.value)} onPress={() => onChange(o.value)}
+            accessibilityRole="tab" accessibilityState={{ selected: on }}>
+            <View style={[styles.tab, on && styles.tabOn]}>
+              {o.icon ? <Icon name={o.icon} size={15} color={on ? '#fff' : colors.muted} /> : null}
+              <RNText numberOfLines={1} style={{ ...type.small, fontWeight: '700', color: on ? '#fff' : colors.textSoft }}>
+                {o.label}
+              </RNText>
+              {o.count != null && o.count !== 0 ? (
+                <View style={[styles.tabCount, on && { backgroundColor: 'rgba(255,255,255,0.26)' }]}>
+                  <RNText style={{ ...type.small, fontSize: 10.5, fontWeight: '800', color: on ? '#fff' : colors.primary }}>{o.count}</RNText>
+                </View>
+              ) : null}
+            </View>
+          </Press>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+// The pager dots under an onboarding slide. The active one is a stadium, not a
+// bigger circle — it reads as "you are here" rather than as a different dot.
+export function Dots({ count, index, tone = 'primary' }) {
+  const on = tone === 'chrome' ? '#fff' : colors.primary;
+  const off = tone === 'chrome' ? 'rgba(255,255,255,0.34)' : colors.primaryLine;
+  return (
+    <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }} accessibilityLabel={`Step ${index + 1} of ${count}`}>
+      {Array.from({ length: count }).map((_, i) => (
+        <View key={i} style={{
+          height: 7, width: i === index ? 22 : 7, borderRadius: 7,
+          backgroundColor: i === index ? on : off,
+        }} />
+      ))}
+    </View>
+  );
+}
+
+// ── selection ───────────────────────────────────────────────────────────────
+// A tick box that is a real target: the whole row is pressable, not a 16px
+// square a teacher has to aim at while forty children file past.
+export function CheckRow({ checked, onToggle, title, subtitle, right, avatar, disabled, tone }) {
+  return (
+    <Press
+      onPress={disabled ? undefined : onToggle} disabled={disabled}
+      accessibilityRole="checkbox" accessibilityState={{ checked: !!checked, disabled: !!disabled }}
+    >
+      <View style={[styles.checkRow, checked && styles.checkRowOn, disabled && { opacity: 0.5 }]}>
+        <View style={[styles.box, checked && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
+          {checked ? <Icon name="tick" size={13} color="#fff" /> : null}
+        </View>
+        {avatar || null}
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <RNText numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text }}>{title}</RNText>
+          {subtitle ? <Muted numberOfLines={1}>{subtitle}</Muted> : null}
+        </View>
+        {right || null}
+      </View>
+    </Press>
+  );
+}
+
+/** One of several mutually exclusive options, as a bordered row with a radio. */
+export function ChoiceRow({ selected, onSelect, title, subtitle, right, badge, disabled }) {
+  return (
+    <Press onPress={disabled ? undefined : onSelect} disabled={disabled}
+      accessibilityRole="radio" accessibilityState={{ selected: !!selected, disabled: !!disabled }}>
+      <View style={[styles.choiceRow, selected && styles.choiceRowOn, disabled && { opacity: 0.5 }]}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+            <RNText numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text, flexShrink: 1 }}>{title}</RNText>
+            {badge || null}
+          </View>
+          {subtitle ? <Muted numberOfLines={2} style={{ marginTop: 2 }}>{subtitle}</Muted> : null}
+        </View>
+        {right || null}
+        <View style={[styles.radio, selected && { borderColor: colors.primary }]}>
+          {selected ? <View style={styles.radioDot} /> : null}
+        </View>
+      </View>
+    </Press>
+  );
+}
+
+// ── people ──────────────────────────────────────────────────────────────────
+/**
+ * A face where there is one, initials where there is not. The `photo` prop was
+ * on this component from the first version and never read: every pupil and
+ * every teacher in the app was two letters in a circle while their photograph
+ * sat on the school's hard disk. A photograph that fails to decode falls back
+ * to the initials rather than to an empty hole.
+ */
 export function Avatar({ name, photo, size = 40, tone = 'primary', ring, square }) {
   const [broken, setBroken] = useState(false);
   const initials = useMemo(() => String(name || '?')
     .split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?', [name]);
-  const bg = tone === 'chrome' ? 'rgba(255,255,255,0.16)' : colors.primarySoft;
+  const bg = tone === 'chrome' ? 'rgba(255,255,255,0.18)' : colors.primarySoft;
   const fg = tone === 'chrome' ? '#fff' : colors.primary;
-  const radiusOf = square ? size * 0.26 : size / 2;
   const show = photo && !broken;
   return (
     <View style={{
-      width: size, height: size, borderRadius: radiusOf, backgroundColor: bg,
-      alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+      width: size, height: size, borderRadius: square ? size * 0.28 : size / 2,
+      backgroundColor: bg, alignItems: 'center', justifyContent: 'center',
+      overflow: 'hidden', flexShrink: 0,
       ...(ring ? {
-        borderWidth: Math.max(2, size * 0.045),
-        borderColor: tone === 'chrome' ? 'rgba(255,255,255,0.35)' : colors.card,
+        borderWidth: Math.max(2, Math.round(size * 0.045)),
+        borderColor: tone === 'chrome' ? 'rgba(255,255,255,0.34)' : colors.card,
       } : null),
     }}>
       {show ? (
         <Image
-          source={{ uri: photo }}
-          onError={() => setBroken(true)}
+          source={{ uri: photo }} onError={() => setBroken(true)}
           accessibilityLabel={name ? `Photograph of ${name}` : 'Photograph'}
-          style={{ width: '100%', height: '100%' }}
-          resizeMode="cover"
+          style={{ width: '100%', height: '100%' }} resizeMode="cover"
         />
       ) : (
-        <RNText style={{ color: fg, fontWeight: '800', fontSize: size * 0.36 }}>{initials}</RNText>
+        <RNText style={{ ...type.body, color: fg, fontWeight: '800', fontSize: Math.round(size * 0.36) }}>{initials}</RNText>
       )}
     </View>
   );
 }
 
-// The school's crest. Falls back to the app's own mark, so a school that has
-// never uploaded one still gets something deliberate rather than a gap.
+/**
+ * The school's crest. Falls back to the app's own mark, so a school that has
+ * never uploaded one gets something deliberate rather than a gap.
+ */
 export function Crest({ logo, size = 40, tone = 'chrome', rounded = true }) {
   const [broken, setBroken] = useState(false);
-  const bg = tone === 'chrome' ? 'rgba(255,255,255,0.12)' : colors.primarySoft;
-  const fg = tone === 'chrome' ? palette.gold400 : colors.primary;
+  const ok = logo && !broken;
+  const bg = ok
+    ? '#fff'
+    : tone === 'chrome' ? 'rgba(255,255,255,0.13)' : colors.primarySoft;
+  const fg = tone === 'chrome' ? palette.violet300 : colors.primary;
   return (
     <View style={{
-      width: size, height: size, borderRadius: rounded ? size * 0.3 : 0,
-      backgroundColor: logo && !broken ? (tone === 'chrome' ? 'rgba(255,255,255,0.94)' : '#fff') : bg,
-      alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-      padding: logo && !broken ? size * 0.08 : 0,
+      width: size, height: size, borderRadius: rounded ? size * 0.28 : 0,
+      backgroundColor: bg, alignItems: 'center', justifyContent: 'center',
+      overflow: 'hidden', padding: ok ? size * 0.08 : 0, flexShrink: 0,
     }}>
-      {logo && !broken ? (
-        <Image
-          source={{ uri: logo }} onError={() => setBroken(true)} accessibilityLabel="School crest"
-          style={{ width: '100%', height: '100%' }} resizeMode="contain"
-        />
+      {ok ? (
+        <Image source={{ uri: logo }} onError={() => setBroken(true)} accessibilityLabel="School crest"
+          style={{ width: '100%', height: '100%' }} resizeMode="contain" />
       ) : (
-        <Icon name="school" size={size * 0.55} color={fg} />
+        <Icon name="school" size={Math.round(size * 0.55)} color={fg} />
       )}
     </View>
   );
@@ -651,18 +986,36 @@ export function Loading({ label }) {
   return (
     <View style={styles.center}>
       <ActivityIndicator color={colors.primary} size="large" />
-      {label ? <Muted style={{ marginTop: spacing.sm }}>{label}</Muted> : null}
+      {label ? <Muted style={{ marginTop: spacing.md }}>{label}</Muted> : null}
     </View>
   );
 }
 
-// Shown while a list loads, in the shape the list will take. A spinner tells a
-// teacher on a slow phone nothing about what is coming.
-export function Skeleton({ rows = 4, height = 54 }) {
+/**
+ * Shown while a list loads, in the shape the list will take. A spinner tells a
+ * teacher on a slow phone nothing about what is coming. It breathes rather than
+ * sweeps: a shimmer that travels is a second thing moving on a screen that is
+ * already waiting.
+ */
+export function Skeleton({ rows = 4, height = 56 }) {
+  const reduced = useReducedMotion();
+  const pulse = useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    if (reduced) return undefined;
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1, duration: 720, useNativeDriver: Platform.OS !== 'web' }),
+      Animated.timing(pulse, { toValue: 0, duration: 720, useNativeDriver: Platform.OS !== 'web' }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [pulse, reduced]);
+  const opacity = reduced ? 1 : pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] });
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap: 10 }} accessibilityLabel="Loading">
       {Array.from({ length: rows }).map((_, i) => (
-        <View key={i} style={{ height, borderRadius: radius.md, backgroundColor: colors.borderSoft, opacity: 1 - i * 0.12 }} />
+        <Animated.View key={i} style={{
+          height, borderRadius: radius.sm, backgroundColor: colors.borderSoft, opacity,
+        }} />
       ))}
     </View>
   );
@@ -670,8 +1023,8 @@ export function Skeleton({ rows = 4, height = 54 }) {
 
 export function EmptyState({ icon = 'note', title, message, action }) {
   return (
-    <View style={{ alignItems: 'center', paddingVertical: spacing.xl, gap: 6 }}>
-      <IconTile name={icon} size={52} tone="primary" />
+    <View style={{ alignItems: 'center', paddingVertical: spacing.xl, gap: 7 }}>
+      <IconTile name={icon} size={56} tone="primary" />
       {title ? <Heading style={{ marginTop: 6, textAlign: 'center' }}>{title}</Heading> : null}
       {message ? <Muted style={{ textAlign: 'center', maxWidth: 380 }}>{message}</Muted> : null}
       {action ? <View style={{ marginTop: 10 }}>{action}</View> : null}
@@ -683,15 +1036,17 @@ function Note({ message, tone, icon }) {
   if (!message) return null;
   const t = BADGE_TONES[tone] || BADGE_TONES.neutral;
   return (
-    <View style={[styles.note, { backgroundColor: t.bg }]}>
-      <Icon name={icon} size={16} color={t.fg} />
-      <RNText style={{ color: t.fg, flex: 1, fontSize: 13.5, fontWeight: '600', lineHeight: 19 }}>{message}</RNText>
-    </View>
+    <Appear distance={6}>
+      <View style={[styles.note, { backgroundColor: t.bg }]} accessibilityRole={tone === 'danger' ? 'alert' : undefined}>
+        <Icon name={icon} size={17} color={t.fg} />
+        <RNText style={{ ...type.small, color: t.fg, flex: 1, fontWeight: '600', lineHeight: 19 }}>{message}</RNText>
+      </View>
+    </Appear>
   );
 }
 
 export function ErrorNote({ message }) { return <Note message={message} tone="danger" icon="alert" />; }
-export function InfoNote({ message }) { return <Note message={message} tone="info" icon="note" />; }
+export function InfoNote({ message }) { return <Note message={message} tone="primary" icon="note" />; }
 export function SuccessNote({ message }) { return <Note message={message} tone="success" icon="tick" />; }
 export function WarningNote({ message }) { return <Note message={message} tone="warning" icon="alert" />; }
 
@@ -701,146 +1056,103 @@ export function WarningNote({ message }) { return <Note message={message} tone="
 // people expect differs.
 export function Sheet({ visible, onClose, title, children, footer, width = 560 }) {
   const layout = useLayout();
+  const reduced = useReducedMotion();
+  const t = useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (!visible) return undefined;
+    t.setValue(reduced ? 1 : 0);
+    const a = Animated.timing(t, {
+      toValue: 1, duration: reduced ? 0 : motion.medium,
+      easing: require('./motion').EASE_OUT, useNativeDriver: Platform.OS !== 'web',
+    });
+    a.start(); return () => a.stop();
+  }, [visible, t, reduced]);
+
   if (!visible) return null;
+  const rise = layout.isPhone ? 40 : 14;
+
   return (
-    <RNModal transparent animationType={layout.isPhone ? 'slide' : 'fade'} visible onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
+    <RNModal transparent animationType="none" visible onRequestClose={onClose}>
+      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(14,11,36,0.46)', opacity: t }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+      </Animated.View>
       <View pointerEvents="box-none" style={[
         StyleSheet.absoluteFill,
         { justifyContent: layout.isPhone ? 'flex-end' : 'center', alignItems: 'center', padding: layout.isPhone ? 0 : spacing.xl },
       ]}>
-        <View style={[
+        <Animated.View style={[
           styles.sheet, shadow.floating,
+          { opacity: t, transform: [{ translateY: t.interpolate({ inputRange: [0, 1], outputRange: [rise, 0] }) }] },
           layout.isPhone
-            ? { width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, maxHeight: '88%' }
+            ? { width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, maxHeight: '90%' }
             : { width: '100%', maxWidth: width, maxHeight: '86%' },
         ]}>
+          {layout.isPhone ? <View style={styles.grabber} /> : null}
           <View style={styles.sheetHead}>
-            <Heading style={{ flex: 1 }}>{title}</Heading>
+            <Heading style={{ flex: 1 }} numberOfLines={2}>{title}</Heading>
             <IconButton name="close" size={34} tone="plain" color={colors.muted} onPress={onClose} label="Close" />
           </View>
-          <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm }}>{children}</ScrollView>
+          <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm }} keyboardShouldPersistTaps="handled">
+            {children}
+          </ScrollView>
           {footer ? <View style={styles.sheetFoot}>{footer}</View> : null}
-        </View>
+        </Animated.View>
       </View>
     </RNModal>
   );
 }
 
-// ── tabs ────────────────────────────────────────────────────────────────────
-// SegmentedControl divides the width between its options, which is right for
-// two or three and unreadable at seven: a child's record now has Overview,
-// Academics, Reports, Attendance, Fees, Canteen, Homework and Timetable. This
-// scrolls instead of squeezing, and on a wide window it simply sits still
-// because everything already fits.
-export function Tabs({ value, options, onChange, style }) {
-  return (
-    <ScrollView
-      horizontal showsHorizontalScrollIndicator={false}
-      contentContainerStyle={[{ gap: 6, paddingVertical: 2 }, style]}
-    >
-      {options.map(o => {
-        const active = String(o.value) === String(value);
-        return (
-          <TouchableOpacity
-            key={String(o.value)}
-            accessibilityRole="tab" accessibilityState={{ selected: active }}
-            onPress={() => onChange(o.value)} activeOpacity={0.8}
-            style={[styles.tab, active && styles.tabOn]}
-          >
-            {o.icon ? <Icon name={o.icon} size={15} color={active ? '#fff' : colors.muted} /> : null}
-            <RNText numberOfLines={1} style={{ fontSize: 13.5, fontWeight: '700', color: active ? '#fff' : colors.textSoft }}>
-              {o.label}
-            </RNText>
-            {o.count != null && o.count !== 0 ? (
-              <View style={[styles.tabCount, active && { backgroundColor: 'rgba(255,255,255,0.24)' }]}>
-                <RNText style={{ fontSize: 10.5, fontWeight: '800', color: active ? '#fff' : colors.primary }}>{o.count}</RNText>
-              </View>
-            ) : null}
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
-  );
-}
-
-// ── selection ───────────────────────────────────────────────────────────────
-// A tick box that is a real target on a phone: the whole row is pressable, not
-// a 16px square a teacher has to aim at while forty children file past.
-export function CheckRow({ checked, onToggle, title, subtitle, right, avatar, disabled, tone }) {
-  return (
-    <TouchableOpacity
-      accessibilityRole="checkbox" accessibilityState={{ checked: !!checked, disabled: !!disabled }}
-      onPress={disabled ? undefined : onToggle} activeOpacity={disabled ? 1 : 0.7}
-      style={[styles.checkRow, checked && styles.checkRowOn, disabled && { opacity: 0.55 }]}
-    >
-      <View style={[styles.box, checked && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
-        {checked ? <Icon name="tick" size={13} color="#fff" /> : null}
-      </View>
-      {avatar || null}
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <RNText numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text }}>{title}</RNText>
-        {subtitle ? <Muted numberOfLines={1}>{subtitle}</Muted> : null}
-      </View>
-      {right || null}
-    </TouchableOpacity>
-  );
-}
-
 // ── the school, at the top of a screen ──────────────────────────────────────
-// One hero, used by every landing screen, so the parent app and the teacher app
-// are recognisably the same product and the school's crest is on both.
 export function Hero({ crest, eyebrow, title, subtitle, right, tone = 'brand', children }) {
   const layout = useLayout();
   return (
-    <Gradient colors={gradients[tone] || gradients.brand} angle={130} style={[styles.hero, shadow.raised]}>
-      {/* A single soft highlight. It is what stops a flat two-stop gradient
-          reading like a coloured rectangle on a big monitor. */}
-      <View pointerEvents="none" style={styles.heroGlow} />
-      <View style={{
-        flexDirection: layout.isPhone ? 'column' : 'row',
-        alignItems: layout.isPhone ? 'flex-start' : 'center', gap: spacing.lg,
-      }}>
-        {crest ? <View>{crest}</View> : null}
-        <View style={{ flex: 1, minWidth: 0 }}>
-          {eyebrow ? (
-            <RNText numberOfLines={1} style={{ color: 'rgba(255,255,255,0.68)', fontSize: 12, fontWeight: '800', letterSpacing: 0.8 }}>
-              {String(eyebrow).toUpperCase()}
-            </RNText>
-          ) : null}
-          <RNText numberOfLines={2} style={{
-            color: '#fff', fontSize: layout.isPhone ? 23 : 29, fontWeight: '800',
-            letterSpacing: -0.6, marginTop: 3,
-          }}>{title}</RNText>
-          {subtitle ? (
-            <RNText style={{ color: 'rgba(255,255,255,0.74)', fontSize: 13.5, fontWeight: '600', marginTop: 5 }}>
-              {subtitle}
-            </RNText>
-          ) : null}
+    <Appear distance={12}>
+      <Gradient colors={gradients[tone] || gradients.brand} angle={128} style={[styles.hero, shadow.raised]}>
+        <View pointerEvents="none" style={styles.heroGlow} />
+        <View style={{
+          flexDirection: layout.isPhone ? 'column' : 'row',
+          alignItems: layout.isPhone ? 'flex-start' : 'center', gap: spacing.lg,
+        }}>
+          {crest ? <View>{crest}</View> : null}
+          <View style={{ flex: 1, minWidth: 0 }}>
+            {eyebrow ? (
+              <RNText numberOfLines={1} style={{ ...type.micro, color: 'rgba(255,255,255,0.72)' }}>
+                {String(eyebrow).toUpperCase()}
+              </RNText>
+            ) : null}
+            <RNText numberOfLines={2} style={{
+              ...type.title, color: '#fff', fontSize: layout.isPhone ? 23 : 29, marginTop: 4,
+            }}>{title}</RNText>
+            {subtitle ? (
+              <RNText style={{ ...type.small, color: 'rgba(255,255,255,0.78)', fontWeight: '600', marginTop: 5 }}>
+                {subtitle}
+              </RNText>
+            ) : null}
+          </View>
+          {right || null}
         </View>
-        {right || null}
-      </View>
-      {children ? <View style={{ marginTop: spacing.lg }}>{children}</View> : null}
-    </Gradient>
+        {children ? <View style={{ marginTop: spacing.lg }}>{children}</View> : null}
+      </Gradient>
+    </Appear>
   );
 }
 
-// A figure carved out of a hero — white on navy, so it belongs to the header
+// A figure carved out of a hero — white on violet, so it belongs to the header
 // rather than sitting on it.
 export function HeroStat({ label, value, tone = 'light', note }) {
   return (
     <View style={styles.heroStat}>
-      <RNText style={{ ...type.micro, color: 'rgba(255,255,255,0.62)' }}>{String(label).toUpperCase()}</RNText>
-      <RNText style={{
-        color: tone === 'danger' ? palette.gold200 : '#fff',
-        fontSize: 19, fontWeight: '800', marginTop: 3, fontVariant: ['tabular-nums'],
+      <RNText style={{ ...type.micro, color: 'rgba(255,255,255,0.66)' }}>{String(label).toUpperCase()}</RNText>
+      <RNText numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={{
+        ...type.body, color: tone === 'danger' ? palette.gold400 : '#fff',
+        fontSize: figureSize(value, 19), fontWeight: '800', marginTop: 3, fontVariant: ['tabular-nums'],
       }}>{value}</RNText>
-      {note ? <RNText style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11.5, fontWeight: '600', marginTop: 1 }}>{note}</RNText> : null}
+      {note ? <RNText style={{ ...type.small, fontSize: 11.5, color: 'rgba(255,255,255,0.64)', marginTop: 1 }}>{note}</RNText> : null}
     </View>
   );
 }
 
-// ── a row of actions above a list ───────────────────────────────────────────
 export function Toolbar({ children, style }) {
   return <View style={[{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm }, style]}>{children}</View>;
 }
@@ -849,12 +1161,14 @@ export function Toolbar({ children, style }) {
 export function KeyValue({ items, columns }) {
   const layout = useLayout();
   const cols = columns || (layout.isPhone ? 2 : 3);
+  const rows = (items || []).filter(i => i && i.value != null && i.value !== '');
+  if (!rows.length) return null;
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
-      {(items || []).filter(i => i && i.value != null && i.value !== '').map((i, n) => (
-        <View key={n} style={{ flexGrow: 1, flexBasis: `${Math.floor(100 / cols) - 2}%`, minWidth: 120 }}>
+      {rows.map((i, n) => (
+        <View key={n} style={{ flexGrow: 1, flexBasis: `${Math.floor(100 / cols) - 2}%`, minWidth: 128 }}>
           <Micro>{i.label}</Micro>
-          <RNText style={{ ...type.body, color: colors.text, marginTop: 2 }}>{i.value}</RNText>
+          <RNText style={{ ...type.body, color: colors.text, fontWeight: '600', marginTop: 3 }}>{i.value}</RNText>
         </View>
       ))}
     </View>
@@ -863,40 +1177,7 @@ export function KeyValue({ items, columns }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-
-  tab: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 9, paddingHorizontal: 14, borderRadius: radius.pill,
-    backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border,
-  },
-  tabOn: { backgroundColor: colors.primary, borderColor: colors.primary },
-  tabCount: {
-    minWidth: 18, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 999,
-    backgroundColor: colors.primarySoft, alignItems: 'center',
-  },
-
-  checkRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    paddingVertical: 10, paddingHorizontal: 10, borderRadius: radius.md,
-    borderWidth: 1, borderColor: colors.borderSoft, backgroundColor: colors.card,
-  },
-  checkRowOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
-  box: {
-    width: 22, height: 22, borderRadius: 7, borderWidth: 2,
-    borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: colors.card,
-  },
-
-  hero: { borderRadius: radius.lg, padding: spacing.xl, overflow: 'hidden' },
-  heroGlow: {
-    position: 'absolute', right: -60, top: -70, width: 220, height: 220,
-    borderRadius: 110, backgroundColor: 'rgba(255,255,255,0.07)',
-  },
-  heroStat: {
-    backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: radius.md,
-    paddingVertical: 10, paddingHorizontal: 13, minWidth: 120,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)',
-  },
+  screenScroll: { flex: 1 },
   screenBody: { flexGrow: 1 },
 
   card: {
@@ -906,93 +1187,157 @@ const styles = StyleSheet.create({
   cardPad: { padding: spacing.lg },
   sectionHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md },
 
-  btn: {
-    borderRadius: radius.sm + 2, alignItems: 'center', justifyContent: 'center',
-    flexDirection: 'row', gap: 8,
-  },
+  btn: { alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, minHeight: 40 },
+  fabWrap: { position: 'absolute', right: spacing.lg, bottom: spacing.lg + 6 },
   fab: {
-    position: 'absolute', right: spacing.lg, bottom: spacing.lg + 6,
     backgroundColor: colors.primary, borderRadius: radius.pill,
-    paddingVertical: 14, paddingHorizontal: 18,
+    paddingVertical: 15, paddingHorizontal: 19,
     flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+  dotBadge: {
+    position: 'absolute', top: 7, right: 7, width: 8, height: 8, borderRadius: 4,
+    backgroundColor: colors.danger, borderWidth: 1.5, borderColor: colors.card,
   },
 
   inputWrap: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radius.sm + 2, paddingHorizontal: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 9,
+    backgroundColor: colors.surfaceAlt, borderWidth: 1.5, borderColor: colors.border,
+    borderRadius: radius.sm, paddingHorizontal: 13, minHeight: 46,
   },
   input: {
-    flex: 1, paddingVertical: Platform.OS === 'web' ? 11 : 10,
-    fontSize: 15, color: colors.text,
+    flex: 1, paddingVertical: Platform.OS === 'web' ? 12 : 10,
+    fontSize: 15, fontWeight: '500', color: colors.text, fontFamily,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
   },
-  searchWrap: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-    borderRadius: radius.pill, paddingHorizontal: 14,
+  search: {
+    flexDirection: 'row', alignItems: 'center', gap: 9,
+    backgroundColor: colors.surfaceAlt, borderWidth: 1.5, borderColor: colors.border,
+    borderRadius: radius.pill, paddingHorizontal: 15, minHeight: 46,
   },
-  selectPill: {
-    paddingVertical: 9, paddingHorizontal: 14, borderRadius: radius.pill,
-    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card,
-    alignItems: 'center',
+  choice: {
+    paddingVertical: 9, paddingHorizontal: 15, borderRadius: radius.pill,
+    backgroundColor: colors.surfaceAlt, borderWidth: 1.5, borderColor: colors.border,
+    alignItems: 'center', minHeight: 40, justifyContent: 'center',
   },
+  choiceOn: { backgroundColor: colors.primary, borderColor: colors.primary },
 
-  row: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 10 },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 11, minHeight: 56 },
+  listRowDivider: { borderBottomWidth: 1, borderBottomColor: colors.borderSoft },
+  menuRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 11, minHeight: 54 },
+  divider: { height: 1, backgroundColor: colors.borderSoft, marginVertical: spacing.md },
+
+  tableHead: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingBottom: 9, borderBottomWidth: 1.5, borderBottomColor: colors.border,
   },
-  listRow: {
+  tableRow: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
     paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
   },
-  divider: { height: 1, backgroundColor: colors.borderSoft, marginVertical: spacing.sm },
-  stackRow: { paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.borderSoft },
-  tableHead: {
-    flexDirection: 'row', paddingVertical: 8,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
+  stackCard: {
+    backgroundColor: colors.surfaceAlt, borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.borderSoft, padding: spacing.md, gap: 5,
   },
-  tableRow: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: 11,
-    borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
-  },
+  stackLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
 
   stat: {
-    backgroundColor: colors.card, borderRadius: radius.md + 2,
-    borderWidth: 1, borderColor: colors.border, padding: spacing.lg,
+    backgroundColor: colors.card, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border, padding: spacing.lg, minHeight: 96,
   },
+
   badge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.pill,
+    paddingHorizontal: 9, paddingVertical: 4, borderRadius: radius.pill, alignSelf: 'flex-start',
   },
+
   segment: {
-    flexDirection: 'row', backgroundColor: colors.borderSoft,
-    borderRadius: radius.sm + 2, padding: 3, gap: 3,
+    flexDirection: 'row', backgroundColor: colors.surfaceAlt, borderRadius: radius.pill,
+    padding: 4, borderWidth: 1, borderColor: colors.border,
+  },
+  segmentThumb: {
+    position: 'absolute', top: 4, bottom: 4, left: 4,
+    borderRadius: radius.pill, backgroundColor: colors.card,
   },
   segmentItem: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 8, paddingHorizontal: 8, borderRadius: radius.sm,
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 9, borderRadius: radius.pill, minHeight: 38,
   },
-  segmentItemActive: { backgroundColor: colors.card, ...shadow.rest },
 
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, minHeight: 220 },
+  tab: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingVertical: 10, paddingHorizontal: 15, borderRadius: radius.pill,
+    backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border, minHeight: 40,
+  },
+  tabOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  tabCount: {
+    minWidth: 19, paddingHorizontal: 5, paddingVertical: 1, borderRadius: radius.pill,
+    backgroundColor: colors.primarySoft, alignItems: 'center',
+  },
+
+  checkRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingVertical: 11, paddingHorizontal: 12, borderRadius: radius.sm,
+    borderWidth: 1.5, borderColor: colors.borderSoft, backgroundColor: colors.card, minHeight: 60,
+  },
+  checkRowOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  box: {
+    width: 23, height: 23, borderRadius: 7, borderWidth: 2,
+    borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.card, flexShrink: 0,
+  },
+
+  choiceRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingVertical: 14, paddingHorizontal: 15, borderRadius: radius.sm,
+    borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.card,
+    marginBottom: 9, minHeight: 62,
+  },
+  choiceRowOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  radio: {
+    width: 22, height: 22, borderRadius: 11, borderWidth: 2,
+    borderColor: colors.border, alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  radioDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: colors.primary },
+
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
   note: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 10,
-    borderRadius: radius.md, padding: spacing.md,
+    padding: spacing.md, borderRadius: radius.sm, marginBottom: spacing.sm,
   },
 
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(7,20,43,0.55)' },
-  sheet: { backgroundColor: colors.card, borderRadius: radius.lg, overflow: 'hidden' },
+  sheet: {
+    backgroundColor: colors.card, borderRadius: radius.xl,
+    borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
+  },
+  grabber: {
+    alignSelf: 'center', width: 40, height: 4, borderRadius: 4,
+    backgroundColor: colors.border, marginTop: 10,
+  },
   sheetHead: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
     borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
   },
   sheetFoot: {
-    padding: spacing.lg, borderTopWidth: 1, borderTopColor: colors.borderSoft,
-    flexDirection: 'row', gap: spacing.sm, justifyContent: 'flex-end',
+    flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    borderTopWidth: 1, borderTopColor: colors.borderSoft, backgroundColor: colors.surfaceAlt,
+  },
+
+  hero: { borderRadius: radius.lg, padding: spacing.xl, overflow: 'hidden' },
+  heroGlow: {
+    position: 'absolute', right: -70, top: -80, width: 240, height: 240,
+    borderRadius: 120, backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  heroStat: {
+    backgroundColor: 'rgba(255,255,255,0.13)', borderRadius: radius.sm,
+    paddingVertical: 10, paddingHorizontal: 13, minWidth: 108,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)',
   },
 });
 
-export { Icon };
-export default { Screen, Card, Section, Button, Field, Row };
+export default {
+  Screen, Card, Section, Button, Field, ListRow, MenuRow, Badge, Avatar, Crest,
+  Tabs, SegmentedControl, Dots, ProgressRing, ChoiceRow, Hero, Sheet,
+};

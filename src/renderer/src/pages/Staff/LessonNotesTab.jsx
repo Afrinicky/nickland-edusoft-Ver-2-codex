@@ -359,7 +359,7 @@ function LessonNoteEditor({ note, subjects, classes, isSupervisor, onClose, onSa
         {note.id && form.status === 'reviewed' && note.review_comments && (
           <div className="card" style={{
             background: 'var(--success-bg, #dcfce7)',
-            borderLeft: '3px solid var(--success)',
+            border: '1px solid var(--success)',
             marginTop: 16, padding: 14,
           }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>

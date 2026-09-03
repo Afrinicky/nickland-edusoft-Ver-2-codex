@@ -13,12 +13,13 @@ import { useAuth } from '../../src/auth';
 import { useBranding } from '../../src/brand';
 import {
   Screen, Card, Section, Hero, Heading, Body, Muted, Micro, Button, Avatar,
-  KeyValue, ListRow, InfoNote, Crest, Toolbar,
+  KeyValue, ListRow, MenuRow, InfoNote, Crest, Toolbar, Badge, Gradient,
 } from '../../src/ui';
+import { Appear } from '../../src/motion';
 import { ContactSchool } from '../../src/actions';
 import { channels as channelsFor, hrefFor, open as openLink } from '../../src/contact';
 import { useLayout } from '../../src/responsive';
-import { colors, spacing } from '../../src/theme';
+import { colors, gradients, spacing, radius, shadow, type } from '../../src/theme';
 import { Icon } from '../../src/icons';
 
 export default function Account() {
@@ -33,12 +34,26 @@ export default function Account() {
 
   return (
     <Screen>
-      <Hero
-        crest={<Avatar name={p.full_name || 'Parent'} size={layout.isPhone ? 54 : 66} tone="chrome" ring />}
-        eyebrow="Signed in as"
-        title={p.full_name || 'Parent'}
-        subtitle={[p.phone, p.email].filter(Boolean).join('  ·  ') || 'Parent account'}
-      />
+      {/* The reference's profile header: the person's own face, centred, on
+          the brand colour, with their settings in a plain list underneath. */}
+      <Appear distance={12}>
+        <Gradient colors={gradients.brand} angle={128} style={[styles.head, shadow.raised]}>
+          <View pointerEvents="none" style={styles.headGlow} />
+          <View style={{ alignItems: 'center', gap: spacing.md }}>
+            <Avatar name={p.full_name || 'Parent'} size={78} tone="chrome" ring />
+            <View style={{ alignItems: 'center', gap: 4 }}>
+              <Text numberOfLines={2} style={{ ...type.title, color: '#fff', textAlign: 'center' }}>
+                {p.full_name || 'Parent'}
+              </Text>
+              <Text numberOfLines={1} style={{ ...type.small, color: 'rgba(255,255,255,0.76)', fontWeight: '600' }}>
+                {[p.phone, p.email].filter(Boolean).join('  ·  ') || 'Parent account'}
+              </Text>
+            </View>
+            <Badge tone="chrome" icon={mode === 'cloud' ? 'refresh' : 'tick'}
+              label={mode === 'cloud' ? 'Over the internet' : "On the school's network"} />
+          </View>
+        </Gradient>
+      </Appear>
 
       <Section title="Your school" icon="school">
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md }}>
@@ -59,19 +74,15 @@ export default function Account() {
       <Section title="Reaching the school" icon="whatsapp" subtitle="Questions, absences, fees — any of these gets you a person.">
         {list.length === 0 ? (
           <Muted>The school has not recorded a phone number or an email address yet.</Muted>
-        ) : list.map(c => (
-          <ListRow
+        ) : list.map((c, i, arr) => (
+          <MenuRow
             key={c.key}
             icon={c.key === 'whatsapp' ? 'whatsapp' : c.icon}
-            iconTone={c.key === 'whatsapp' ? 'success' : c.key === 'email' ? 'info' : 'primary'}
-            title={c.label} subtitle={c.value}
-            right={<Icon name="chevron" size={15} color={colors.faint} />}
+            iconTone={c.key === 'whatsapp' ? 'success' : c.key === 'email' ? 'primary' : 'violet'}
+            label={c.label} hint={c.value} last={i === arr.length - 1}
             onPress={() => openLink(hrefFor(c))}
           />
         ))}
-        <View style={{ marginTop: spacing.md }}>
-          <ContactSchool variant="subtle" title="Message the school" icon="whatsapp" full />
-        </View>
       </Section>
 
       <Section title="About payments" icon="wallet">
@@ -89,14 +100,26 @@ export default function Account() {
         </Muted>
       </Section>
 
-      <Card>
-        <Toolbar>
-          <Button title="Sign out" variant="danger" icon="logout" full={false}
-            onPress={async () => { await signOut(); router.replace('/login'); }} />
-          <Button title="Change school" variant="ghost" full={false}
-            onPress={async () => { await forgetConnection(); router.replace('/connect'); }} />
-        </Toolbar>
-      </Card>
+      <Section title="Leaving" icon="logout">
+        <MenuRow icon="logout" label="Sign out" danger
+          hint="You will need your password to come back in"
+          onPress={async () => { await signOut(); router.replace('/login'); }} />
+        <MenuRow icon="pin" label="Change school" iconTone="neutral" last
+          hint="Point this app at a different school"
+          onPress={async () => { await forgetConnection(); router.replace('/connect'); }} />
+      </Section>
+
+      <Muted style={{ textAlign: 'center', paddingVertical: spacing.md }}>
+        Nickland Edusoft · Nickland Sales
+      </Muted>
     </Screen>
   );
 }
+
+const styles = {
+  head: { borderRadius: radius.lg, padding: spacing.xl, overflow: 'hidden' },
+  headGlow: {
+    position: 'absolute', right: -70, top: -90, width: 250, height: 250,
+    borderRadius: 125, backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+};

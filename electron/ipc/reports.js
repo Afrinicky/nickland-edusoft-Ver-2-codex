@@ -11,44 +11,8 @@ function registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath) {
 
   // Render a single student's report card as HTML for in-app preview (#14).
   // Same template as the PDF — just returned as a string instead of written to disk.
-  ipcMain.handle('reports:render-card-html', (_e, { studentId, termId, colorMode = 'color' }) => {
-    const header = getSchoolHeader(db, getResourcePath, colorMode);
-    const student = db.prepare(`
-      SELECT s.*, c.name AS class_name, c.short_code AS class_short FROM students s
-      LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?
-    `).get(studentId);
-    if (!student) return { ok: false, error: 'Student not found' };
-    const term = db.prepare(`
-      SELECT t.*, ay.label AS year_label FROM terms t
-      JOIN academic_years ay ON ay.id = t.academic_year_id WHERE t.id = ?
-    `).get(termId);
-    const scores = db.prepare(`
-      SELECT sc.*, sub.name AS subject_name
-      FROM scores sc JOIN subjects sub ON sub.id = sc.subject_id
-      WHERE sc.student_id = ? AND sc.term_id = ? ORDER BY sub.name
-    `).all(studentId, termId);
-    const filteredScores = filterScoresByClassMapping(db, student.current_class_id, scores);
-    const summary = db.prepare(
-      'SELECT * FROM student_term_summary WHERE student_id = ? AND term_id = ?'
-    ).get(studentId, termId);
-    const enriched = enrichSummaryLive(db, studentId, termId, student.current_class_id, summary);
-    const signatures = resolveReportSignatures(db);
-    const examWeight = getExamWeight(db);
-
-    const inner = reportCardHtml(header, student, filteredScores, enriched, term, signatures, examWeight);
-    const styles = baseStyles() + reportCardStyles(header);
-    return {
-      ok: true,
-      html: inner,
-      styles,
-      meta: {
-        student_name: `${student.surname || ''} ${student.first_name || ''}`.trim(),
-        index_number: student.index_number,
-        class_name: student.class_name || student.class_short,
-        scores_count: filteredScores.length,
-      },
-    };
-  });
+  ipcMain.handle('reports:render-card-html', (_e, { studentId, termId, colorMode = 'color' }) =>
+    renderCardHtml(db, getResourcePath, { studentId, termId, colorMode }));
   ipcMain.handle('reports:generate-bills-pdf', async (_e, params) => {
     return await generateBillsPdf(db, userDataPath, getResourcePath, params);
   });
@@ -82,6 +46,71 @@ function registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath) {
 }
 
 // --- shared helpers ---
+
+// ── Documents the apps print ────────────────────────────────────────────────
+// A report card printed from a teacher's phone has to be the report card the
+// office prints, down to the millimetre — a school that hands out two different
+// documents with the same title has a problem no feature makes up for. So the
+// phone and the browser do not have templates of their own: they ask the
+// desktop for THIS html and print exactly what comes back.
+//
+// These are the same builders the PDF path uses (`generateReportCards`,
+// `generateStudentProfile`); the only difference is where the string ends up.
+
+function renderCardHtml(db, getResourcePath, { studentId, termId, colorMode = 'color' }) {
+  const header = getSchoolHeader(db, getResourcePath, colorMode);
+  const student = db.prepare(`
+    SELECT s.*, c.name AS class_name, c.short_code AS class_short FROM students s
+    LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?
+  `).get(studentId);
+  if (!student) return { ok: false, error: 'Student not found' };
+  const term = db.prepare(`
+    SELECT t.*, ay.label AS year_label FROM terms t
+    JOIN academic_years ay ON ay.id = t.academic_year_id WHERE t.id = ?
+  `).get(termId);
+  const scores = db.prepare(`
+    SELECT sc.*, sub.name AS subject_name
+    FROM scores sc JOIN subjects sub ON sub.id = sc.subject_id
+    WHERE sc.student_id = ? AND sc.term_id = ? ORDER BY sub.name
+  `).all(studentId, termId);
+  const filteredScores = filterScoresByClassMapping(db, student.current_class_id, scores);
+  const summary = db.prepare(
+    'SELECT * FROM student_term_summary WHERE student_id = ? AND term_id = ?'
+  ).get(studentId, termId);
+  const enriched = enrichSummaryLive(db, studentId, termId, student.current_class_id, summary);
+  const signatures = resolveReportSignatures(db);
+  const examWeight = getExamWeight(db);
+
+  const inner = reportCardHtml(header, student, filteredScores, enriched, term, signatures, examWeight);
+  const styles = baseStyles() + reportCardStyles(header);
+  return {
+    ok: true,
+    html: inner,
+    styles,
+    meta: {
+      student_name: `${student.surname || ''} ${student.first_name || ''}`.trim(),
+      index_number: student.index_number,
+      class_name: student.class_name || student.class_short,
+      scores_count: filteredScores.length,
+    },
+  };
+}
+
+// A complete, standalone page — what a browser needs in order to print it.
+// `generateReportCards` wraps the same `inner` in the same `styles` before
+// handing it to Chromium, so the two paths cannot drift.
+function reportCardDocument(db, getResourcePath, { studentId, termId, colorMode = 'color' }) {
+  const r = renderCardHtml(db, getResourcePath, { studentId, termId, colorMode });
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    meta: r.meta,
+    document: `<!doctype html><html><head><meta charset="utf-8"><title>Report card — ${
+      String(r.meta.student_name || 'Pupil').replace(/[<>&"]/g, '')
+    }</title><style>${r.styles}</style></head><body>${r.html}</body></html>`,
+  };
+}
+
 function getSchoolHeader(db, getResourcePath, colorMode = 'color') {
   const name = getSetting(db, 'school_name', 'AVE MARIA PREPARATORY SCHOOL');
   const motto = getSetting(db, 'school_motto', '');
@@ -1331,6 +1360,18 @@ function monthName(m) {
 
 // === Student Profile (formal printable) ===
 async function generateStudentProfile(db, userDataPath, getResourcePath, studentId, options) {
+  const built = studentProfileDocument(db, getResourcePath, studentId, options || {});
+  if (!built.ok) return built;
+  const outPath = path.join(userDataPath, 'reports', `profile_${built.meta.slug}_${Date.now()}.pdf`);
+  if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  await htmlToPdf(built.document, outPath);
+  return { ok: true, path: outPath };
+}
+
+// The profile sheet as a standalone page. The PDF above and the "Print
+// profile" button in the teacher's and the parent's app both render THIS —
+// one template, so the office and the gate hand out the same document.
+function studentProfileDocument(db, getResourcePath, studentId, options = {}) {
   const colorMode = options.colorMode || 'color';
   const header = getSchoolHeader(db, getResourcePath, colorMode);
   const s = db.prepare(`
@@ -1353,8 +1394,20 @@ async function generateStudentProfile(db, userDataPath, getResourcePath, student
   }
 
   // Photo (if any)
-  const photoBlock = s.photo_path && fs.existsSync(s.photo_path)
-    ? `<img src="file://${s.photo_path}" style="width:35mm; height:42mm; object-fit:cover; border:1px solid #999;" />`
+  // Inlined rather than linked. `file://` resolves on the office PC and
+  // nowhere else, so a profile printed from a phone came out with a broken
+  // image box where the child should be. The crest was already inlined; this
+  // is the same treatment.
+  let photoData = '';
+  try {
+    if (s.photo_path && fs.existsSync(s.photo_path)) {
+      const buf = fs.readFileSync(s.photo_path);
+      const ext = path.extname(s.photo_path).slice(1).toLowerCase() || 'png';
+      photoData = `data:image/${ext === 'jpg' ? 'jpeg' : ext};base64,${buf.toString('base64')}`;
+    }
+  } catch (_) { photoData = ''; }
+  const photoBlock = photoData
+    ? `<img src="${photoData}" style="width:35mm; height:42mm; object-fit:cover; border:1px solid #999;" />`
     : `<div style="width:35mm; height:42mm; border:1px dashed #999; display:flex; align-items:center; justify-content:center; color:#999; font-size:8pt;">No photo</div>`;
 
   const row = (label, value) => `<tr><td style="width:40%; color:#555; padding:2mm 4mm;">${label}</td><td style="padding:2mm 4mm; font-weight:600;">${value ?? '—'}</td></tr>`;
@@ -1428,10 +1481,16 @@ async function generateStudentProfile(db, userDataPath, getResourcePath, student
   </body></html>`;
 
   const safeName = `${(s.surname || 'student').replace(/[^a-z0-9]/gi, '_')}_${s.first_name || ''}`.toLowerCase();
-  const outPath = path.join(userDataPath, 'reports', `profile_${safeName}_${Date.now()}.pdf`);
-  if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  await htmlToPdf(html, outPath);
-  return { ok: true, path: outPath };
+  return {
+    ok: true,
+    document: html,
+    meta: {
+      slug: safeName,
+      student_name: `${s.surname || ''} ${s.first_name || ''}`.trim(),
+      index_number: s.index_number,
+      class_name: s.class_name || s.class_code,
+    },
+  };
 }
 
 // === Attestation / Testimonial ===
@@ -1812,6 +1871,13 @@ async function htmlToPdf(html, outPath) {
 }
 
 module.exports = registerReportsHandlers;
+// The documents the phone and the browser print. They hold no templates of
+// their own: `electron/server/api.js` serves these strings and the app prints
+// exactly what comes back, so a report card from the gate is the report card
+// from the office.
+module.exports.reportCardDocument = reportCardDocument;
+module.exports.renderCardHtml = renderCardHtml;
+module.exports.studentProfileDocument = studentProfileDocument;
 // Exposed so the bill layout can be regression-tested without an Electron
 // runtime (the PDF step needs a BrowserWindow; the HTML does not).
 module.exports.__billHtmlForTest = billHtml;

@@ -1,17 +1,34 @@
-// Staff account — profile, what is still on its way to the school, sign out.
+// Settings — the account, and everything about how the app behaves.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// The settings screen in the reference is a single column of labelled rows
+// with a chevron, and that shape is right for a reason: every item here is a
+// destination or a switch, none of them is data, and a person arriving is
+// looking for one specific thing by its name. Cards with headings and prose
+// would make them hunt.
+//
+// Rows that open a panel do it in place rather than pushing a new screen —
+// changing a password is four fields and does not deserve a route of its own.
 import React, { useEffect, useState } from 'react';
 import { View, Text } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { api } from '../../src/api';
 import {
-  Screen, Card, Section, Heading, Muted, Micro, Button, Badge, Field,
+  Screen, Card, Section, Heading, Body, Muted, Micro, Button, Badge, Field,
   ErrorNote, InfoNote, SuccessNote, Grid, StatCard, Avatar, KeyValue, Divider,
+  MenuRow, Sheet, Toolbar, Crest,
 } from '../../src/ui';
-import { colors, spacing, type } from '../../src/theme';
+import { useBranding } from '../../src/brand';
+import { ContactSchool, PrintButton } from '../../src/actions';
+import { Appear } from '../../src/motion';
+import { colors, palette, gradients, spacing, radius, shadow, type } from '../../src/theme';
+import { Gradient } from '../../src/ui';
 
 export default function Account() {
   const { profile, host, mode, token, signOut, forgetConnection } = useAuth();
+  const brand = useBranding();
+  const [signingOut, setSigningOut] = useState(false);
   const params = useLocalSearchParams();
   const u = profile?.user || {};
   const perms = profile?.permissions || {};
@@ -23,6 +40,7 @@ export default function Account() {
   // find it.
   const forced = String(params.changePassword || '') === '1' || !!profile?.must_change_password;
   const [changing, setChanging] = useState(forced);
+  const [permsOpen, setPermsOpen] = useState(false);
   const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
   const [pwBusy, setPwBusy] = useState(false);
   const [pwError, setPwError] = useState(null);
@@ -70,24 +88,61 @@ export default function Account() {
 
   return (
     <Screen variant="reading">
-      <Card>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg }}>
-          <Avatar name={u.full_name} size={54} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text numberOfLines={1} style={{ ...type.title, color: colors.text }}>{u.full_name || 'Staff'}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
-              <Muted>{profile?.designation || 'Staff'}</Muted>
-              {profile?.is_admin ? <Badge tone="gold" label="Administrator" /> : null}
-              <Badge tone={online ? 'data' : 'success'} label={online ? 'Over the internet' : 'On the school network'} />
+      {/* The reference puts a person's own face on a coloured header and their
+          settings underneath it. It reads as "this is yours" in a way a white
+          card with an avatar in the corner does not. */}
+      <Appear distance={12}>
+        <Gradient colors={gradients.brand} angle={128} style={[styles.head, shadow.raised]}>
+          <View pointerEvents="none" style={styles.headGlow} />
+          <View style={{ alignItems: 'center', gap: spacing.md }}>
+            <Avatar name={u.full_name} photo={profile?.photo} size={78} tone="chrome" ring />
+            <View style={{ alignItems: 'center', gap: 4 }}>
+              <Text numberOfLines={2} style={{ ...type.title, color: '#fff', textAlign: 'center' }}>
+                {u.full_name || 'Staff'}
+              </Text>
+              <Text numberOfLines={1} style={{ ...type.small, color: 'rgba(255,255,255,0.76)', fontWeight: '600' }}>
+                {u.username ? `@${u.username}` : (profile?.designation || 'Staff')}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <Badge tone="chrome" label={profile?.designation || 'Staff'} />
+              {profile?.is_admin ? <Badge tone="chrome" icon="crown" label="Administrator" /> : null}
+              <Badge tone="chrome" icon={online ? 'refresh' : 'tick'}
+                label={online ? 'Over the internet' : 'On the school network'} />
             </View>
           </View>
+        </Gradient>
+      </Appear>
+
+      <SuccessNote message={pwDone} />
+
+      <Section title="Your account" icon="badge" padded>
+        <MenuRow icon="badge" label="My work and my record" hint="Employment, attendance, leave, payslips"
+          onPress={() => router.push('/staff/me')} />
+        <MenuRow icon="lock" label="Change your password" iconTone="violet"
+          hint={forced ? 'Set by an administrator — choose your own' : 'The password you sign in with'}
+          onPress={() => { setChanging(true); setPwDone(null); }} />
+        <MenuRow icon="grid" label="What you can open" iconTone="data"
+          hint={profile?.is_admin ? 'Full access' : `${allowed.length} module${allowed.length === 1 ? '' : 's'}`}
+          onPress={() => setPermsOpen(true)} last />
+      </Section>
+
+      <Section title="Your school" icon="school">
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md }}>
+          <Crest logo={brand.logo} size={46} tone="light" />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Heading numberOfLines={2}>{brand.school?.name || profile?.school?.name || 'Your school'}</Heading>
+            {brand.school?.motto ? <Muted numberOfLines={1}>{brand.school.motto}</Muted> : null}
+          </View>
         </View>
-        <Divider />
         <KeyValue items={[
-          { label: 'Username', value: u.username },
-          { label: online ? 'School' : 'Address', value: online ? (profile?.school?.name || 'Nickland Edusoft online') : host },
+          { label: 'Address', value: brand.school?.address },
+          { label: online ? 'Connected to' : 'This machine', value: online ? 'The school portal, over the internet' : host },
         ]} />
-      </Card>
+        <View style={{ marginTop: spacing.md }}>
+          <ContactSchool variant="subtle" title="Message the school office" icon="whatsapp" full />
+        </View>
+      </Section>
 
       {online && (
         <Section title="Reaching the school" icon="refresh">
@@ -106,9 +161,26 @@ export default function Account() {
         </Section>
       )}
 
-      <Section title="What you can open" icon="grid">
+      <Section title="Leaving" icon="logout">
+        <MenuRow icon="logout" label="Sign out" danger
+          hint="You will need your password to come back in"
+          onPress={async () => { setSigningOut(true); await signOut(); router.replace('/login'); }} />
+        <MenuRow icon="pin" label="Change school or address" iconTone="neutral"
+          hint="Point this app at a different school" last
+          onPress={async () => { await forgetConnection(); router.replace('/connect'); }} />
+      </Section>
+
+      <Muted style={{ textAlign: 'center', paddingVertical: spacing.md }}>
+        Nickland Edusoft · Nickland Sales
+      </Muted>
+
+      <Sheet visible={permsOpen} onClose={() => setPermsOpen(false)} title="What you can open" width={460}>
+        <Body style={{ marginBottom: spacing.sm }}>
+          The school decides what each account may reach. What you may not open, you do not see —
+          and the school's own system checks every request regardless of what the app draws.
+        </Body>
         {profile?.is_admin ? (
-          <Muted>Full access — an administrator is not restricted anywhere.</Muted>
+          <InfoNote message="Full access — an administrator is not restricted anywhere." />
         ) : allowed.length === 0 ? (
           <Muted>No modules are enabled for your account. Ask the school office.</Muted>
         ) : (
@@ -116,40 +188,36 @@ export default function Account() {
             {allowed.map(k => <Badge key={k} tone="primary" label={MODULE_NAMES[k] || k} />)}
           </View>
         )}
-      </Section>
+      </Sheet>
 
-      <Section title="Your password" icon="wallet">
-        {forced && !pwDone && (
+      <Sheet
+        visible={changing} onClose={() => { if (!forced) { setChanging(false); setPwError(null); } }}
+        title="Change your password" width={460}
+        footer={<>
+          {!forced ? <Button variant="outline" title="Cancel" full={false} onPress={() => { setChanging(false); setPwError(null); }} /> : null}
+          <Button title={pwBusy ? 'Saving…' : 'Change password'} onPress={savePassword} busy={pwBusy} full={false} />
+        </>}
+      >
+        {forced ? (
           <InfoNote message="Your password was set by an administrator. Choose your own before carrying on." />
-        )}
-        <SuccessNote message={pwDone} />
-        {changing ? (
-          <>
-            <Field label="Current password" value={pw.current} onChangeText={v => setP('current', v)}
-              secureTextEntry placeholder="The one you signed in with" />
-            <Field label="New password" value={pw.next} onChangeText={v => setP('next', v)}
-              secureTextEntry placeholder="At least 6 characters" />
-            <Field label="Confirm new password" value={pw.confirm} onChangeText={v => setP('confirm', v)}
-              secureTextEntry placeholder="Type it again" />
-            <ErrorNote message={pwError} />
-            <Button title={pwBusy ? 'Saving…' : 'Change password'} onPress={savePassword} busy={pwBusy} />
-            {!forced && <Button title="Cancel" variant="ghost" onPress={() => { setChanging(false); setPwError(null); }} />}
-          </>
-        ) : (
-          <>
-            <Muted>Change the password you sign in with.</Muted>
-            <Button title="Change password" variant="outline" icon="gear"
-              onPress={() => { setChanging(true); setPwDone(null); }} style={{ marginTop: spacing.sm }} />
-          </>
-        )}
-      </Section>
+        ) : null}
+        <Field label="Current password" value={pw.current} onChangeText={v => setP('current', v)}
+          secureTextEntry icon="lock" placeholder="The one you signed in with" />
+        <Field label="New password" value={pw.next} onChangeText={v => setP('next', v)}
+          secureTextEntry icon="lock" placeholder="At least 6 characters" />
+        <Field label="Confirm new password" value={pw.confirm} onChangeText={v => setP('confirm', v)}
+          secureTextEntry icon="lock" placeholder="Type it again" />
+        <ErrorNote message={pwError} />
+      </Sheet>
 
-      <Card>
-        <Button title="Sign out" variant="danger" icon="logout"
-          onPress={async () => { await signOut(); router.replace('/login'); }} />
-        <Button title="Change school or address" variant="ghost"
-          onPress={async () => { await forgetConnection(); router.replace('/connect'); }} />
-      </Card>
     </Screen>
   );
 }
+
+const styles = {
+  head: { borderRadius: radius.lg, padding: spacing.xl, overflow: 'hidden' },
+  headGlow: {
+    position: 'absolute', right: -70, top: -90, width: 250, height: 250,
+    borderRadius: 125, backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+};

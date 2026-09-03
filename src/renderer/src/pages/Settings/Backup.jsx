@@ -68,7 +68,7 @@ function Chip({ active, children, onClick }) {
     <button type="button" onClick={onClick}
       style={{ cursor: 'pointer', padding: '7px 13px', borderRadius: 999, fontWeight: 600, fontSize: 13,
         border: `1.5px solid ${active ? 'var(--primary)' : 'var(--border)'}`,
-        background: active ? 'var(--primary)' : 'var(--surface-1)', color: active ? '#fff' : 'inherit' }}>
+        background: active ? 'var(--primary)' : 'var(--surface-1)', color: active ? 'var(--surface-1)' : 'inherit' }}>
       {children}
     </button>
   );

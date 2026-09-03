@@ -1,23 +1,29 @@
-// Nickland Edusoft — printing, from the browser app.
+// Nickland Edusoft — printing.
 // Copyright © 2026 Nickland Sales. All rights reserved.
 //
-// Three documents a school is asked for constantly and that neither the parent
-// portal nor the teacher portal could produce: a terminal report, a pupil's
-// profile sheet, and a member of staff's own record. Each was a trip to the
-// office and a photocopier.
+// The rule: a document printed from a phone or a browser is the document the
+// office prints. Not similar — the same. A school that hands out two report
+// cards with the same title and different layouts has a problem no feature
+// makes up for.
 //
-// How it works: the document is built as a small, self-contained HTML page —
-// the school's crest and any photograph are already data URIs by the time they
-// reach here, so nothing has to be fetched while the print dialog is opening —
-// dropped into a hidden iframe on the same page, and printed from there.
+// So the report card and the pupil profile are NOT built here. They are built
+// by the desktop's own report generator (`electron/ipc/reports.js`, the same
+// function behind the office's PDF), served as HTML at
+// `/results/student/:id/report.html` and `/students/:id/profile.html`, and
+// printed verbatim. `printDocument()` below takes that string and nothing else.
 //
-// An iframe rather than window.open() on purpose. A pop-up is blocked by
-// default on most phone browsers, and the parent tapping "Print report" would
-// get nothing at all with no explanation. The iframe is same-document and
-// cannot be blocked.
+// Two documents have no desktop equivalent and are built here: the statement of
+// account a parent asks for, and a member of staff's own profile sheet. Both
+// follow the same A4 house style so they sit in the same folder without looking
+// like they came from somewhere else.
 //
-// On the phone app there is no print pipeline at all, so `canPrint` is false
-// and every caller offers the browser instead of a dead button.
+// How it prints: the string goes into a hidden iframe on the same page and that
+// iframe is printed. A pop-up window is blocked by default on most phone
+// browsers, and the parent tapping "Print report" would get nothing at all with
+// no explanation.
+//
+// On the phone app there is no print pipeline, so `canPrint` is false and every
+// caller offers the browser instead of a dead button.
 
 import { Platform } from 'react-native';
 
@@ -114,127 +120,10 @@ const kv = (items) => `<div class="kv">${items
 
 // ── the documents ───────────────────────────────────────────────────────────
 
-/**
- * A terminal report card. Takes the shape either the parent's
- * `/parent/children/:id/report` or the teacher's `/results/student/:id`
- * returns — they were made to match precisely so one printer serves both.
- */
-export function terminalReportHtml(r) {
-  const s = r.student || {};
-  const sum = r.summary || {};
-  const att = r.attendance || {};
-  const subjects = r.subjects || [];
-  const bandFor = (score) => {
-    if (score == null) return '';
-    const hit = (r.grading_bands || []).find(b => score >= b.min_score && score <= b.max_score);
-    return hit ? hit.remark : '';
-  };
-
-  const rows = subjects.map(sub => `
-    <tr>
-      <td>${esc(sub.subject)}</td>
-      <td class="num">${sub.class_score == null ? '—' : esc(sub.class_score)}</td>
-      <td class="num">${sub.exam_score == null ? '—' : esc(sub.exam_score)}</td>
-      <td class="num"><strong>${sub.total_score == null ? '—' : esc(sub.total_score)}</strong></td>
-      <td>${esc(sub.grade_remark || bandFor(sub.total_score))}</td>
-    </tr>`).join('');
-
-  const body = `
-    ${masthead(r.school, `Terminal report — ${r.term?.label || 'This term'}`)}
-    <div class="who-row">
-      ${s.photo ? `<img class="face" src="${esc(s.photo)}" alt="">` : '<div class="facebox">No photograph on file</div>'}
-      <div style="flex:1">
-        ${kv([
-          { label: 'Name', value: s.name },
-          { label: 'Index number', value: s.index_number },
-          { label: 'Class', value: s.class_name },
-          { label: 'Class teacher', value: s.class_teacher },
-          { label: 'Term', value: r.term?.label },
-          { label: 'Examination', value: r.dates?.exam_title },
-          { label: 'Position', value: sum.class_rank ? `${sum.class_rank} of ${sum.number_on_roll || '—'}` : null },
-          { label: 'Average', value: sum.average_score != null ? Number(sum.average_score).toFixed(1) : null },
-          { label: 'Attendance', value: att.total ? `${att.present || 0} of ${att.total} days` : null },
-          { label: 'Subjects offered', value: subjects.length || null },
-        ])}
-      </div>
-    </div>
-
-    <table>
-      <thead><tr>
-        <th>Subject</th><th class="num">Class work</th><th class="num">Exam</th>
-        <th class="num">Total</th><th>Grade / remark</th>
-      </tr></thead>
-      <tbody>${rows || '<tr><td colspan="5">No marks have been published for this term.</td></tr>'}</tbody>
-    </table>
-
-    ${sum.conduct_traits ? `<div class="band"><div class="lbl">Conduct</div><div>${esc(sum.conduct_traits)}</div></div>` : ''}
-    ${sum.learner_interests ? `<div class="band"><div class="lbl">Interests</div><div>${esc(sum.learner_interests)}</div></div>` : ''}
-    ${sum.learner_talents ? `<div class="band"><div class="lbl">Talents</div><div>${esc(sum.learner_talents)}</div></div>` : ''}
-    <div class="band remark"><div class="lbl">Class teacher's remark</div><div>${esc(sum.teacher_remarks || '')}</div></div>
-
-    ${(r.dates?.vacation || r.dates?.reopening) ? kv([
-      { label: 'Vacation', value: r.dates.vacation },
-      { label: 'School reopens', value: r.dates.reopening },
-    ]) : ''}
-
-    <div class="sig"><div>Class teacher</div><div>Head teacher</div><div>Parent / guardian</div></div>
-    ${footer(r.school?.name)}`;
-
-  return page(`Report — ${s.name || 'Pupil'}`, body);
-}
-
-/** A pupil's profile sheet — the page a school is asked for by hospitals,
- *  scholarship boards and the district office. */
-export function studentProfileHtml({ student, school, term, fees, canteen, attendance }) {
-  const s = student || {};
-  const guardians = (s.guardians || []).filter(g => g.name || g.contact);
-  const body = `
-    ${masthead(school, 'Pupil profile')}
-    <div class="who-row">
-      ${s.photo ? `<img class="face" src="${esc(s.photo)}" alt="">` : '<div class="facebox">No photograph on file</div>'}
-      <div style="flex:1">
-        ${kv([
-          { label: 'Full name', value: s.name },
-          { label: 'Index number', value: s.index_number },
-          { label: 'Class', value: s.class_name },
-          { label: 'Status', value: s.status },
-          { label: 'Gender', value: s.gender },
-          { label: 'Date of birth', value: s.date_of_birth },
-          { label: 'Age', value: s.age },
-          { label: 'Place of birth', value: s.place_of_birth },
-          { label: 'Denomination', value: s.denomination },
-          { label: 'NHIS number', value: s.nhis_number },
-        ])}
-      </div>
-    </div>
-
-    ${kv([
-      { label: 'Residence', value: s.place_of_residence },
-      { label: 'Street address', value: s.street_address },
-      { label: 'House number', value: s.house_number },
-      { label: 'Digital (GPS) address', value: s.digital_address },
-      { label: 'Admitted', value: s.admission_date || s.admission_year },
-      { label: 'Roll number', value: s.roll_number },
-    ])}
-
-    ${guardians.length ? `
-      <table>
-        <thead><tr><th>Relation</th><th>Name</th><th>Contact</th></tr></thead>
-        <tbody>${guardians.map(g => `<tr><td>${esc(g.relation)}</td><td>${esc(g.name || '')}</td><td>${esc(g.contact || '')}</td></tr>`).join('')}</tbody>
-      </table>` : ''}
-
-    ${attendance && attendance.total ? `<div class="band"><div class="lbl">Attendance${term ? ` — ${esc(term)}` : ''}</div>
-      <div>${esc(attendance.present || 0)} present · ${esc(attendance.absent || 0)} absent of ${esc(attendance.total)} days recorded</div></div>` : ''}
-
-    ${(fees || canteen) ? `<div class="band"><div class="lbl">Account${term ? ` — ${esc(term)}` : ''}</div>
-      <div>${fees ? `School fees: ${esc(money(fees.balance))} outstanding of ${esc(money(fees.billed))} billed.` : ''}
-           ${canteen ? ` Canteen: ${esc(money(canteen.amount_owed))} outstanding (${esc(canteen.unpaid_days || 0)} days).` : ''}</div>
-      <div style="margin-top:4px;color:#64748B;font-size:9pt">Payment is arranged with the school office. No payment is taken through the app.</div></div>` : ''}
-
-    <div class="sig"><div>Class teacher</div><div>Head teacher</div></div>
-    ${footer(school?.name)}`;
-  return page(`Profile — ${s.name || 'Pupil'}`, body);
-}
+// The report card and the pupil profile used to be built here, in a house
+// style of this app's own. They are not any more: `api.reportCardDocument` and
+// `api.studentProfileDocument` fetch the office's own document and
+// `printFromSchool` prints it. Two templates for one document is two documents.
 
 /** A member of staff's own record. Employment facts only: no salary figure,
  *  no bank details, nothing a person would not hand to a landlord. */
@@ -377,9 +266,25 @@ export function printHtml(html) {
   }
 }
 
+/**
+ * Fetch a document the school's own system built, and print it.
+ *
+ * `fetcher` returns the HTML string (see `api.reportCardDocument` and friends).
+ * Errors come back as a message rather than a throw, because every caller here
+ * shows it to a person rather than logging it.
+ */
+export async function printFromSchool(fetcher) {
+  if (!canPrint) return { ok: false, error: NOT_ON_PHONE };
+  let doc;
+  try { doc = await fetcher(); }
+  catch (e) { return { ok: false, error: e.message || 'Could not fetch the document.' }; }
+  if (!doc || typeof doc !== 'string') return { ok: false, error: 'The school returned an empty document.' };
+  return printHtml(doc) ? { ok: true } : { ok: false, error: 'The browser would not open the print dialog.' };
+}
+
 export const NOT_ON_PHONE =
   'Printing happens in the browser. Open the school’s web address on a computer or phone browser, sign in, and the print button there will produce this document.';
 
 export default {
-  canPrint, printHtml, terminalReportHtml, studentProfileHtml, staffProfileHtml, statementHtml, NOT_ON_PHONE,
+  canPrint, printHtml, printFromSchool, staffProfileHtml, statementHtml, NOT_ON_PHONE,
 };

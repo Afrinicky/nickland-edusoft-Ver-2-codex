@@ -189,8 +189,45 @@ function studentProfile(db, s) {
   };
 }
 
+// ── The documents the apps print ────────────────────────────────────────────
+// The desktop's own report generator (electron/ipc/reports.js) builds these.
+// The phone and the browser hold no templates: they ask for the string and
+// print it verbatim, so a report card printed at the school gate is identical
+// to the one the office prints — same layout, same crest, same signatures.
+//
+// `getResourcePath` is how the generator finds the bundled fallback logo. On a
+// host started outside Electron (a test, a headless run) it resolves against
+// the repo's own resources folder rather than throwing.
+function printableDocs() {
+  try { return require('../ipc/reports'); } catch (_) { return null; }
+}
+
+function resourcePathFor(opts) {
+  if (opts && typeof opts.getResourcePath === 'function') return opts.getResourcePath;
+  const path = require('path');
+  const base = process.resourcesPath
+    ? path.join(process.resourcesPath, 'resources')
+    : path.resolve(__dirname, '..', '..', 'resources');
+  return (name) => path.join(base, name);
+}
+
 function createApiServer(db, opts = {}) {
   const routes = [];
+  const getResourcePath = resourcePathFor(opts);
+
+  // Both print routes answer HTML, not JSON: the client hands the string
+  // straight to the printer. `html()` exists so they are not squeezed through
+  // the JSON writer.
+  const html = (res, code, body) => {
+    res.writeHead(code, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(body);
+  };
   // `public: true` marks a route reachable without a bearer token. It used to
   // be inferred by scanning the pattern for segments named health/info/login/
   // register, which would silently expose any future route that happened to
@@ -678,6 +715,37 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, {
       ok: true, term: term ? { id: term.id, label: term.label } : null, days, totals,
     });
+  });
+
+  // ── The printable documents, exactly as the office prints them ──
+  add('GET', `${API}/parent/children/:id/report.html`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const docs = printableDocs();
+    if (!docs || !docs.reportCardDocument) return json(res, 501, { ok: false, error: 'This school\u2019s system cannot print report cards yet.' });
+    const term = query.termId
+      ? db.prepare('SELECT id FROM terms WHERE id = ?').get(parseInt(query.termId, 10))
+      : db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
+    if (!term) return json(res, 404, { ok: false, error: 'No term to report on.' });
+    let r;
+    try { r = docs.reportCardDocument(db, getResourcePath, { studentId: sid, termId: term.id, colorMode: query.bw === '1' ? 'bw' : 'color' }); }
+    catch (e) { return json(res, 500, { ok: false, error: 'Could not build the report card.' }); }
+    if (!r.ok) return json(res, 404, r);
+    return html(res, 200, r.document);
+  });
+
+  add('GET', `${API}/parent/children/:id/profile.html`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const docs = printableDocs();
+    if (!docs || !docs.studentProfileDocument) return json(res, 501, { ok: false, error: 'This school\u2019s system cannot print profiles yet.' });
+    let r;
+    try { r = docs.studentProfileDocument(db, getResourcePath, sid, { colorMode: query.bw === '1' ? 'bw' : 'color' }); }
+    catch (e) { return json(res, 500, { ok: false, error: 'Could not build the profile.' }); }
+    if (!r.ok) return json(res, 404, r);
+    return html(res, 200, r.document);
   });
 
   // ── Conduct: what the school has recorded about this child ──
@@ -1202,7 +1270,7 @@ function createApiServer(db, opts = {}) {
   // and the terminal report, lesson notes, messages, notices, the canteen
   // sheet, and their own clock-in, leave and payslips. Kept in its own module
   // so this one stays the router rather than the whole school.
-  registerStaffRoutes({ add, db, json, can, API, getSetting, media, studentProfile });
+  registerStaffRoutes({ add, db, json, html, can, API, getSetting, media, studentProfile, getResourcePath });
 
   // There is no payment webhook here any more, and no checkout to answer for.
   // Money is never taken through this app: a balance is shown, and settling it

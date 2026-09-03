@@ -15,10 +15,16 @@ import { Redirect, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { Loading } from '../../src/ui';
 import { AppShell } from '../../src/shell';
-import { STAFF_NAV, STAFF_PRIMARY } from '../../src/nav';
+import { STAFF_NAV, STAFF_PRIMARY, STAFF_QUICK } from '../../src/nav';
 import { api } from '../../src/api';
 
-const NAV = { title: 'Staff', items: STAFF_NAV, primary: STAFF_PRIMARY, accountHref: '/staff/account' };
+const NAV = {
+  title: 'Staff', items: STAFF_NAV, primary: STAFF_PRIMARY, quick: STAFF_QUICK,
+  accountHref: '/staff/account',
+  actionIcon: 'plus',
+  actionLabel: 'What do you need to do?',
+  actionHint: 'The jobs of a school day, one tap from anywhere in the app.',
+};
 
 export default function StaffLayout() {
   const { ready, token, profile, mode } = useAuth();

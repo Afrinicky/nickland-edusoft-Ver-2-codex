@@ -3,8 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 
-const NAVY = '#1B3A6B';
-const GOLD = '#C9961A';
+const NAVY = 'var(--primary)';
+const GOLD = 'var(--accent)';
 
 export default function MessagesIndex() {
   const { currentUser, showToast, can } = useStore();
@@ -45,11 +45,11 @@ export default function MessagesIndex() {
         <h1 style={{ color: NAVY, margin: 0 }}>Messages</h1>
         {canReply && <button style={primaryBtn} onClick={() => setNewOpen(true)}>New message</button>}
       </div>
-      <p style={{ color: '#64748B', marginTop: 4 }}>Conversations with parents. Your replies are also sent to the parent by SMS/email.</p>
+      <p style={{ color: 'var(--muted)', marginTop: 4 }}>Conversations with parents. Your replies are also sent to the parent by SMS/email.</p>
 
       <div style={{ display: 'flex', gap: 16, marginTop: 12, alignItems: 'flex-start' }}>
         <div style={{ width: 320, flexShrink: 0 }}>
-          {threads.length === 0 && <div style={{ ...card, color: '#94A3B8' }}>No conversations yet.</div>}
+          {threads.length === 0 && <div style={{ ...card, color: 'var(--faint)' }}>No conversations yet.</div>}
           {threads.map(t => (
             <div key={t.id} onClick={() => open(t.id)}
               style={{ ...card, cursor: 'pointer', marginBottom: 8, borderLeft: t.id === selId ? `4px solid ${NAVY}` : '4px solid transparent' }}>
@@ -57,26 +57,26 @@ export default function MessagesIndex() {
                 <strong>{t.parent_name}</strong>
                 {t.staff_unread > 0 && <span style={badge}>{t.staff_unread}</span>}
               </div>
-              <div style={{ fontSize: 12, color: '#64748B' }}>{t.subject || (t.student_name ? `Re: ${t.student_name}` : 'Conversation')}</div>
-              <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.preview}</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t.subject || (t.student_name ? `Re: ${t.student_name}` : 'Conversation')}</div>
+              <div style={{ fontSize: 12, color: 'var(--faint)', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.preview}</div>
             </div>
           ))}
         </div>
 
         <div style={{ flex: 1 }}>
-          {!detail ? <div style={{ ...card, color: '#94A3B8' }}>Select a conversation.</div> : (
+          {!detail ? <div style={{ ...card, color: 'var(--faint)' }}>Select a conversation.</div> : (
             <div style={card}>
-              <div style={{ borderBottom: '1px solid #E7EBF1', paddingBottom: 8, marginBottom: 8 }}>
+              <div style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 8 }}>
                 <strong>{detail.thread.parent_name}</strong>
-                <div style={{ fontSize: 12, color: '#64748B' }}>{detail.thread.subject || ''}{detail.thread.student_name ? ` · ${detail.thread.student_name}` : ''}</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>{detail.thread.subject || ''}{detail.thread.student_name ? ` · ${detail.thread.student_name}` : ''}</div>
               </div>
               <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {detail.messages.map(m => (
                   <div key={m.id} style={{ alignSelf: m.sender_type === 'staff' ? 'flex-end' : 'flex-start', maxWidth: '75%' }}>
-                    <div style={{ background: m.sender_type === 'staff' ? NAVY : '#F1F5F9', color: m.sender_type === 'staff' ? '#fff' : '#0F172A', padding: '8px 12px', borderRadius: 12 }}>
+                    <div style={{ background: m.sender_type === 'staff' ? NAVY : '#F1F5F9', color: m.sender_type === 'staff' ? 'var(--surface-1)' : '#0F172A', padding: '8px 12px', borderRadius: 12 }}>
                       {m.body}
                     </div>
-                    <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2, textAlign: m.sender_type === 'staff' ? 'right' : 'left' }}>
+                    <div style={{ fontSize: 11, color: 'var(--faint)', marginTop: 2, textAlign: m.sender_type === 'staff' ? 'right' : 'left' }}>
                       {m.sender_name || (m.sender_type === 'staff' ? 'School' : 'Parent')} · {String(m.created_at).slice(0, 16).replace('T', ' ')}
                     </div>
                   </div>
@@ -86,7 +86,7 @@ export default function MessagesIndex() {
                 <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                   <input value={reply} onChange={e => setReply(e.target.value)} placeholder="Type a reply…"
                     onKeyDown={e => { if (e.key === 'Enter') send(); }}
-                    style={{ flex: 1, padding: '10px 12px', border: '1px solid #E2E8F0', borderRadius: 8 }} />
+                    style={{ flex: 1, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8 }} />
                   <button style={primaryBtn} onClick={send} disabled={busy}>{busy ? 'Sending…' : 'Send'}</button>
                 </div>
               )}
@@ -142,10 +142,10 @@ function NewMessage({ onClose, currentUser, showToast, onSent }) {
   );
 }
 
-const card = { background: '#fff', border: '1px solid #E7EBF1', borderRadius: 12, padding: 16 };
-const primaryBtn = { background: NAVY, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, cursor: 'pointer' };
-const ghostBtn = { background: '#fff', color: NAVY, border: '1px solid #E2E8F0', borderRadius: 8, padding: '8px 14px', fontWeight: 600, cursor: 'pointer' };
-const badge = { background: GOLD, color: '#fff', borderRadius: 999, padding: '0 8px', fontSize: 12, fontWeight: 800 };
+const card = { background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
+const primaryBtn = { background: NAVY, color: 'var(--surface-1)', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, cursor: 'pointer' };
+const ghostBtn = { background: 'var(--surface-1)', color: NAVY, border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', fontWeight: 600, cursor: 'pointer' };
+const badge = { background: GOLD, color: 'var(--surface-1)', borderRadius: 999, padding: '0 8px', fontSize: 12, fontWeight: 800 };
 const overlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 };
-const lbl = { display: 'block', fontSize: 12, fontWeight: 700, color: '#64748B', margin: '10px 0 4px' };
-const inp = { width: '100%', padding: '9px 10px', border: '1px solid #E2E8F0', borderRadius: 8, fontSize: 14 };
+const lbl = { display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--muted)', margin: '10px 0 4px' };
+const inp = { width: '100%', padding: '9px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 };

@@ -219,8 +219,8 @@ function Splash() {
     <div className="splash">
       <div className="splash-logo">
         <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-          <rect width="64" height="64" rx="16" fill="#1B3A6B"/>
-          <path d="M14 46L32 20L50 46H14Z" fill="#C9961A"/>
+          <rect width="64" height="64" rx="16" fill="var(--primary)"/>
+          <path d="M14 46L32 20L50 46H14Z" fill="var(--accent)"/>
         </svg>
       </div>
       <div className="splash-name">Nickland Edusoft</div>
