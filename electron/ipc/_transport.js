@@ -50,7 +50,10 @@ function httpsRequest(options, body) {
 async function sendSms(db, to, message) {
   const provider = getSetting(db, 'sms_provider', 'arkesel');
   const apiKey = getSetting(db, 'sms_api_key', '');
-  const sender = getSetting(db, 'sms_sender_id', 'EduSoft');
+  // Arkesel rejects a sender ID over 11 characters outright, and the school
+  // sees a failed send rather than "your school name is too long". Trim it
+  // here so a name typed in before the field grew a maxLength still delivers.
+  const sender = String(getSetting(db, 'sms_sender_id', 'EduSoft') || 'EduSoft').trim().slice(0, 11);
   if (!apiKey) return { ok: false, simulated: true, error: 'no_api_key' };
   const msisdn = normalizeMsisdn(to);
   if (!msisdn) return { ok: false, error: 'invalid_recipient' };
