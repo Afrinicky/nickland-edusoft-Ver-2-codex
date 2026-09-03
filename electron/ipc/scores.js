@@ -5,6 +5,49 @@
 const path = require('path');
 const fs = require('fs');
 const { enqueueStudentSnapshot } = require('../server/sync/outbox');
+// A teacher sees the columns for the subjects they teach in this class, and
+// no others. Scoping a sheet by class alone is not enough: the sheet IS the
+// class's whole subject grid, so a teacher who takes one subject in it was
+// handed every column and could type in any of them.
+function scopedSubjects(db, classId, subjects) {
+  try { return require('./_scope').filterSubjectsForCurrentUser(db, classId, subjects); }
+  catch (_) { return subjects; }
+}
+
+// May the signed-in user write this pupil's mark in this subject?
+//
+// The channel policy scopes a call by the class named in its arguments, and
+// these writes do not name one — saveExamMark takes a student and a subject
+// and nothing else. So the class is resolved from the pupil here, at the only
+// point that has it. Without this a teacher could save a mark in any subject
+// by calling the channel directly, whatever the sheet showed them.
+function mayWriteMark(db, studentId, subjectId) {
+  try {
+    const security = require('./_security');
+    const scopes = require('./_scope');
+    const userId = security.getCurrentUserId();
+    // No session at all means this is not somebody browsing: a migration, a
+    // sync applying a change, or a test harness. Renderer traffic cannot get
+    // here signed out — the IPC guard refuses every channel before it — so
+    // refusing again here only breaks the internal callers.
+    if (!userId) return true;
+    const scope = scopes.scopeFor(db, userId);
+    if (scope.unrestricted) return true;
+    const classId = scopes.classOfStudent(db, studentId);
+    if (!classId) return false;
+    return scopes.canAccessSubject(scope, classId, subjectId);
+  } catch (_) {
+    // The guard must never be the reason a save crashes; refuse instead.
+    return false;
+  }
+}
+
+const DENIED_MARK = {
+  ok: false,
+  denied: true,
+  error: 'That subject is not one of yours in that class.',
+};
+
 function registerScoresHandlers(ipcMain, db) {
   ipcMain.handle('scores:list-subjects', () => {
     return db.prepare('SELECT * FROM subjects WHERE is_active = 1 ORDER BY name').all();
@@ -16,12 +59,13 @@ function registerScoresHandlers(ipcMain, db) {
       FROM students WHERE current_class_id = ? AND status = 'Active'
       ORDER BY surname, first_name
     `).all(classId);
-    const subjects = db.prepare(`
+    let subjects = db.prepare(`
       SELECT s.* FROM subjects s
       JOIN class_subjects cs ON cs.subject_id = s.id
       WHERE cs.class_group_id = ? AND s.is_active = 1
       ORDER BY s.name
     `).all(classId);
+    subjects = scopedSubjects(db, classId, subjects);
     const scores = db.prepare(`
       SELECT * FROM scores WHERE term_id = ? AND student_id IN (
         SELECT id FROM students WHERE current_class_id = ?
@@ -34,6 +78,12 @@ function registerScoresHandlers(ipcMain, db) {
   });
 
   ipcMain.handle('scores:save-bulk', (_e, { entries, summaries }) => {
+    // All or nothing. Writing the permitted rows and silently dropping the
+    // rest would leave a teacher believing a sheet saved when half of it did
+    // not, which is worse than refusing the save outright.
+    for (const e of entries || []) {
+      if (!mayWriteMark(db, e.student_id ?? e.studentId, e.subject_id ?? e.subjectId)) return DENIED_MARK;
+    }
     const tx = db.transaction(() => {
       const ins = db.prepare(`
         INSERT INTO scores (student_id, term_id, subject_id, class_score, exam_score, total_score, grade_remark)
@@ -326,6 +376,9 @@ function registerScoresHandlers(ipcMain, db) {
   });
 
   ipcMain.handle('scores:save-assessment-mark', (_e, { columnId, studentId, marks }) => {
+    // The column names the class and subject this mark belongs to.
+    const target = db.prepare('SELECT class_group_id, subject_id FROM assessment_columns WHERE id = ?').get(columnId);
+    if (target && !mayWriteMark(db, studentId, target.subject_id)) return DENIED_MARK;
     db.prepare(`
       INSERT INTO assessment_scores (assessment_column_id, student_id, marks)
       VALUES (?, ?, ?)
@@ -348,6 +401,9 @@ function registerScoresHandlers(ipcMain, db) {
     if (subjects.length === 0) {
       subjects = db.prepare("SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name").all();
     }
+    // A teacher who takes one subject in this class gets that column and no
+    // other. Scoping the sheet by class alone handed them the whole grid.
+    subjects = scopedSubjects(db, classId, subjects);
     const students = db.prepare(`
       SELECT id, index_number, surname, first_name, other_names
       FROM students WHERE current_class_id = ? AND status = 'Active'
@@ -384,6 +440,7 @@ function registerScoresHandlers(ipcMain, db) {
       WHERE cs.class_group_id = ? AND s.is_active = 1
       ORDER BY s.name
     `).all(classId);
+    subjects = scopedSubjects(db, classId, subjects);
     const usedFallbackSubjects = subjects.length === 0;
     if (usedFallbackSubjects) {
       subjects = db.prepare('SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name').all();
@@ -439,6 +496,15 @@ function registerScoresHandlers(ipcMain, db) {
   });
 
   ipcMain.handle('scores:save-assessment-compilation', (_e, { classId, termId, students }) => {
+    // The compilation sheet is the whole class's grid, and it is the route
+    // Import Excel writes through. Every subject it touches has to be one the
+    // signed-in teacher may write, or the save is refused whole.
+    for (const st of students || []) {
+      const sid = st.student_id ?? st.studentId ?? st.id;
+      for (const key of Object.keys(st.subject_scores || {})) {
+        if (!mayWriteMark(db, sid, key)) return DENIED_MARK;
+      }
+    }
     try {
       const tx = db.transaction(() => {
         const upsertScore = db.prepare(`
@@ -601,7 +667,8 @@ function registerScoresHandlers(ipcMain, db) {
 
   // ═══ End of Term Results (class+exam combined) ═══
   ipcMain.handle('scores:end-of-term', (_e, { classId, termId }) => {
-    const subjects = db.prepare("SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name").all();
+    const subjects = scopedSubjects(db, classId,
+      db.prepare("SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name").all());
     const students = db.prepare(`
       SELECT id, index_number, surname, first_name FROM students
       WHERE current_class_id = ? AND status = 'Active' ORDER BY surname, first_name
@@ -643,6 +710,7 @@ function getAssessmentCompilationData(db, classId, termId, weights) {
   `).all(classId);
   const usedFallbackSubjects = subjects.length === 0;
   if (usedFallbackSubjects) subjects = db.prepare('SELECT id, name, code FROM subjects WHERE is_active = 1 ORDER BY name').all();
+  subjects = scopedSubjects(db, classId, subjects);
   const classRow = db.prepare('SELECT name FROM class_groups WHERE id = ?').get(classId) || {};
   const termRow = db.prepare('SELECT label FROM terms WHERE id = ?').get(termId) || {};
   const students = db.prepare(`
@@ -901,6 +969,7 @@ function readWeights(db) {
 // exam sheet and the mobile score-entry screen so the WHONET-style weighting
 // stays identical across both. Refreshes the cloud snapshot for the portal.
 function saveExamMark(db, { studentId, subjectId, termId, examScore }) {
+  if (!mayWriteMark(db, studentId, subjectId)) return DENIED_MARK;
   db.prepare(`
     INSERT INTO scores (student_id, term_id, subject_id, exam_score)
     VALUES (?, ?, ?, ?)

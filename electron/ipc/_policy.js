@@ -100,8 +100,11 @@ const POLICY = {
   'scores:exam-sheet':                  ['academics', 'view', SUBJECT(CK, SK)],
   'scores:save-exam-mark':              ['academics', 'edit', SUBJECT(CK, SK)],
   'scores:save-bulk':                   ['academics', 'edit', SUBJECT(CK, SK)],
-  'scores:save-subject':                ['academics', 'edit', SUBJECT(CK, SK)],
-  'scores:delete-subject':              ['academics', 'delete', SUBJECT(CK, SK)],
+  // Creating or retiring a SUBJECT changes the school's curriculum for every
+  // class — it is not a teacher marking their own sheet, and the scope rule
+  // could never catch it because neither call names a class.
+  'scores:save-subject':                ['settings', 'edit'],
+  'scores:delete-subject':              ['settings', 'delete'],
   'scores:get-weights':                 ['academics', 'view'],
   'scores:rank-class':                  ['academics', 'view', CLASS(...CK)],
   'scores:student-report':              ['academics', 'view', STUDENT('studentId', 'student_id')],

@@ -9,6 +9,11 @@ import Avatar from '../../components/Avatar.jsx';
 export default function StudentsStatusTab() {
   const classes = useStore(s => s.classes);
   const showToast = useStore(s => s.showToast);
+  const can = useStore(s => s.can);
+  const canView = can('students', 'view');
+  const canCreate = can('students', 'create');
+  const canEdit = can('students', 'edit');
+  const canDelete = can('students', 'delete');
   const [params] = useSearchParams();
   const [students, setStudents] = useState([]);
   const [search, setSearch] = useState('');
@@ -69,12 +74,18 @@ export default function StudentsStatusTab() {
           <h1 className="page-title">Students</h1>
           <div className="page-subtitle">{students.length} student{students.length !== 1 ? 's' : ''} shown</div>
         </div>
+        {/* Admitting a pupil, importing a roll and promoting a year group are
+            school-office acts. A class teacher marks a register; they do not
+            create, import or move records. Export lifts the whole roll out to
+            a file, so it is the same reading act as the table and answers to
+            the same permission. The main process refuses all of these; these
+            checks stop the app from offering them in the first place. */}
         <div className="row gap-2">
-          <button className="btn btn-outline" onClick={handleDownload}>📥 Export</button>
-          <button className="btn btn-outline" onClick={() => setShowImport(true)}>📤 Import</button>
-          {classFilter && <button className="btn btn-outline" onClick={handlePrintClassList}>🖨 Class list</button>}
-          <button className="btn btn-outline" onClick={() => setShowPromote(true)}>🎓 Promote</button>
-          <button className="btn btn-primary" onClick={() => setShowAdd(true)}>+ Add Student</button>
+          {canView && <button className="btn btn-outline" onClick={handleDownload}>📥 Export</button>}
+          {canCreate && <button className="btn btn-outline" onClick={() => setShowImport(true)}>📤 Import</button>}
+          {classFilter && canView && <button className="btn btn-outline" onClick={handlePrintClassList}>🖨 Class list</button>}
+          {canEdit && <button className="btn btn-outline" onClick={() => setShowPromote(true)}>🎓 Promote</button>}
+          {canCreate && <button className="btn btn-primary" onClick={() => setShowAdd(true)}>+ Add Student</button>}
         </div>
       </div>
 
@@ -117,17 +128,24 @@ export default function StudentsStatusTab() {
                 <td>{s.age}</td>
                 <td>{s.father_contact || s.mother_contact || s.guardian_contact || '—'}</td>
                 <td onClick={e => e.stopPropagation()}>
-                  <select
-                    className="select"
-                    value={s.status || 'Active'}
-                    onChange={e => handleStatusChange(s.id, e.target.value)}
-                    style={{ maxWidth: 130 }}
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Inactive">Inactive</option>
-                    <option value="Graduated">Graduated</option>
-                    <option value="Transferred">Transferred</option>
-                  </select>
+                  {/* Changing a pupil's status withdraws them from the school
+                      roll. Without students.edit this reads rather than
+                      offering a control that would be refused on use. */}
+                  {canEdit ? (
+                    <select
+                      className="select"
+                      value={s.status || 'Active'}
+                      onChange={e => handleStatusChange(s.id, e.target.value)}
+                      style={{ maxWidth: 130 }}
+                    >
+                      <option value="Active">Active</option>
+                      <option value="Inactive">Inactive</option>
+                      <option value="Graduated">Graduated</option>
+                      <option value="Transferred">Transferred</option>
+                    </select>
+                  ) : (
+                    <span className="badge badge-muted">{s.status || 'Active'}</span>
+                  )}
                 </td>
               </tr>
             ))}

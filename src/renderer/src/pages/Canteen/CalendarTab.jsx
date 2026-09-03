@@ -6,6 +6,11 @@ import Modal from '../../components/Modal.jsx';
 export default function CalendarTab() {
   const currentTerm = useStore(s => s.currentTerm);
   const showToast = useStore(s => s.showToast);
+  // The term calendar decides which days the whole school is charged for. It
+  // is set once by the office, not by whoever happens to open the tab — a
+  // class teacher regenerating it would rewrite every class's canteen days.
+  // The main process refuses the call; this stops it being offered.
+  const canSetUp = useStore(s => s.can)('settings', 'edit');
   const [calendar, setCalendar] = useState([]);
   const [showSetup, setShowSetup] = useState(false);
 
@@ -23,13 +28,17 @@ export default function CalendarTab() {
           <div className="card-title">Term calendar — {currentTerm?.label}</div>
           <div className="card-subtitle">{calendar.length} days configured</div>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowSetup(true)}>Set up calendar</button>
+        {canSetUp && (
+          <button className="btn btn-primary" onClick={() => setShowSetup(true)}>Set up calendar</button>
+        )}
       </div>
 
       {calendar.length === 0 ? (
         <div className="empty-state">
           <h3>No calendar yet for this term</h3>
-          <p>Click "Set up calendar" to auto-generate school days and holidays.</p>
+          <p>{canSetUp
+            ? 'Click "Set up calendar" to auto-generate school days and holidays.'
+            : 'The school office sets this up. Canteen days cannot be collected until they do.'}</p>
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 40px)', gap: 4 }}>
