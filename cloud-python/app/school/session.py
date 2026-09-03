@@ -1,0 +1,257 @@
+"""Signing in to the online system, and staying signed in.
+
+A translation of ``electron/server/tokens.js`` and the sign-in half of
+``electron/ipc/auth.js``, onto the very same table: ``api_tokens`` already
+exists in the school's schema, because the offline schema is the online schema.
+Nothing new had to be invented to hold a session.
+
+What the online system adds, because it is reachable from the internet and the
+offline one is not:
+
+  * A shorter default life for a session, and a hard cap on it.
+  * Failed sign-ins are counted per account AND written to the school's own
+    audit log, so the school can see an attack on it rather than only its
+    hosting provider.
+  * A password change, a deactivation or a designation change revokes every
+    session that account holds. On the desktop the machine is in a locked
+    office; here a stolen phone is somebody else's hands on the school.
+
+The raw token is shown to the client exactly once. Only its SHA-256 hash is
+stored, so a database leak cannot hand anybody a usable session.
+"""
+import datetime
+import hashlib
+import secrets
+import threading
+import time
+
+from . import scope as scope_lib
+from . import security
+
+# Sessions over the internet are shorter than sessions on the school Wi-Fi.
+DEFAULT_TTL_DAYS = 14
+MAX_TTL_DAYS = 30
+
+# Five wrong passwords buys a lockout that keeps extending while the guessing
+# continues — the same rule the desktop applies, kept in memory here because a
+# lockout that survives a restart is a denial of service somebody can arrange.
+MAX_LOGIN_FAILURES = 5
+LOCKOUT_SECONDS = 60
+
+_failures = {}
+_failures_lock = threading.Lock()
+
+
+def _sha256(s):
+    return hashlib.sha256(str(s).encode()).hexdigest()
+
+
+def _now_text():
+    """The timestamp format the whole schema uses — SQLite's, kept so a row
+    written online sorts and compares with one written on the desktop."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _iso(days=0):
+    return (datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=days)).isoformat()
+
+
+# ── passwords ───────────────────────────────────────────────────────────────
+# Staff passwords are bcrypt on the desktop and are verified here as-is, so a
+# school moving online re-enrols nobody.
+def verify_password(password, stored):
+    if not stored or not str(stored).startswith("$2"):
+        return False
+    try:
+        import bcrypt
+        return bcrypt.checkpw(str(password).encode(), str(stored).encode())
+    except Exception:
+        return False
+
+
+def hash_password(password):
+    import bcrypt
+    return bcrypt.hashpw(str(password).encode(), bcrypt.gensalt(10)).decode()
+
+
+# ── throttling ──────────────────────────────────────────────────────────────
+def _locked(key):
+    with _failures_lock:
+        rec = _failures.get(key)
+        if not rec or rec["count"] < MAX_LOGIN_FAILURES:
+            return 0
+        remaining = rec["until"] - time.time()
+        if remaining <= 0:
+            _failures.pop(key, None)
+            return 0
+        return int(remaining) + 1
+
+
+def _record_failure(key):
+    with _failures_lock:
+        rec = _failures.get(key) or {"count": 0, "until": 0}
+        rec["count"] += 1
+        rec["until"] = time.time() + LOCKOUT_SECONDS
+        _failures[key] = rec
+        if len(_failures) > 2000:
+            now = time.time()
+            for k in [k for k, v in _failures.items() if v["until"] < now]:
+                _failures.pop(k, None)
+        return rec["count"]
+
+
+def _clear_failures(key):
+    with _failures_lock:
+        _failures.pop(key, None)
+
+
+# ── sign in ─────────────────────────────────────────────────────────────────
+def sign_in(db, username, password, device=None, platform=None):
+    username = str(username or "").strip()
+    key = f"{db.school_id}:{username.lower()}"
+    wait = _locked(key)
+    if wait:
+        return {"ok": False, "status": 429,
+                "error": f"Too many attempts. Try again in {wait} seconds."}
+
+    user = db.one(
+        """SELECT u.id, u.username, u.full_name, u.password_hash, u.is_active,
+                  u.staff_id, u.must_change_password, d.name AS designation
+             FROM users u LEFT JOIN designations d ON d.id = u.designation_id
+            WHERE lower(u.username) = lower(%s)""", (username,))
+
+    if not user or not user["is_active"] or not verify_password(password, user["password_hash"]):
+        count = _record_failure(key)
+        security.audit(db, None, "security", None, "login_failed",
+                       f'Failed sign-in for "{username}"',
+                       "high" if count >= MAX_LOGIN_FAILURES else "normal")
+        # One message whether the account exists or not. Saying "that username
+        # exists but the password is wrong" tells an outsider which of a
+        # school's accounts are real.
+        return {"ok": False, "status": 401,
+                "error": "Those details did not match an account. Check and try again."}
+
+    _clear_failures(key)
+    token = issue_token(db, user["id"], device=device, platform=platform)
+    db.run("UPDATE users SET last_login = %s WHERE id = %s", (_now_text(), user["id"]))
+    security.audit(db, {"user_id": user["id"]}, "security", user["id"], "login",
+                   f'{user["username"]} signed in online')
+    return {
+        "ok": True, "token": token["token"], "expires_at": token["expires_at"],
+        "user": {"id": user["id"], "username": user["username"],
+                 "full_name": user["full_name"], "staff_id": user["staff_id"]},
+        "designation": user["designation"],
+        "must_change_password": bool(user["must_change_password"]),
+    }
+
+
+def issue_token(db, user_id, device=None, platform=None):
+    raw = secrets.token_urlsafe(32)
+    try:
+        ttl = int(db.get_setting("online_token_ttl_days", str(DEFAULT_TTL_DAYS)) or DEFAULT_TTL_DAYS)
+    except (TypeError, ValueError):
+        ttl = DEFAULT_TTL_DAYS
+    ttl = max(1, min(ttl, MAX_TTL_DAYS))
+    expires = _iso(ttl)
+    token_id = db.insert("api_tokens", {
+        "token_hash": _sha256(raw), "subject_type": "user", "subject_id": user_id,
+        "device_name": device, "platform": platform or "online", "expires_at": expires,
+    })
+    return {"token": raw, "id": token_id, "expires_at": expires}
+
+
+def revoke_token(db, token_id):
+    db.run("UPDATE api_tokens SET revoked = 1 WHERE id = %s", (token_id,))
+    return {"ok": True}
+
+
+def revoke_all_for_user(db, user_id):
+    """Every session that account holds, gone.
+
+    Called on a password change, a deactivation and a change of designation.
+    Leaving a live session behind after any of those means the change did not
+    actually happen until the token expired.
+    """
+    db.run("UPDATE api_tokens SET revoked = 1 WHERE subject_type = 'user' AND subject_id = %s",
+           (user_id,))
+    return {"ok": True}
+
+
+# ── the signed-in person, resolved fresh on every request ───────────────────
+def actor_for(db, raw_token):
+    """Resolve a bearer token to who is acting, or None.
+
+    Everything is re-read: the account, whether it is still active, its
+    designation, its permissions and its teaching scope. A permission withdrawn
+    in the office therefore takes effect on the next tap, not on the next
+    sign-in — and a deactivated account's session dies on its next request
+    rather than lasting until the token happens to expire.
+    """
+    if not raw_token:
+        return None
+    row = db.one(
+        "SELECT id, subject_type, subject_id, revoked, expires_at FROM api_tokens WHERE token_hash = %s",
+        (_sha256(raw_token),))
+    if not row or row["revoked"] or row["subject_type"] != "user":
+        return None
+    if row["expires_at"] and str(row["expires_at"]) < _iso(0):
+        return None
+
+    user = db.one(
+        """SELECT u.id, u.username, u.full_name, u.staff_id, u.is_active,
+                  u.must_change_password, u.photo_path, d.name AS designation
+             FROM users u LEFT JOIN designations d ON d.id = u.designation_id
+            WHERE u.id = %s""", (row["subject_id"],))
+    if not user or not user["is_active"]:
+        return None
+
+    try:
+        db.run("UPDATE api_tokens SET last_used_at = %s WHERE id = %s", (_now_text(), row["id"]))
+    except Exception:
+        pass
+
+    permissions = security.resolve_effective_permissions(db, user["id"])
+    return {
+        "user_id": user["id"], "token_id": row["id"],
+        "username": user["username"], "full_name": user["full_name"],
+        "staff_id": user["staff_id"], "designation": user["designation"],
+        "is_admin": user["designation"] in security.ELEVATED,
+        "is_super": user["designation"] == security.SUPER_ADMIN,
+        "must_change_password": bool(user["must_change_password"]),
+        "permissions": permissions,
+        "scope": scope_lib.scope_for(db, user["id"], user["designation"]),
+        # The shape app/portals.py reads.
+        "role": "staff",
+    }
+
+
+def change_own_password(db, actor, current_password, new_password):
+    """A person changing their own password.
+
+    No permission gate: an account is not a module, and everybody owns theirs.
+    The current password is required even when the account is flagged
+    must_change_password, because "somebody left this phone unlocked" is the
+    case that flag exists for.
+    """
+    new_password = str(new_password or "")
+    if len(new_password) < 8:
+        return {"ok": False, "status": 400, "error": "A password must be at least 8 characters."}
+    row = db.one("SELECT password_hash FROM users WHERE id = %s", (actor["user_id"],))
+    if not row or not verify_password(current_password, row["password_hash"]):
+        security.audit(db, actor, "security", actor["user_id"], "password_change_failed",
+                       "Wrong current password", "high")
+        return {"ok": False, "status": 400, "error": "That is not your current password."}
+    if verify_password(new_password, row["password_hash"]):
+        return {"ok": False, "status": 400, "error": "Choose a password you have not used here."}
+
+    db.run("UPDATE users SET password_hash = %s, must_change_password = 0 WHERE id = %s",
+           (hash_password(new_password), actor["user_id"]))
+    # Every other session this account holds is now stale. Revoking them all
+    # and re-issuing one is what makes "change your password" mean something
+    # after a phone is lost.
+    revoke_all_for_user(db, actor["user_id"])
+    token = issue_token(db, actor["user_id"], platform="online")
+    security.audit(db, actor, "security", actor["user_id"], "password_changed",
+                   "Changed online; other sessions signed out")
+    return {"ok": True, "token": token["token"], "expires_at": token["expires_at"]}
