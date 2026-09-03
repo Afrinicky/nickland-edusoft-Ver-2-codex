@@ -56,7 +56,7 @@ function emptyScope(scope) {
  * @param {string} deps.API             the version prefix, e.g. `/api/v1`
  * @param {(db, key, fallback) => string} deps.getSetting
  */
-function registerStaffRoutes({ add, db, json, can, API, getSetting }) {
+function registerStaffRoutes({ add, db, json, can, API, getSetting, media, studentProfile }) {
   const deny = (res, msg) => json(res, 403, { ok: false, error: msg || 'Access denied.' });
   const bad = (res, msg) => json(res, 400, { ok: false, error: msg });
   const missing = (res, msg) => json(res, 404, { ok: false, error: msg || 'Not found.' });
@@ -185,8 +185,16 @@ function registerStaffRoutes({ add, db, json, can, API, getSetting }) {
         street_address: s.street_address, digital_address: s.digital_address,
         admission_date: s.admission_date, admission_year: s.admission_year,
         status: s.status, class_id: s.class_id, class_name: s.class_name,
-        photo_path: s.photo_path || null,
+        // The face, not the file path. `photo_path` names a folder on the
+        // school's own machine and is no use to a phone; sending it was why
+        // every pupil in the app was a pair of initials in a circle.
+        photo: media.dataUri(s.photo_path),
+        nhis_number: s.nhis_number, place_of_birth: s.place_of_birth,
+        house_number: s.house_number, roll_number: s.roll_number,
       },
+      // The same record laid out for printing, so "Print profile" does not have
+      // to reassemble it from the pieces above and get a field wrong.
+      profile: studentProfile(db, s),
       guardians: [
         { relation: 'Father', name: s.father_name, contact: s.father_contact },
         { relation: 'Mother', name: s.mother_name, contact: s.mother_contact },
@@ -453,7 +461,8 @@ function registerStaffRoutes({ add, db, json, can, API, getSetting }) {
       ? db.prepare('SELECT * FROM terms WHERE id = ?').get(parseInt(query.termId, 10))
       : currentTerm();
     const s = db.prepare(`
-      SELECT s.id, s.surname, s.first_name, s.other_names, s.index_number, c.name AS class_name
+      SELECT s.id, s.surname, s.first_name, s.other_names, s.index_number, s.photo_path,
+             c.name AS class_name, c.id AS class_id
       FROM students s LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?
     `).get(sid);
     if (!s) return missing(res, 'Student not found.');
@@ -472,11 +481,47 @@ function registerStaffRoutes({ add, db, json, can, API, getSetting }) {
     `).get(sid, term.id);
     const bands = db.prepare('SELECT min_score, max_score, remark FROM grading_bands ORDER BY display_order, min_score DESC').all();
 
+    // Which terms this pupil has marks for. It costs one query and it turns the
+    // report card from "this term" into a record a teacher can page back
+    // through — the single thing most asked for and never available on a phone.
+    const terms = db.prepare(`
+      SELECT t.id, t.label, sts.average_score, sts.class_rank, sts.number_on_roll
+      FROM terms t LEFT JOIN student_term_summary sts ON sts.student_id = ? AND sts.term_id = t.id
+      WHERE EXISTS (SELECT 1 FROM scores sc WHERE sc.student_id = ? AND sc.term_id = t.id)
+      ORDER BY t.id DESC
+    `).all(sid, sid);
+
+    const classTeacher = s.class_id ? db.prepare(`
+      SELECT TRIM(st.surname || ' ' || st.first_name) AS name
+      FROM staff_assignments sa JOIN staff st ON st.id = sa.staff_id
+      WHERE sa.class_group_id = ? AND sa.is_class_teacher = 1 LIMIT 1
+    `).get(s.class_id) : null;
+
     return json(res, 200, {
       ok: true,
       term: { id: term.id, label: term.label },
-      student: { id: s.id, name: fullName(s), index_number: s.index_number, class_name: s.class_name },
+      terms,
+      student: {
+        id: s.id, name: fullName(s), index_number: s.index_number,
+        class_name: s.class_name, photo: media.dataUri(s.photo_path),
+        class_teacher: classTeacher ? classTeacher.name : null,
+      },
       subjects, summary, attendance, grading_bands: bands,
+      // The header a printed copy carries. Assembling it here means the phone
+      // and the browser print the same document as the desktop does.
+      school: {
+        name: getSetting(db, 'school_name', 'School'),
+        motto: getSetting(db, 'school_motto', ''),
+        address: getSetting(db, 'school_address', '') || getSetting(db, 'school_location', ''),
+        phone: getSetting(db, 'school_phone_1', ''),
+        email: getSetting(db, 'school_email', ''),
+        logo: media.logoUri(db, getSetting),
+      },
+      dates: {
+        vacation: getSetting(db, 'vacation_date', ''),
+        reopening: getSetting(db, 'reopening_date', ''),
+        exam_title: getSetting(db, 'current_exam_title', ''),
+      },
     });
   });
 
@@ -636,8 +681,9 @@ function registerStaffRoutes({ add, db, json, can, API, getSetting }) {
     }
     const staff = db.prepare(`
       SELECT s.id, s.staff_number, s.surname, s.first_name, s.other_names, s.gender,
-             s.phone, s.email, s.address, s.role, s.status, s.qualification, s.specialization,
-             s.hire_date, s.photo_path, s.ssnit_number, s.bank_name, d.name AS designation
+             s.date_of_birth, s.phone, s.email, s.address, s.role, s.status,
+             s.qualification, s.specialization, s.hire_date, s.photo_path,
+             s.ssnit_number, d.name AS designation
       FROM staff s LEFT JOIN designations d ON d.id = s.designation_id WHERE s.id = ?
     `).get(staffId);
     const today = todayISO();
@@ -656,11 +702,29 @@ function registerStaffRoutes({ add, db, json, can, API, getSetting }) {
       WHERE sa.staff_id = ?
       ORDER BY c.level_order, c.name, sub.name
     `).all(staffId);
+    // A teacher's own record, printable and with their own photograph on it.
+    // `bank_name` is deliberately no longer read: a staff profile a teacher can
+    // print and hand to a landlord has no business carrying banking details.
+    const { photo_path, ...rest } = staff || {};
+    const subjectsTaught = [...new Set(assignments.map(a => a.subject_name).filter(Boolean))];
+    const classesTaught = [...new Set(assignments.map(a => a.class_name).filter(Boolean))];
+    const classTeacherOf = assignments.filter(a => a.is_class_teacher).map(a => a.class_name).filter(Boolean);
+
     return json(res, 200, {
       ok: true, has_staff: true,
-      staff: staff ? { ...staff, name: fullName(staff) } : null,
+      staff: staff ? { ...rest, name: fullName(staff), photo: media.dataUri(photo_path) } : null,
       designation: ctx.designation, is_admin: ctx.is_admin,
+      account: { username: ctx.user.username, full_name: ctx.user.full_name },
       today: { date: today, attendance }, leave, assignments,
+      teaching: { subjects: subjectsTaught, classes: classesTaught, class_teacher_of: classTeacherOf },
+      school: {
+        name: getSetting(db, 'school_name', 'School'),
+        motto: getSetting(db, 'school_motto', ''),
+        address: getSetting(db, 'school_address', '') || getSetting(db, 'school_location', ''),
+        phone: getSetting(db, 'school_phone_1', ''),
+        email: getSetting(db, 'school_email', ''),
+        logo: media.logoUri(db, getSetting),
+      },
     });
   });
 
@@ -892,6 +956,167 @@ function registerStaffRoutes({ add, db, json, can, API, getSetting }) {
         amount: rows.reduce((n, r) => n + r.amount_owed, 0),
       },
     });
+  });
+
+  // ── The class's contact book ──────────────────────────────────────────────
+  // A teacher who needs to reach a parent had to open a pupil's record, one at
+  // a time, and copy a number by hand. This is the whole class in one request:
+  // the guardians the school holds, and any registered parent account, so a
+  // class teacher can ring or message straight from the roll.
+  //
+  // Contacts are guarded by the messaging permission, exactly as the per-pupil
+  // route is — a teacher who may not contact parents does not get a directory
+  // of their phone numbers.
+  add('GET', `${API}/classes/:id/contacts`, async (ctx, req, res, params) => {
+    if (!isStaff(ctx) || !can(ctx, 'notifications', 'view')) return deny(res);
+    const classId = parseInt(params.id, 10);
+    if (!classId) return bad(res, 'A class is required.');
+    if (!scopeLib.canAccessClass(scopeOf(ctx), classId)) return deny(res, 'That class is not yours.');
+
+    const students = db.prepare(`
+      SELECT id, index_number, surname, first_name, other_names, photo_path,
+             father_name, father_contact, mother_name, mother_contact,
+             guardian_name, guardian_contact
+      FROM students WHERE current_class_id = ? AND status = 'Active'
+      ORDER BY surname, first_name
+    `).all(classId);
+    if (!students.length) return json(res, 200, { ok: true, students: [] });
+
+    const ph = students.map(() => '?').join(',');
+    let accounts = [];
+    try {
+      accounts = db.prepare(`
+        SELECT ps.student_id, p.full_name, p.phone, p.email
+        FROM parent_students ps JOIN parents p ON p.id = ps.parent_id
+        WHERE ps.student_id IN (${ph}) AND p.is_active = 1
+      `).all(...students.map(s => s.id));
+    } catch (_) {}
+
+    return json(res, 200, {
+      ok: true,
+      students: students.map(s => ({
+        id: s.id, index_number: s.index_number, name: fullName(s),
+        photo: media.dataUri(s.photo_path),
+        guardians: [
+          { relation: 'Father', name: s.father_name, contact: s.father_contact },
+          { relation: 'Mother', name: s.mother_name, contact: s.mother_contact },
+          { relation: 'Guardian', name: s.guardian_name, contact: s.guardian_contact },
+        ].filter(g => g.name || g.contact),
+        accounts: accounts.filter(a => a.student_id === s.id)
+          .map(a => ({ full_name: a.full_name, phone: a.phone, email: a.email })),
+      })),
+    });
+  });
+
+  // ── Canteen: quick pay ────────────────────────────────────────────────────
+  // The desktop's morning routine, and the one thing the teacher's app made
+  // impossible: a class teacher standing at the door with forty children
+  // filing past, marking the day's lunch money in one pass instead of opening
+  // forty separate collection forms.
+  //
+  // It runs the desktop's own code (ipc/canteen_extra.js), so the ledger entry,
+  // the term attribution and the daily rate are identical whichever machine the
+  // collection was taken on.
+  add('GET', `${API}/canteen/quick-pay`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!isStaff(ctx) || !can(ctx, 'canteen', 'view')) return deny(res);
+    const classId = parseInt(query.classId, 10);
+    if (!classId) return bad(res, 'classId is required.');
+    if (!scopeLib.isClassTeacherOf(scopeOf(ctx), classId)) {
+      return deny(res, 'The daily collection belongs to the class teacher.');
+    }
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(query.date || '')) ? query.date : todayISO();
+    const extra = require('../ipc/canteen_extra');
+    const rate = extra.getDailyRate(db) || 0;
+    const roster = extra.classRosterForDate(db, classId, date).map(s => ({
+      id: s.id, index_number: s.index_number, name: fullName(s),
+      photo: media.dataUri(s.photo_path),
+      attendance_status: s.attendance_status,
+      canteen_status: s.canteen_status,
+    }));
+    // Whether the day is a school day at all. Collecting for a holiday is a
+    // mistake the desktop's calendar prevents, and the app should say so too.
+    let day = null;
+    try { day = db.prepare('SELECT day_type, label FROM school_calendar WHERE date = ?').get(date) || null; } catch (_) {}
+    return json(res, 200, {
+      ok: true, date, daily_rate: rate,
+      day_type: day ? day.day_type : null, day_label: day ? day.label : null,
+      students: roster,
+      totals: {
+        on_roll: roster.length,
+        paid: roster.filter(r => r.canteen_status === 'paid').length,
+        exempt: roster.filter(r => r.canteen_status === 'exempt').length,
+        unpaid: roster.filter(r => r.canteen_status === 'unpaid').length,
+        absent: roster.filter(r => r.attendance_status === 'absent').length,
+      },
+    });
+  });
+
+  add('POST', `${API}/canteen/quick-pay`, async (ctx, req, res, params, body) => {
+    if (!isStaff(ctx) || !can(ctx, 'canteen', 'create')) return deny(res);
+    const classId = parseInt(body.classId, 10);
+    if (!classId) return bad(res, 'classId is required.');
+    if (!scopeLib.isClassTeacherOf(scopeOf(ctx), classId)) {
+      return deny(res, 'The daily collection belongs to the class teacher.');
+    }
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || '')) ? body.date : todayISO();
+    const asked = Array.isArray(body.studentIds) ? body.studentIds.map(n => parseInt(n, 10)).filter(Boolean) : [];
+    if (!asked.length) return bad(res, 'Choose at least one pupil.');
+
+    // Only pupils actually on this class's roll. An id posted from somewhere
+    // else must not become a payment against a child in another teacher's class.
+    const onRoll = new Set(db.prepare(
+      "SELECT id FROM students WHERE current_class_id = ? AND status = 'Active'"
+    ).all(classId).map(r => r.id));
+    const ids = asked.filter(id => onRoll.has(id));
+    if (!ids.length) return bad(res, 'None of those pupils are on this class roll.');
+
+    let r;
+    try {
+      r = require('../ipc/canteen_extra').markBulkPaid(db, {
+        studentIds: ids, date,
+        paymentMethod: body.paymentMethod || 'Cash',
+        receivedBy: ctx.user.id || null,
+      });
+    } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
+    if (!r || r.ok === false) return bad(res, (r && r.error) || 'Could not record the collection.');
+    reproject(p => p.enqueueRostersForStudents(db, ids));
+    try {
+      const outbox = require('./sync/outbox');
+      for (const id of ids) outbox.enqueueStudentSnapshot(db, id);
+    } catch (_) {}
+    return json(res, 200, r);
+  });
+
+  // Excusing the absent. Charging a child for a lunch they were not at school
+  // to eat is the commonest complaint a canteen creates, and the desktop has
+  // always had a button for it. Now so does the app.
+  add('POST', `${API}/canteen/exempt`, async (ctx, req, res, params, body) => {
+    if (!isStaff(ctx) || !can(ctx, 'canteen', 'edit')) return deny(res);
+    const classId = parseInt(body.classId, 10);
+    if (!classId) return bad(res, 'classId is required.');
+    if (!scopeLib.isClassTeacherOf(scopeOf(ctx), classId)) {
+      return deny(res, 'The daily collection belongs to the class teacher.');
+    }
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || '')) ? body.date : todayISO();
+    const asked = Array.isArray(body.studentIds) ? body.studentIds.map(n => parseInt(n, 10)).filter(Boolean) : [];
+    if (!asked.length) return bad(res, 'Choose at least one pupil.');
+    const onRoll = new Set(db.prepare(
+      "SELECT id FROM students WHERE current_class_id = ? AND status = 'Active'"
+    ).all(classId).map(r => r.id));
+    const ids = asked.filter(id => onRoll.has(id));
+    if (!ids.length) return bad(res, 'None of those pupils are on this class roll.');
+
+    const extra = require('../ipc/canteen_extra');
+    let count = 0, skipped = 0;
+    for (const id of ids) {
+      const r = extra.markExempt(db, { studentId: id, dates: [date], reason: body.reason || 'Absent' });
+      if (r && r.ok) { count += r.count; skipped += r.skipped || 0; }
+    }
+    reproject(p => p.enqueueRostersForStudents(db, ids));
+    // `skipped` is a day already paid for, which is left exactly as it is: a
+    // paid day turned into an exemption would strand a real payment row
+    // against a day the school now says was free.
+    return json(res, 200, { ok: true, count, skipped });
   });
 
   // ── Homework: withdrawing one ─────────────────────────────────────────────

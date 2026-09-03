@@ -320,6 +320,82 @@ function req(base, method, p, { token, body } = {}) {
   r = await req(base, 'GET', `/api/v1/canteen/student/${outside}`, { token });
   ck('a pupil in another class is not theirs to collect from', r.status === 404);
 
+  // ── the daily canteen collection ──
+  // The desktop has had this since the first release; the teacher's app had
+  // nothing of the kind. What matters is not that it records money — that is
+  // the desktop's own code — but that it refuses everything it should:
+  // another teacher's class, a pupil who is not on the roll, and a second tap
+  // of Record charging the same child twice for the same lunch.
+  db.exec("INSERT INTO school_calendar (date, day_type, term_id) VALUES ('2026-06-01', 'school_day', 3)");
+  db.prepare("INSERT INTO student_attendance (student_id, date, status, term_id) VALUES (?, '2026-06-01', 'absent', 3)").run(p2);
+
+  r = await req(base, 'GET', '/api/v1/canteen/quick-pay?classId=1&date=2026-06-01', { token });
+  ck('the daily collection lists the class for one day', r.json.ok && (r.json.students || []).length === 3);
+  ck('and says who is absent, so they are not charged', r.json.totals.absent === 1);
+  ck('and carries the daily rate the money is counted at', r.json.daily_rate === 5);
+  ck('and knows the day is a school day', r.json.day_type === 'school_day');
+
+  r = await req(base, 'GET', '/api/v1/canteen/quick-pay?classId=2&date=2026-06-01', { token });
+  ck('the collection belongs to the class teacher only', r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/canteen/quick-pay', {
+    token, body: { classId: 1, date: '2026-06-01', studentIds: [p1, p2], paymentMethod: 'Cash' },
+  });
+  ck('recording a collection marks the pupils paid', r.json.ok && r.json.count === 2);
+  ck('and totals it at the daily rate', r.json.total === 10);
+
+  r = await req(base, 'POST', '/api/v1/canteen/quick-pay', {
+    token, body: { classId: 1, date: '2026-06-01', studentIds: [p1, p2], paymentMethod: 'Cash' },
+  });
+  ck('a second tap does not charge the same day twice', r.json.ok && r.json.count === 0 && r.json.skipped === 2);
+
+  r = await req(base, 'POST', '/api/v1/canteen/quick-pay', {
+    token, body: { classId: 1, date: '2026-06-01', studentIds: [outside] },
+  });
+  ck('a pupil who is not on the roll cannot be billed through it', r.status === 400);
+
+  r = await req(base, 'POST', '/api/v1/canteen/quick-pay', {
+    token, body: { classId: 2, date: '2026-06-01', studentIds: [outside] },
+  });
+  ck("and another teacher's class is refused outright", r.status === 403);
+
+  // Excusing a pupil forgives money, so it takes canteen.edit — the same
+  // permission the desktop's own button takes. This teacher may collect but
+  // not excuse, and the app must not offer them a button that comes back 403.
+  r = await req(base, 'POST', '/api/v1/canteen/exempt', {
+    token, body: { classId: 1, date: '2026-06-01', studentIds: [p1], reason: 'Absent' },
+  });
+  ck('excusing a pupil takes the same permission the desktop takes', r.status === 403);
+
+  // ── the school's own identity ──
+  // The crest and the contact numbers the app draws. Public on purpose: the
+  // sign-in screen shows a parent their own school before they type anything.
+  r = await req(base, 'GET', '/api/v1/branding');
+  ck('the school identity is readable without signing in', r.status === 200 && r.json.ok);
+  ck('and names the school', r.json.school.name === 'Ave Maria School');
+  ck('and gives somewhere to send a parent who needs to talk',
+    typeof r.json.contact.whatsapp === 'string');
+
+  // ── the class contact book ──
+  r = await req(base, 'GET', '/api/v1/classes/1/contacts', { token });
+  ck("a class teacher can reach the class's guardians", r.json.ok && (r.json.students || []).length === 3);
+  ck('and each pupil carries the contacts the office holds',
+    (r.json.students || [])[0].guardians.length === 2);
+  r = await req(base, 'GET', '/api/v1/classes/2/contacts', { token });
+  ck("another class's contacts are not theirs to read", r.status === 403);
+
+  // ── a pupil's record carries the photograph, not the path to it ──
+  r = await req(base, 'GET', `/api/v1/students/${p1}`, { token });
+  ck('a pupil record no longer leaks a path on the school hard disk',
+    !('photo_path' in (r.json.student || {})));
+  ck('and carries a printable profile', !!(r.json.profile && r.json.profile.name));
+
+  // ── the terminal report, ready to print ──
+  r = await req(base, 'GET', `/api/v1/results/student/${p1}`, { token });
+  ck('a report card carries the school header it is printed under',
+    r.json.ok && r.json.school && r.json.school.name === 'Ave Maria School');
+  ck('and the terms this pupil has marks for', Array.isArray(r.json.terms));
+
   // ── notices ──
   r = await req(base, 'GET', '/api/v1/announcements', { token });
   ck('notices are readable', r.json.ok && Array.isArray(r.json.announcements));
@@ -335,6 +411,91 @@ function req(base, method, p, { token, body } = {}) {
   ck('an administrator sees every class', (r.json.classes || []).length === 2);
   r = await req(base, 'GET', `/api/v1/students/${outside}`, { token: adminToken });
   ck('and can open any pupil', r.status === 200);
+
+  r = await req(base, 'POST', '/api/v1/canteen/exempt', {
+    token: adminToken, body: { classId: 1, date: '2026-06-01', studentIds: [p1], reason: 'Absent' },
+  });
+  ck('a day already paid for is not quietly turned into an exemption',
+    r.json.ok && r.json.count === 0 && r.json.skipped === 1);
+  r = await req(base, 'POST', '/api/v1/canteen/exempt', {
+    token: adminToken, body: { classId: 1, date: '2026-06-02', studentIds: [p1], reason: 'Absent' },
+  });
+  ck('but a day nobody has paid for can be excused', r.json.ok && r.json.count === 1);
+
+  // ── the parent's side of the same school ──
+  // Everything the parent portal grew: the itemised bill and its history, the
+  // canteen day by day, every term with a report, the register, a printable
+  // profile — and a "settle this" that hands the parent to the school instead
+  // of taking a card number.
+  const parentsLib = require(path.join(ROOT, 'electron/server/parents.js'));
+  // A number that matches no guardian on file, so the ONLY link this account
+  // has is the explicit one. Using a guardian number here would link the
+  // parent to every pupil in the fixture — they all share one — and the check
+  // that another family's bill stays shut would pass for the wrong reason.
+  const prov = parentsLib.provisionParent(db, {
+    full_name: 'Mrs Ansu', phone: '0209999001', password: 'parent123', studentIds: [p1],
+  });
+  ck('a parent account can be provisioned against a pupil', prov.ok);
+
+  r = await req(base, 'POST', '/api/v1/auth/signin', { body: { identifier: '0209999001', password: 'parent123' } });
+  ck('and the same sign-in box finds it', r.status === 200 && r.json.role === 'parent');
+  const parentToken = r.json.token;
+
+  r = await req(base, 'GET', '/api/v1/parent/children', { token: parentToken });
+  const child = (r.json.children || [])[0];
+  ck('a parent sees their own child', r.json.ok && !!child);
+  ck('with the class they are in', child.class_name === 'Basic 5');
+  ck('and what the school holds is the school teacher, named', 'class_teacher' in child);
+  ck('and no path into the school hard disk', !('photo_path' in child));
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/fees`, { token: parentToken });
+  ck("the bill comes back itemised, not as one figure", r.json.ok && r.json.bill.total_billed === 500);
+  ck('with every receipt the school has issued', Array.isArray(r.json.payments));
+  ck('and a term-by-term history behind the carry-forward', Array.isArray(r.json.history));
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/canteen`, { token: parentToken });
+  ck('the canteen is day by day, not one total', r.json.ok && Array.isArray(r.json.days));
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/reports`, { token: parentToken });
+  ck('every term with marks is offered, not only this one', r.json.ok && (r.json.terms || []).length >= 1);
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/report`, { token: parentToken });
+  ck('a report card carries the grading scale it is read against', Array.isArray(r.json.grading_bands));
+  ck('and the school header a printed copy needs', !!(r.json.school && r.json.school.name));
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/attendance`, { token: parentToken });
+  ck('the register is the term day by day', r.json.ok && Array.isArray(r.json.days));
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/profile`, { token: parentToken });
+  ck('and the pupil profile is printable', r.json.ok && !!r.json.student.name);
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/settle`, { token: parentToken });
+  ck('settling a balance moves no money', r.json.ok && !('authorization_url' in r.json));
+  ck('it answers with the figure', r.json.owed.fees === 260);
+  ck('and with somebody to talk to about it', 'whatsapp' in r.json.contact);
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${outside}/fees`, { token: parentToken });
+  ck("another family's bill is not theirs to read", r.status === 403);
+
+  r = await req(base, 'GET', '/api/v1/parent/notifications', { token: parentToken });
+  ck("the school's notices reach a parent on the school's own network too",
+    r.json.ok && Array.isArray(r.json.announcements));
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/fees`, { token });
+  ck('and a member of staff cannot read the parent routes at all', r.status === 403);
+
+  // ── no money moves through this app ──
+  // The card checkout, the "tell the school what you paid" form and the
+  // gateway webhook are gone, routes and all. A school takes payment in
+  // person; the app shows the figure and says who to talk to.
+  for (const path of ['/api/v1/parent/children/1/pay', '/api/v1/parent/children/1/pay/online']) {
+    r = await req(base, 'POST', path, { token: adminToken, body: { amount: 10 } });
+    ck(`${path} no longer exists`, r.status === 404);
+  }
+  r = await req(base, 'POST', '/api/v1/webhooks/paystack', { body: {} });
+  ck('and there is no payment webhook to settle one', r.status === 404);
+  r = await req(base, 'GET', '/api/v1/info');
+  ck('the app tells a client plainly that it takes no online payment', r.json.online_payments === false);
 
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);

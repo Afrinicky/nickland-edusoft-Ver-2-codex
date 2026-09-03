@@ -14,7 +14,7 @@ const tokens = require('./tokens');
 const webapp = require('./webapp');
 const parents = require('./parents');
 const passwords = require('./passwords');
-const payments = require('./payments_service');
+const media = require('./media');
 const { getSetting } = require('../utils/idgen');
 const scopeLib = require('../ipc/_scope');
 const { registerStaffRoutes } = require('./staff_api');
@@ -114,7 +114,12 @@ function can(ctx, module, action = 'view') {
 function childSummary(db, studentId) {
   const s = db.prepare(`
     SELECT s.id, s.surname, s.first_name, s.other_names, s.index_number, s.photo_path,
-           c.name AS class_name FROM students s
+           c.name AS class_name,
+           (SELECT TRIM(st.surname || ' ' || st.first_name) FROM staff_assignments sa
+              JOIN staff st ON st.id = sa.staff_id
+             WHERE sa.class_group_id = c.id AND sa.is_class_teacher = 1
+             LIMIT 1) AS class_teacher
+    FROM students s
     LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?
   `).get(studentId);
   if (!s) return null;
@@ -131,9 +136,56 @@ function childSummary(db, studentId) {
   return {
     id: s.id, name: `${s.surname} ${s.first_name} ${s.other_names || ''}`.trim(),
     index_number: s.index_number, class_name: s.class_name,
-    fees: { billed: bill?.total_billed || 0, paid: bill?.total_paid || 0, balance: bill?.balance || 0 },
+    // The child's own face. It was on the school's disk all along; the API
+    // simply never sent it, so every parent saw a coloured circle with two
+    // letters in it where their child should have been.
+    photo: media.dataUri(s.photo_path),
+    class_teacher: s.class_teacher || null,
+    fees: {
+      billed: bill?.total_billed || 0, paid: bill?.total_paid || 0, balance: bill?.balance || 0,
+      // What was carried in from last term, and what the books cost. A parent
+      // asking "why is this more than the term's fee?" is asking about these.
+      arrears: bill?.arrears_from_prev || 0,
+      discount: bill?.discount_amount || 0,
+      books_total: bill?.books_total || 0,
+      books_paid: bill?.books_paid || 0,
+      books_balance: Math.max(0, (bill?.books_total || 0) - (bill?.books_paid || 0)),
+    },
     canteen: { unpaid_days: canteenUnpaid, amount_owed: canteenUnpaid * rate, daily_rate: rate },
     term: term ? { id: term.id, label: term.label } : null,
+  };
+}
+
+// ── one shape for "who is this pupil" ──
+// The parent's printable profile and the teacher's record were drifting apart
+// field by field, which is how a school ends up with two documents that
+// disagree about a child's date of birth. Both read this.
+//
+// Only what a school would put on a profile sheet: identity, class, contacts.
+// No fee figure, no mark, no note about the family — those have their own
+// routes with their own permission checks.
+function studentProfile(db, s) {
+  if (!s) return null;
+  return {
+    id: s.id,
+    name: `${s.surname} ${s.first_name} ${s.other_names || ''}`.trim(),
+    surname: s.surname, first_name: s.first_name, other_names: s.other_names || null,
+    index_number: s.index_number,
+    roll_number: s.roll_number || null,
+    class_name: s.class_name || null,
+    gender: s.gender, age: s.age,
+    date_of_birth: s.date_of_birth, place_of_birth: s.place_of_birth,
+    denomination: s.denomination, nhis_number: s.nhis_number,
+    place_of_residence: s.place_of_residence, street_address: s.street_address,
+    house_number: s.house_number, digital_address: s.digital_address,
+    admission_date: s.admission_date, admission_year: s.admission_year,
+    status: s.status,
+    photo: media.dataUri(s.photo_path),
+    guardians: [
+      { relation: 'Father', name: s.father_name, contact: s.father_contact },
+      { relation: 'Mother', name: s.mother_name, contact: s.mother_contact },
+      { relation: 'Guardian', name: s.guardian_name, contact: s.guardian_contact },
+    ].filter(g => g.name || g.contact),
   };
 }
 
@@ -167,9 +219,47 @@ function createApiServer(db, opts = {}) {
     ok: true,
     school: { name: getSetting(db, 'school_name', 'School'), motto: getSetting(db, 'school_motto', ''), phone: getSetting(db, 'school_phone_1', '') },
     parent_self_register: getSetting(db, 'mobile_parent_self_register', 'true') === 'true',
-    online_payments: require('./gateways').gatewayEnabled(db),
+    // Money is never moved through this app. A balance is shown; settling it
+    // happens with the school, in person or on WhatsApp, and `/branding` says
+    // where. `online_payments: false` is kept in the shape so an older client
+    // that still asks is told plainly rather than left guessing.
+    online_payments: false,
     payment_currency: getSetting(db, 'payment_currency', 'GHS'),
   }), { public: true });
+
+  // ── The school's identity ──
+  // Its name, its crest and the ways it can be reached. Public, and reachable
+  // before sign-in, because the login screen is the first place a parent should
+  // recognise their own school rather than a generic blue box.
+  //
+  // The crest travels as a data URI (see server/media.js). Contact details are
+  // what the "Message the school" button and every "settle this balance"
+  // prompt resolve to, so they are computed in one place here rather than in
+  // four screens that would drift apart.
+  add('GET', `${API}/branding`, async (ctx, req, res) => {
+    const phone = getSetting(db, 'school_phone_1', '');
+    const whatsapp = getSetting(db, 'school_whatsapp', '') || phone;
+    return json(res, 200, {
+      ok: true,
+      school: {
+        name: getSetting(db, 'school_name', 'School'),
+        short_name: getSetting(db, 'school_abbreviation', ''),
+        motto: getSetting(db, 'school_motto', ''),
+        type: getSetting(db, 'school_type', ''),
+        address: getSetting(db, 'school_address', '') || getSetting(db, 'school_location', ''),
+        digital_address: getSetting(db, 'school_digital_address', ''),
+        website: getSetting(db, 'school_website', ''),
+      },
+      contact: {
+        phone,
+        phone_alt: getSetting(db, 'school_phone_2', ''),
+        email: getSetting(db, 'school_email', ''),
+        whatsapp,
+      },
+      logo: media.logoUri(db, getSetting),
+      currency: getSetting(db, 'payment_currency', 'GHS'),
+    });
+  }, { public: true });
 
   add('POST', `${API}/auth/login`, async (ctx, req, res, params, body, ip) => {
     if (rateLimited(ip, body.username)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
@@ -282,9 +372,20 @@ function createApiServer(db, opts = {}) {
         school: { name: getSetting(db, 'school_name', 'School') },
       });
     }
+    // The signed-in person's own photograph, for the chrome. One small read,
+    // once per cold start, and it is the difference between a teacher seeing
+    // themselves in the corner of their app and seeing two letters.
+    let photo = null;
+    try {
+      const row = ctx.user.staff_id
+        ? db.prepare('SELECT photo_path FROM staff WHERE id = ?').get(ctx.user.staff_id)
+        : db.prepare('SELECT photo_path FROM users WHERE id = ?').get(ctx.user.id);
+      photo = media.dataUri(row && row.photo_path);
+    } catch (_) {}
+
     return json(res, 200, {
       ok: true, role: 'staff', user: ctx.user, designation: ctx.designation,
-      is_admin: ctx.is_admin, permissions: ctx.permissions,
+      is_admin: ctx.is_admin, permissions: ctx.permissions, photo,
       // The app's chrome names the school. Without this the browser build
       // headed a teacher's screen "Nickland Edusoft" rather than their own
       // school, which the cloud's /staff/me has always returned.
@@ -355,68 +456,289 @@ function createApiServer(db, opts = {}) {
       WHERE sc.student_id = ? AND sc.term_id = ? ORDER BY sub.name
     `).all(sid, term.id);
     const summary = db.prepare('SELECT * FROM student_term_summary WHERE student_id = ? AND term_id = ?').get(sid, term.id);
-    return json(res, 200, { ok: true, term: { id: term.id, label: term.label }, subjects, summary: summary || null });
-  });
-
-  // Parent submits a payment (mobile money / bank / cash-at-office). This
-  // creates a PENDING intent; the school acknowledges it (or a gateway webhook
-  // does), which records the payment and sends the receipt.
-  add('POST', `${API}/parent/children/:id/pay`, async (ctx, req, res, params, body) => {
-    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
-    const sid = parseInt(params.id, 10);
-    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
-    const r = payments.createIntent(db, {
-      student_id: sid, parent_id: ctx.parent.id,
-      amount: body.amount, channel: body.channel || 'mobile',
-      reference: body.reference, notes: body.notes,
+    // Everything a report card is actually made of, so the app can lay one out
+    // and print it rather than showing a bare list of numbers: the grading
+    // scale the marks are read against, the term's attendance, and the header
+    // any printed copy has to carry.
+    const bands = db.prepare('SELECT min_score, max_score, remark FROM grading_bands ORDER BY display_order, min_score DESC').all();
+    const attendance = db.prepare(`
+      SELECT COUNT(*) FILTER (WHERE status='present') AS present,
+             COUNT(*) FILTER (WHERE status='absent') AS absent,
+             COUNT(*) AS total
+      FROM student_attendance WHERE student_id = ? AND term_id = ?
+    `).get(sid, term.id) || { present: 0, absent: 0, total: 0 };
+    const child = childSummary(db, sid);
+    return json(res, 200, {
+      ok: true,
+      term: { id: term.id, label: term.label },
+      student: child ? {
+        id: child.id, name: child.name, index_number: child.index_number,
+        class_name: child.class_name, photo: child.photo, class_teacher: child.class_teacher,
+      } : null,
+      subjects,
+      summary: summary || null,
+      grading_bands: bands,
+      attendance,
+      school: {
+        name: getSetting(db, 'school_name', 'School'),
+        motto: getSetting(db, 'school_motto', ''),
+        address: getSetting(db, 'school_address', '') || getSetting(db, 'school_location', ''),
+        phone: getSetting(db, 'school_phone_1', ''),
+        email: getSetting(db, 'school_email', ''),
+        logo: media.logoUri(db, getSetting),
+      },
+      dates: {
+        vacation: getSetting(db, 'vacation_date', ''),
+        reopening: getSetting(db, 'reopening_date', ''),
+        exam_title: getSetting(db, 'current_exam_title', ''),
+      },
     });
-    if (!r.ok) return json(res, 400, r);
-    return json(res, 200, { ok: true, intent_id: r.intent_id, status: 'pending',
-      message: 'Payment submitted. You will receive a receipt once the school confirms it.' });
   });
 
-  // Parent starts an ONLINE payment (Paystack by default). Returns a checkout
-  // URL the app opens; settlement happens on verify/webhook.
-  add('POST', `${API}/parent/children/:id/pay/online`, async (ctx, req, res, params, body) => {
+  // ── Settling a balance ──
+  // There is deliberately no way to move money through this app. The old build
+  // carried two: a card/mobile-money checkout, and a "tell the school what you
+  // paid" form that created a pending intent somebody at the office then had to
+  // reconcile by hand. Both are gone. A school takes payment the way it always
+  // has — at the office, or over WhatsApp with the bursar — and the app's job
+  // is to show the figure correctly and say exactly who to talk to.
+  //
+  // So this route settles nothing. It answers the question the parent actually
+  // has: how much, for what, and who do I contact. The client turns the reply
+  // into a WhatsApp message with the child's name and balance already written.
+  add('GET', `${API}/parent/children/:id/settle`, async (ctx, req, res, params) => {
     if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
     const sid = parseInt(params.id, 10);
     if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
-    const r = await payments.createOnlineIntent(db, {
-      student_id: sid, parent_id: ctx.parent.id, amount: body.amount,
-      email: body.email || ctx.parent.email,
+    const child = childSummary(db, sid);
+    if (!child) return json(res, 404, { ok: false, error: 'Child not found.' });
+    const phone = getSetting(db, 'school_phone_1', '');
+    return json(res, 200, {
+      ok: true,
+      child: { id: child.id, name: child.name, class_name: child.class_name, index_number: child.index_number },
+      owed: {
+        fees: child.fees.balance || 0,
+        canteen: child.canteen.amount_owed || 0,
+        books: child.fees.books_balance || 0,
+        total: (child.fees.balance || 0) + (child.canteen.amount_owed || 0),
+      },
+      term: child.term,
+      contact: {
+        school: getSetting(db, 'school_name', 'the school'),
+        phone,
+        whatsapp: getSetting(db, 'school_whatsapp', '') || phone,
+        email: getSetting(db, 'school_email', ''),
+        address: getSetting(db, 'school_address', '') || getSetting(db, 'school_location', ''),
+      },
+      instructions: 'Payments are arranged with the school directly. Send a message or call, and the office will confirm the amount and how to pay.',
     });
-    if (!r.ok) return json(res, 400, r);
-    return json(res, 200, { ok: true, authorization_url: r.authorization_url, reference: r.reference });
   });
 
-  // Parent-scoped verification (pull) — called after the checkout returns.
-  add('GET', `${API}/parent/pay/verify/:reference`, async (ctx, req, res, params) => {
-    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
-    const intent = db.prepare('SELECT parent_id FROM payment_intents WHERE gateway_reference = ?').get(params.reference);
-    if (!intent) return json(res, 404, { ok: false, error: 'Payment not found.' });
-    if (intent.parent_id && intent.parent_id !== ctx.parent.id) return json(res, 403, { ok: false, error: 'Not your payment.' });
-    const r = await payments.verifyAndSettle(db, params.reference, {});
-    return json(res, r.ok || r.pending ? 200 : 400, r);
-  });
-
-  // Parent sees their submitted payment intents + their status.
-  add('GET', `${API}/parent/children/:id/intents`, async (ctx, req, res, params) => {
+  // ── The bill, itemised ──
+  // A balance with no breakdown is an argument waiting to happen. This is the
+  // term's bill line by line, what has been paid against it, what was carried
+  // forward from a previous term, and the books — the four things a parent
+  // queries at the gate.
+  add('GET', `${API}/parent/children/:id/fees`, async (ctx, req, res, params, body, ip, tokenId, query) => {
     if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
     const sid = parseInt(params.id, 10);
     if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
-    return json(res, 200, { ok: true, intents: payments.intentsForStudent(db, sid) });
+    const term = query.termId
+      ? db.prepare('SELECT * FROM terms WHERE id = ?').get(query.termId)
+      : db.prepare('SELECT * FROM terms WHERE is_current = 1').get();
+
+    const bill = term ? db.prepare(`
+      SELECT * FROM student_bills
+      WHERE student_id = ? AND term_id = ? AND COALESCE(status, 'active') = 'active'
+    `).get(sid, term.id) : null;
+
+    const items = bill ? db.prepare(`
+      SELECT description, amount, is_arrear FROM bill_line_items
+      WHERE student_bill_id = ? ORDER BY is_arrear, item_number, id
+    `).all(bill.id) : [];
+
+    // Every fee payment ever made for this child, newest first. Not capped at
+    // the current term: "what did we pay last year?" is a fair question and the
+    // app had no answer to it.
+    const payments = db.prepare(`
+      SELECT p.receipt_number, p.payment_date, p.payment_method, p.amount, p.reference,
+             t.label AS term_label
+      FROM payments p LEFT JOIN terms t ON t.id = p.term_id
+      WHERE p.student_id = ? AND p.is_reversed = 0
+      ORDER BY date(p.payment_date) DESC, p.id DESC LIMIT 120
+    `).all(sid);
+
+    // Term-by-term history, so a carry-forward can be traced to where it came
+    // from rather than appearing from nowhere on this term's bill.
+    const history = db.prepare(`
+      SELECT t.label AS term_label, t.id AS term_id,
+             b.total_billed, b.total_paid, b.balance, b.arrears_from_prev
+      FROM student_bills b JOIN terms t ON t.id = b.term_id
+      WHERE b.student_id = ? AND COALESCE(b.status, 'active') = 'active'
+      ORDER BY t.id DESC LIMIT 12
+    `).all(sid);
+
+    const books = db.prepare(`
+      SELECT sb.total_amount, sb.total_paid, sb.balance, ay.label AS year_label
+      FROM student_books sb LEFT JOIN academic_years ay ON ay.id = sb.academic_year_id
+      WHERE sb.student_id = ? ORDER BY sb.academic_year_id DESC LIMIT 1
+    `).get(sid) || null;
+    const bookItems = books ? db.prepare(`
+      SELECT bi.title, bi.amount FROM student_books_items bi
+      JOIN student_books sb ON sb.id = bi.student_books_id
+      WHERE sb.student_id = ? ORDER BY bi.display_order, bi.id
+    `).all(sid) : [];
+
+    return json(res, 200, {
+      ok: true,
+      term: term ? { id: term.id, label: term.label } : null,
+      bill: bill ? {
+        total_billed: bill.total_billed || 0,
+        total_paid: bill.total_paid || 0,
+        balance: bill.balance || 0,
+        arrears_from_prev: bill.arrears_from_prev || 0,
+        discount_amount: bill.discount_amount || 0,
+        discount_reason: bill.discount_reason || null,
+      } : null,
+      items, payments, history,
+      books: books ? { ...books, items: bookItems } : null,
+    });
   });
 
+  // ── The canteen, day by day ──
+  // How many days are unpaid, what that comes to, and every collection the
+  // school has recorded against the child.
+  add('GET', `${API}/parent/children/:id/canteen`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const term = db.prepare('SELECT * FROM terms WHERE is_current = 1').get();
+    const rate = parseFloat(getSetting(db, 'canteen_daily_rate', '5'));
+    const days = term ? db.prepare(`
+      SELECT sc.date, COALESCE(cds.status, 'unpaid') AS status
+      FROM school_calendar sc
+      LEFT JOIN canteen_day_status cds ON cds.date = sc.date AND cds.student_id = ?
+      WHERE sc.term_id = ? AND sc.day_type = 'school_day' AND date(sc.date) <= date('now')
+      ORDER BY date(sc.date) DESC LIMIT 90
+    `).all(sid, term.id) : [];
+    const payments = db.prepare(`
+      SELECT payment_date, amount, days_covered, start_date, end_date, notes
+      FROM canteen_payments WHERE student_id = ?
+      ORDER BY date(payment_date) DESC, id DESC LIMIT 60
+    `).all(sid);
+    const unpaid = days.filter(d => d.status === 'unpaid').length;
+    return json(res, 200, {
+      ok: true, daily_rate: rate,
+      term: term ? { id: term.id, label: term.label } : null,
+      unpaid_days: unpaid, amount_owed: unpaid * rate,
+      paid_days: days.filter(d => d.status === 'paid').length,
+      exempt_days: days.filter(d => d.status === 'exempt').length,
+      days, payments,
+    });
+  });
+
+  // ── Every report card the school has published for this child ──
+  // A parent should be able to open last term's report, and the one before it,
+  // without asking the office for a photocopy. The list names the terms; the
+  // existing /report route serves any one of them by id.
+  add('GET', `${API}/parent/children/:id/reports`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const terms = db.prepare(`
+      SELECT t.id, t.label, sts.average_score, sts.class_rank, sts.number_on_roll,
+             sts.days_present, sts.total_days,
+             (SELECT COUNT(*) FROM scores sc WHERE sc.student_id = ? AND sc.term_id = t.id) AS subject_count
+      FROM terms t
+      LEFT JOIN student_term_summary sts ON sts.student_id = ? AND sts.term_id = t.id
+      WHERE EXISTS (SELECT 1 FROM scores sc WHERE sc.student_id = ? AND sc.term_id = t.id)
+      ORDER BY t.id DESC
+    `).all(sid, sid, sid);
+    return json(res, 200, { ok: true, terms });
+  });
+
+  // ── The register, as the parent sees it ──
+  // A running total tells a parent nothing about a pattern. This is the term's
+  // days one by one, so three Mondays missed in a row is visible as such.
+  add('GET', `${API}/parent/children/:id/attendance`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const term = db.prepare('SELECT * FROM terms WHERE is_current = 1').get();
+    const days = term ? db.prepare(`
+      SELECT date, status, notes FROM student_attendance
+      WHERE student_id = ? AND term_id = ? ORDER BY date(date) DESC LIMIT 120
+    `).all(sid, term.id) : [];
+    const totals = {
+      present: days.filter(d => d.status === 'present').length,
+      absent: days.filter(d => d.status === 'absent').length,
+      late: days.filter(d => d.status === 'late').length,
+      total: days.length,
+    };
+    return json(res, 200, {
+      ok: true, term: term ? { id: term.id, label: term.label } : null, days, totals,
+    });
+  });
+
+  // ── The child's own record, for printing ──
+  // The same details the school holds, so a parent can print a profile sheet
+  // for a hospital form or a scholarship application without a trip to the
+  // office. Nothing here is a figure the school treats as confidential.
+  add('GET', `${API}/parent/children/:id/profile`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    const s = db.prepare(`
+      SELECT s.*, c.name AS class_name FROM students s
+      LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?
+    `).get(sid);
+    if (!s) return json(res, 404, { ok: false, error: 'Child not found.' });
+    return json(res, 200, { ok: true, student: studentProfile(db, s) });
+  });
+
+  // Notices, as one list. The app previously showed a parent only the SMS log —
+  // so a school that posted a notice on the desktop found that parents on the
+  // school Wi-Fi never saw it, while parents on the internet portal did. The
+  // two sources are merged here and sorted together, which is what "Notices"
+  // was always supposed to mean.
   add('GET', `${API}/parent/notifications`, async (ctx, req, res) => {
     if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
     const contacts = [ctx.parent.phone, ctx.parent.email].filter(Boolean);
-    if (!contacts.length) return json(res, 200, { ok: true, notifications: [] });
-    const placeholders = contacts.map(() => '?').join(',');
-    const rows = db.prepare(`
+    const sent = contacts.length ? db.prepare(`
       SELECT channel, message_body, sent_at, delivery_status FROM notification_log
-      WHERE recipient_contact IN (${placeholders}) ORDER BY sent_at DESC LIMIT 50
-    `).all(...contacts);
-    return json(res, 200, { ok: true, notifications: rows });
+      WHERE recipient_contact IN (${contacts.map(() => '?').join(',')})
+      ORDER BY sent_at DESC LIMIT 50
+    `).all(...contacts) : [];
+
+    // A notice aimed at one child is only for that child's people.
+    const ids = ctx.student_ids || [];
+    const scoped = ids.length ? `OR (a.audience = 'student' AND a.target_student_id IN (${ids.map(() => '?').join(',')}))` : '';
+    const announcements = db.prepare(`
+      SELECT a.id, a.title, a.body, a.created_at, a.audience,
+             s.first_name || ' ' || s.surname AS student_name
+      FROM announcements a
+      LEFT JOIN students s ON s.id = a.target_student_id
+      WHERE a.is_active = 1 AND (a.audience = 'all' OR a.audience = 'parents' ${scoped})
+      ORDER BY datetime(a.created_at) DESC LIMIT 50
+    `).all(...ids);
+
+    const merged = [
+      ...announcements.map(a => ({
+        kind: 'notice', id: `a${a.id}`, title: a.title, body: a.body,
+        student_name: a.student_name || null,
+        at: a.created_at, channel: 'notice',
+        message_body: a.title ? `${a.title} — ${a.body || ''}` : (a.body || ''),
+        sent_at: a.created_at,
+      })),
+      ...sent.map((n, i) => ({
+        kind: 'message', id: `n${i}`, title: null, body: n.message_body,
+        at: n.sent_at, channel: n.channel,
+        message_body: n.message_body, sent_at: n.sent_at,
+        delivery_status: n.delivery_status,
+      })),
+    ].sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+
+    return json(res, 200, { ok: true, notifications: merged, announcements });
   });
 
   // ── Messaging (parent side) ──
@@ -492,7 +814,22 @@ function createApiServer(db, opts = {}) {
       p.push(like, like, like, like);
     }
     sql += ' ORDER BY s.surname, s.first_name LIMIT 500';
-    return json(res, 200, { ok: true, students: db.prepare(sql).all(...p) });
+    const rows = db.prepare(sql).all(...p);
+
+    // Photographs are opt-in and only for a single class. A roll of forty faces
+    // is a couple of megabytes, which the school Wi-Fi carries happily; the
+    // whole school's five hundred is not something to put on a phone by
+    // accident, so a wider query gets names and initials.
+    const wantPhotos = String(query.photos || '') === '1' && !!query.classId && rows.length <= 80;
+    return json(res, 200, {
+      ok: true,
+      students: rows.map(({ photo_path, ...r }) => ({
+        ...r,
+        name: `${r.surname || ''} ${r.first_name || ''}`.trim(),
+        has_photo: !!photo_path,
+        photo: wantPhotos ? media.dataUri(photo_path) : undefined,
+      })),
+    });
   });
 
   add('GET', `${API}/fees/debtors`, async (ctx, req, res) => {
@@ -841,31 +1178,12 @@ function createApiServer(db, opts = {}) {
   // and the terminal report, lesson notes, messages, notices, the canteen
   // sheet, and their own clock-in, leave and payslips. Kept in its own module
   // so this one stays the router rather than the whole school.
-  registerStaffRoutes({ add, db, json, can, API, getSetting });
+  registerStaffRoutes({ add, db, json, can, API, getSetting, media, studentProfile });
 
-  function readRaw(req) {
-    return new Promise((resolve) => {
-      let d = ''; let tooBig = false;
-      req.on('data', (c) => { d += c; if (d.length > 1e6) { tooBig = true; req.destroy(); } });
-      req.on('end', () => resolve(tooBig ? '' : d));
-      req.on('error', () => resolve(''));
-    });
-  }
-
-  // Gateway webhook — public, but authenticated by HMAC signature over the RAW
-  // body. Always answers 200 so the gateway stops retrying once received.
-  async function handlePaystackWebhook(req, res) {
-    const raw = await readRaw(req);
-    const g = require('./gateways').getGateway(db);
-    const sig = req.headers['x-paystack-signature'];
-    if (!g || !g.verifyWebhook(db, sig, raw)) return json(res, 401, { ok: false, error: 'invalid signature' });
-    let payload = null; try { payload = JSON.parse(raw); } catch (_) {}
-    if (payload && g.webhookIsSuccess(payload)) {
-      const ref = g.webhookReference(payload);
-      if (ref) { try { await payments.verifyAndSettle(db, ref, {}); } catch (_) {} }
-    }
-    return json(res, 200, { ok: true });
-  }
+  // There is no payment webhook here any more, and no checkout to answer for.
+  // Money is never taken through this app: a balance is shown, and settling it
+  // is arranged with the school. Removing the gateway removes the only path by
+  // which a card or wallet charge could originate from a parent's phone.
 
   // ── request dispatcher ──
   const server = http.createServer(async (req, res) => {
@@ -873,10 +1191,6 @@ function createApiServer(db, opts = {}) {
     const parsed = url.parse(req.url, true);
     const reqParts = parsed.pathname.split('/').filter(Boolean);
     const ip = req.socket.remoteAddress || '';
-
-    if (req.method === 'POST' && parsed.pathname === `${API}/webhooks/paystack`) {
-      return handlePaystackWebhook(req, res);
-    }
 
     // The browser build of the mobile app, served from this same origin so a
     // teacher on the school Wi-Fi can just open the address in Chrome. It only

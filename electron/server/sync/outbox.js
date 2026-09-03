@@ -150,6 +150,49 @@ function pruneSynced(db, days = 14) {
 
 // Build + enqueue the thin snapshot for one student (current balances). This is
 // the read model the parent portal serves when the desktop is offline.
+
+// ── the school's own identity, projected ──────────────────────────────────
+// A parent on the internet portal was shown a generic blue page with the
+// school's name in small type and no way to contact anybody — because the
+// crest and the phone numbers only ever existed on the desktop's hard disk.
+// One small snapshot fixes both: the portal draws the same crest as the app on
+// the school Wi-Fi, and the "Message the school" button has a number to use.
+//
+// The crest is sent as a data URI, and only if it is small enough to be one.
+// This projection is pushed on backfill and whenever branding is saved, not on
+// a timer: a school changes its logo about once.
+function enqueueSchoolProfile(db) {
+  try {
+    if (!syncEnabled(db)) return null;
+    const { getSetting } = require('../../utils/idgen');
+    const media = require('../media');
+    const phone = getSetting(db, 'school_phone_1', '');
+    return postToOutbox(db, {
+      entity_type: 'school_profile',
+      entity_key: 'school:profile',
+      payload: {
+        school: {
+          name: getSetting(db, 'school_name', 'School'),
+          short_name: getSetting(db, 'school_abbreviation', ''),
+          motto: getSetting(db, 'school_motto', ''),
+          type: getSetting(db, 'school_type', ''),
+          address: getSetting(db, 'school_address', '') || getSetting(db, 'school_location', ''),
+          digital_address: getSetting(db, 'school_digital_address', ''),
+          website: getSetting(db, 'school_website', ''),
+        },
+        contact: {
+          phone,
+          phone_alt: getSetting(db, 'school_phone_2', ''),
+          email: getSetting(db, 'school_email', ''),
+          whatsapp: getSetting(db, 'school_whatsapp', '') || phone,
+        },
+        logo: media.logoUri(db, getSetting),
+        currency: getSetting(db, 'payment_currency', 'GHS'),
+      },
+    });
+  } catch (_) { return null; }
+}
+
 function enqueueStudentSnapshot(db, studentId) {
   if (!syncEnabled(db)) return null;
   try {
@@ -269,7 +312,7 @@ function enqueueStudentSnapshot(db, studentId) {
 function backfillAll(db, { receiptLimit = 200 } = {}) {
   const counts = {
     students: 0, parents: 0, announcements: 0, receipts: 0,
-    staff: 0, timetables: 0, classes: 0, metrics: 0, debtors: 0,
+    staff: 0, timetables: 0, classes: 0, metrics: 0, debtors: 0, school: 0,
   };
   if (!syncEnabled(db)) return { ok: false, error: 'Cloud sync is switched off.' };
 
@@ -330,6 +373,8 @@ function backfillAll(db, { receiptLimit = 200 } = {}) {
   // meant to equal the number of rows now sitting in the outbox, and the
   // "Push now" dialog shows it. An undercount reads as records having been
   // dropped.
+  try { if (enqueueSchoolProfile(db)) counts.school = 1; } catch (_) {}
+
   try { Object.assign(counts, require('./staff_projection').enqueueAllStaff(db)); } catch (_) {}
 
   return { ok: true, counts, total: Object.values(counts).reduce((a, b) => a + b, 0) };
@@ -337,5 +382,6 @@ function backfillAll(db, { receiptLimit = 200 } = {}) {
 
 module.exports = {
   syncEnabled, postToOutbox, listUnsynced, markSynced, markFailed, pendingCount, enqueueStudentSnapshot,
+  enqueueSchoolProfile,
   nextVersion, retryAll, deadCount, pruneSynced, backoffSeconds, MAX_ATTEMPTS, backfillAll,
 };

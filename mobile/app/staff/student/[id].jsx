@@ -14,10 +14,15 @@ import { RequireModule } from '../../../src/guard';
 import { useScreenTitle } from '../../../src/shell';
 import { api, money } from '../../../src/api';
 import {
-  Screen, Card, Section, Title, Heading, Muted, Micro, Button, Badge, Avatar,
+  Screen, Card, Section, Title, Heading, Body, Muted, Micro, Button, Badge, Avatar,
   ErrorNote, InfoNote, Skeleton, EmptyState, ListRow, Grid, StatCard,
-  KeyValue, ProgressBar, Divider, Gradient, IconTile,
+  KeyValue, ProgressBar, Divider, Gradient, IconTile, Hero, HeroStat, Toolbar, Sheet, Tabs,
 } from '../../../src/ui';
+import { useBranding } from '../../../src/brand';
+import { PrintButton } from '../../../src/actions';
+import { studentProfileHtml, terminalReportHtml } from '../../../src/print';
+import { Bars, Meter, DayStrip, toneForScore } from '../../../src/charts';
+import { whatsappHref, telHref, open as openLink } from '../../../src/contact';
 import { useLayout } from '../../../src/responsive';
 import { colors, palette, gradients, spacing, radius, shadow, type } from '../../../src/theme';
 
@@ -26,7 +31,9 @@ function StudentScreen() {
   const { token } = useAuth();
   const router = useRouter();
   const layout = useLayout();
+  const brand = useBranding();
   const [data, setData] = useState(null);
+  const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -34,8 +41,17 @@ function StudentScreen() {
 
   const load = useCallback(async () => {
     setError(null);
-    try { setData(await api.student(token, id)); }
-    catch (e) { setError(e.message); setData({ student: null }); }
+    try {
+      const [d, r] = await Promise.all([
+        api.student(token, id),
+        // The terminal report, so a teacher stopped at the gate can print the
+        // child's report card there and then rather than sending the parent to
+        // the office. It is allowed to fail on its own: a teacher with the
+        // roll but not academics still gets the record.
+        api.studentReport(token, id).then(x => x).catch(() => null),
+      ]);
+      setData(d); setReport(r);
+    } catch (e) { setError(e.message); setData({ student: null }); }
   }, [token, id]);
 
   useEffect(() => { load(); }, [load]);
@@ -60,23 +76,56 @@ function StudentScreen() {
   const att = data.attendance || {};
   const rate = att.total ? Math.round(((att.present || 0) / att.total) * 100) : null;
 
+  const schoolHeader = report?.school || {
+    name: brand.school?.name, motto: brand.school?.motto, address: brand.school?.address,
+    phone: brand.contact?.phone, email: brand.contact?.email, logo: brand.logo,
+  };
+
+  const printProfile = () => studentProfileHtml({
+    student: data.profile || {
+      ...s, guardians: data.guardians,
+    },
+    school: schoolHeader,
+    term: data.term?.label,
+    fees: data.fees, canteen: data.canteen, attendance: att,
+  });
+
+  const printReport = () => terminalReportHtml({ ...(report || {}), school: schoolHeader });
+
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
       <ErrorNote message={error} />
 
-      <Gradient colors={gradients.brand} angle={130} style={[{ borderRadius: radius.lg, padding: spacing.xl }, shadow.raised]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg }}>
-          <Avatar name={s.name} size={layout.isPhone ? 54 : 64} tone="chrome" />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text numberOfLines={2} style={{ color: '#fff', fontSize: layout.isPhone ? 21 : 26, fontWeight: '800', letterSpacing: -0.5 }}>
-              {s.name}
-            </Text>
-            <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 13.5, fontWeight: '600', marginTop: 3 }}>
-              {[s.index_number, s.class_name, s.gender].filter(Boolean).join(' · ')}
-            </Text>
+      <Hero
+        crest={<Avatar name={s.name} photo={s.photo} size={layout.isPhone ? 58 : 72} tone="chrome" ring />}
+        eyebrow={data.term?.label || 'This term'}
+        title={s.name}
+        subtitle={[s.index_number, s.class_name, s.gender].filter(Boolean).join('  ·  ')}
+        right={layout.isPhone ? null : (
+          <View style={{ gap: spacing.sm }}>
+            {data.summary?.average_score != null
+              ? <HeroStat label="Average" value={Number(data.summary.average_score).toFixed(1)}
+                  note={data.summary.class_rank ? `Position ${data.summary.class_rank}` : undefined} />
+              : null}
+            {rate != null ? <HeroStat label="Attendance" value={`${rate}%`} /> : null}
           </View>
-        </View>
-      </Gradient>
+        )}
+      />
+
+      {/* Everything a teacher is asked for at the gate, in one row: the child's
+          report card and their profile sheet, both printed from here. */}
+      <Card>
+        <Toolbar>
+          <PrintButton build={printProfile} title="Print profile" />
+          {report && (report.subjects || []).length ? (
+            <PrintButton build={printReport} title="Print report card" variant="subtle" />
+          ) : null}
+          <Button
+            size="sm" variant="ghost" icon="award" title="Report & remarks" full={false}
+            onPress={() => router.push('/staff/results')}
+          />
+        </Toolbar>
+      </Card>
 
       <Grid min={150}>
         <StatCard label="Days present" value={att.present ?? '—'} tone="success" icon="check" />
@@ -98,11 +147,19 @@ function StudentScreen() {
                 title={g.name || g.relation}
                 subtitle={g.name ? g.relation : null}
                 right={g.contact ? (
-                  <Button
-                    size="sm" variant="subtle" title={g.contact} icon="phone" full={false}
-                    onPress={() => Linking.openURL(`tel:${String(g.contact).replace(/\s/g, '')}`).catch(() => {})}
-                  />
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <Button
+                      size="sm" variant="subtle" title="Call" icon="phone" full={false}
+                      onPress={() => openLink(telHref(g.contact))}
+                    />
+                    <Button
+                      size="sm" variant="outline" title="WhatsApp" icon="whatsapp" full={false}
+                      onPress={() => openLink(whatsappHref(g.contact,
+                        `Good day. This is ${s.class_name || 'the class'} teacher at ${brand.school?.name || 'school'}, about ${s.name}.`))}
+                    />
+                  </View>
                 ) : null}
+                meta={<Muted>{g.contact}</Muted>}
               />
             ))}
       </Section>
@@ -123,7 +180,15 @@ function StudentScreen() {
       </Section>
 
       {(data.subjects || []).length > 0 && (
-        <Section title="This term's marks" icon="award" subtitle={data.term?.label}>
+        <Section title="This term's marks" icon="award" subtitle={data.term?.label}
+          action={report && (report.subjects || []).length ? <PrintButton build={printReport} title="Print" /> : null}>
+          <View style={{ marginBottom: spacing.lg }}>
+            <Bars items={(data.subjects || []).map(sub => ({
+              label: sub.subject, value: sub.total_score,
+              note: [sub.class_score != null ? `CW ${sub.class_score}` : null,
+                sub.exam_score != null ? `Exam ${sub.exam_score}` : null].filter(Boolean).join(' · '),
+            }))} />
+          </View>
           {(data.subjects || []).map((sub, i) => (
             <View key={i} style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderSoft }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
@@ -194,22 +259,14 @@ function StudentScreen() {
       )}
 
       {(data.recent_attendance || []).length > 0 && (
-        <Section title="Recent register" icon="calendar">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-            {(data.recent_attendance || []).map((r, i) => (
-              <View key={i} style={{
-                paddingHorizontal: 9, paddingVertical: 6, borderRadius: radius.sm,
-                backgroundColor: r.status === 'absent' ? palette.red100 : r.status === 'late' ? palette.amber100 : palette.green100,
-              }}>
-                <Text style={{
-                  fontSize: 11.5, fontWeight: '700',
-                  color: r.status === 'absent' ? palette.red600 : r.status === 'late' ? palette.amber600 : palette.green600,
-                }}>
-                  {String(r.date).slice(5)}
-                </Text>
-              </View>
-            ))}
+        <Section title="Recent register" icon="calendar" subtitle="Most recent first.">
+          <View style={{ marginBottom: spacing.md }}>
+            <Meter
+              value={att.present || 0} total={att.total || 0} label="Attendance this term" goodAbove={90}
+              caption={att.total ? `${att.present || 0} present, ${att.absent || 0} absent of ${att.total} days.` : undefined}
+            />
           </View>
+          <DayStrip days={data.recent_attendance} />
         </Section>
       )}
 

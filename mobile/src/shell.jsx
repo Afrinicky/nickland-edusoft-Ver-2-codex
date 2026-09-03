@@ -20,7 +20,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, palette, gradients, type, spacing, radius, shadow } from './theme';
 import { useLayout } from './responsive';
 import { Icon } from './icons';
-import { Avatar, Badge, Gradient, IconButton, Sheet } from './ui';
+import { Avatar, Badge, Crest, Gradient, IconButton, Sheet } from './ui';
+import { useBranding } from './brand';
+import { ContactSheet } from './actions';
+import { channels as channelsFor, generalMessage } from './contact';
 import { visibleNav, groupNav } from './nav';
 import { useAuth } from './auth';
 
@@ -62,8 +65,12 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
   const pathname = usePathname();
   const router = useRouter();
   const { profile, signOut } = useAuth();
+  const brand = useBranding();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [screenTitle, setScreenTitle] = useState(null);
+  const schoolName = brand.school?.name || school || 'Nickland Edusoft';
+  const contactChannels = channelsFor(brand.contact || {});
 
   const items = visibleNav(nav.items, profile);
   const active = activeKey(items, pathname || '');
@@ -73,14 +80,28 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
   const person = profile?.user?.full_name || profile?.parent?.full_name || 'Signed in';
   const role = profile?.designation || (profile?.role === 'parent' ? 'Parent' : 'Staff');
 
+  // "Message the school" belongs in the chrome, not on one screen: a parent
+  // with a question and a teacher who needs the office both want it wherever
+  // they happen to be standing.
+  const chat = contactChannels.length ? (
+    <ContactSheet
+      visible={chatOpen} onClose={() => setChatOpen(false)}
+      channels={contactChannels} school={brand.school}
+      message={generalMessage({ school: schoolName, from: person, role })}
+      subject={`${person} — ${role}`}
+    />
+  ) : null;
+
   const body = (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <TopBar
         title={screenTitle || title || current?.label || nav.title}
-        subtitle={school}
+        subtitle={schoolName}
+        logo={brand.logo}
         pending={pending}
-        onMenu={layout.isPhone ? null : null}
         person={person}
+        photo={profile?.photo || profile?.staff?.photo}
+        onChat={contactChannels.length ? () => setChatOpen(true) : null}
         onAccount={() => go(nav.accountHref)}
       />
       <View style={{ flex: 1 }}>{children || <Slot />}</View>
@@ -119,6 +140,8 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
           })}
         </View>
 
+        {chat}
+
         <Sheet visible={moreOpen} onClose={() => setMoreOpen(false)} title="Everything else">
           {groupNav(rest).map(g => (
             <View key={g.group} style={{ marginBottom: spacing.md }}>
@@ -134,6 +157,19 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
               ))}
             </View>
           ))}
+          {contactChannels.length ? (
+            <TouchableOpacity
+              onPress={() => { setMoreOpen(false); setChatOpen(true); }}
+              activeOpacity={0.72} style={styles.moreRow}
+            >
+              <View style={[styles.bottomIcon, { backgroundColor: palette.green100 }]}>
+                <Icon name="whatsapp" size={19} color={palette.green600} />
+              </View>
+              <Text style={{ ...type.body, fontWeight: '700', color: colors.text, flex: 1 }}>Message the school</Text>
+              <Icon name="chevron" size={15} color={colors.faint} />
+            </TouchableOpacity>
+          ) : null}
+
           <TouchableOpacity onPress={() => { setMoreOpen(false); signOut(); }} activeOpacity={0.72} style={styles.moreRow}>
             <View style={[styles.bottomIcon, { backgroundColor: palette.red100 }]}>
               <Icon name="logout" size={19} color={palette.red600} />
@@ -151,11 +187,14 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
     <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.bg }}>
       <Gradient colors={gradients.chrome} angle={165} style={[styles.side, { width: layout.sidebarWidth, paddingTop: insets.top + 14 }]}>
         <View style={[styles.brand, !labelled && { justifyContent: 'center' }]}>
-          <View style={styles.brandMark}><Icon name="school" size={20} color={palette.gold400} /></View>
+          {/* The school's own crest, not a generic mark. It was uploaded on the
+              desktop years ago and never reached a single phone, because the
+              API sent the file path it was stored under. */}
+          <Crest logo={brand.logo} size={36} tone="chrome" />
           {labelled && (
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text numberOfLines={1} style={{ color: '#fff', fontWeight: '800', fontSize: 14.5, letterSpacing: -0.2 }}>
-                {school || 'Nickland Edusoft'}
+                {schoolName}
               </Text>
               <Text style={{ color: colors.onChromeMuted, fontSize: 11, fontWeight: '600' }}>{nav.title}</Text>
             </View>
@@ -189,7 +228,7 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
         </ScrollView>
 
         <View style={[styles.sideUser, !labelled && { justifyContent: 'center' }]}>
-          <Avatar name={person} size={34} tone="chrome" />
+          <Avatar name={person} photo={profile?.photo || profile?.staff?.photo} size={34} tone="chrome" />
           {labelled && (
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text numberOfLines={1} style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{person}</Text>
@@ -201,11 +240,12 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
       </Gradient>
 
       <View style={{ flex: 1, minWidth: 0 }}>{body}</View>
+      {chat}
     </View>
   );
 }
 
-function TopBar({ title, subtitle, pending, person, onAccount }) {
+function TopBar({ title, subtitle, logo, pending, person, photo, onAccount, onChat }) {
   const layout = useLayout();
   const insets = useSafeAreaInsets();
   const phone = layout.nav === 'bottom';
@@ -219,6 +259,10 @@ function TopBar({ title, subtitle, pending, person, onAccount }) {
         !phone && { backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: colors.border },
       ]}
     >
+      {/* On a phone there is no sidebar, so this is the only place the school's
+          crest can appear — and it is the first thing that tells a parent they
+          are looking at their own school's app. */}
+      {phone ? <Crest logo={logo} size={34} tone="chrome" /> : null}
       <View style={{ flex: 1, minWidth: 0 }}>
         {subtitle ? (
           <Text numberOfLines={1} style={{ ...type.micro, textTransform: 'uppercase', color: phone ? colors.onChromeMuted : colors.faint }}>
@@ -232,9 +276,15 @@ function TopBar({ title, subtitle, pending, person, onAccount }) {
       {pending > 0 ? (
         <Badge tone={phone ? 'chrome' : 'data'} icon="refresh" label={`${pending} waiting`} />
       ) : null}
+      {onChat ? (
+        <IconButton
+          name="whatsapp" size={36} tone={phone ? 'chrome' : 'subtle'}
+          onPress={onChat} label="Message the school"
+        />
+      ) : null}
       {!phone ? (
-        <TouchableOpacity onPress={onAccount} activeOpacity={0.8} style={{ marginLeft: spacing.md }}>
-          <Avatar name={person} size={36} />
+        <TouchableOpacity onPress={onAccount} activeOpacity={0.8} style={{ marginLeft: spacing.sm }}>
+          <Avatar name={person} photo={photo} size={36} />
         </TouchableOpacity>
       ) : null}
     </Gradient>
