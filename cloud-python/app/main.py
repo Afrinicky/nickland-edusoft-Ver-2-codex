@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import office
 from . import payments as cloud_payments
+from . import parent_api
 from . import school_api
 from . import portal_auth as pauth
 from . import portals as portal_model
@@ -41,6 +42,8 @@ def create_app(store=None) -> FastAPI:
     # that school's own Postgres schema. Mounted FIRST so it can never be
     # shadowed by the catch-all that serves the web app's static files.
     app.include_router(school_api.router)
+    app.include_router(parent_api.router)
+    app.include_router(parent_api.webhook_router)
 
     # Optional seed for dev / cross-language testing: provision a known school.
     seed_id, seed_key = os.environ.get("SEED_SCHOOL_ID"), os.environ.get("SEED_SCHOOL_KEY")

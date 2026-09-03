@@ -226,6 +226,102 @@ def actor_for(db, raw_token):
     }
 
 
+# ── parents ─────────────────────────────────────────────────────────────────
+# Parents get the same throttling, the same audit trail and the same revocable
+# sessions as staff. The offline system gives them none of that — a parent
+# password may be four characters there and a failed attempt is not recorded —
+# which is defensible on one machine in a locked office and is not defensible
+# on the internet. Same table, same rules, different subject type.
+
+def parent_sign_in(db, identifier, password, device=None, platform=None):
+    from . import parents as parents_lib
+
+    identifier = str(identifier or "").strip()
+    key = f"{db.school_id}:parent:{identifier.lower()}"
+    wait = _locked(key)
+    if wait:
+        return {"ok": False, "status": 429,
+                "error": f"Too many attempts. Try again in {wait} seconds."}
+
+    result = parents_lib.sign_in(db, identifier, password)
+    if not result.get("ok"):
+        count = _record_failure(key)
+        security.audit(db, None, "security", None, "parent_login_failed",
+                       f'Failed parent sign-in for "{identifier}"',
+                       "high" if count >= MAX_LOGIN_FAILURES else "normal")
+        return result
+
+    _clear_failures(key)
+    parent = result["parent"]
+    raw = secrets.token_urlsafe(32)
+    try:
+        ttl = int(db.get_setting("online_token_ttl_days", str(DEFAULT_TTL_DAYS)) or DEFAULT_TTL_DAYS)
+    except (TypeError, ValueError):
+        ttl = DEFAULT_TTL_DAYS
+    ttl = max(1, min(ttl, MAX_TTL_DAYS))
+    expires = _iso(ttl)
+    db.insert("api_tokens", {
+        "token_hash": _sha256(raw), "subject_type": "parent", "subject_id": parent["id"],
+        "device_name": device, "platform": platform or "online", "expires_at": expires,
+    })
+    db.run("UPDATE parents SET last_login = %s WHERE id = %s", (_now_text(), parent["id"]))
+    return {"ok": True, "token": raw, "expires_at": expires, "parent": parent}
+
+
+def parent_for(db, raw_token):
+    """Resolve a bearer token to a parent, or None.
+
+    Re-read on every request, exactly as a staff session is: an account the
+    school deactivates stops working on its next call rather than when its
+    token happens to expire.
+    """
+    if not raw_token:
+        return None
+    row = db.one(
+        "SELECT id, subject_type, subject_id, revoked, expires_at FROM api_tokens WHERE token_hash = %s",
+        (_sha256(raw_token),))
+    if not row or row["revoked"] or row["subject_type"] != "parent":
+        return None
+    if row["expires_at"] and str(row["expires_at"]) < _iso(0):
+        return None
+    parent = db.one("""SELECT id, full_name, phone, email, is_active, must_change_password
+                         FROM parents WHERE id = %s""", (row["subject_id"],))
+    if not parent or not parent["is_active"]:
+        return None
+    try:
+        db.run("UPDATE api_tokens SET last_used_at = %s WHERE id = %s", (_now_text(), row["id"]))
+    except Exception:
+        pass
+    return {"parent_id": parent["id"], "token_id": row["id"], "full_name": parent["full_name"],
+            "phone": parent["phone"], "email": parent["email"],
+            "must_change_password": bool(parent["must_change_password"]), "role": "parent"}
+
+
+def revoke_all_for_parent(db, parent_id):
+    db.run("UPDATE api_tokens SET revoked = 1 WHERE subject_type = 'parent' AND subject_id = %s",
+           (parent_id,))
+    return {"ok": True}
+
+
+def change_parent_password(db, parent_actor, current_password, new_password):
+    from . import parents as parents_lib
+    new_password = str(new_password or "")
+    if len(new_password) < 8:
+        return {"ok": False, "status": 400, "error": "A password must be at least 8 characters."}
+    row = db.one("SELECT password_hash FROM parents WHERE id = %s", (parent_actor["parent_id"],))
+    if not row or not parents_lib.verify_password(current_password, row["password_hash"]):
+        return {"ok": False, "status": 400, "error": "That is not your current password."}
+    db.run("UPDATE parents SET password_hash = %s, must_change_password = 0 WHERE id = %s",
+           (parents_lib.hash_password(new_password), parent_actor["parent_id"]))
+    # Every device this parent was signed in on is now signed out, including
+    # the one that just changed the password. That is the point: "change your
+    # password" has to mean something after a phone goes missing.
+    revoke_all_for_parent(db, parent_actor["parent_id"])
+    security.audit(db, None, "security", parent_actor["parent_id"], "parent_password_changed",
+                   "Changed online; other sessions signed out")
+    return {"ok": True, "signed_out_everywhere": True}
+
+
 def change_own_password(db, actor, current_password, new_password):
     """A person changing their own password.
 

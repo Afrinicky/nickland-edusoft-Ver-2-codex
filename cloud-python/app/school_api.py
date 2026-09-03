@@ -30,8 +30,8 @@ from fastapi.responses import JSONResponse
 
 from . import portals
 from .school import (academics, admin, canteen, communications, db as sdb, fees,
-                     finance, homework, payroll, security, session, staff,
-                     stores, students, timetable)
+                     finance, homework, payments, payroll, security, session,
+                     staff, stores, students, timetable)
 
 router = APIRouter(prefix="/api/v1/school")
 
@@ -1046,3 +1046,33 @@ async def discounts(db, actor, studentId: int = None):
 @guarded(portal="finance", module="fees", action="edit")
 async def grant_discount(db, actor, request: Request):
     return stores.grant_discount(db, actor, await _json(request))
+
+
+# ══ money taken online, and the office's reconciliation of it ═══════════════
+
+@router.get("/fees/online")
+@guarded(portal="finance", module="fees")
+async def online_payments(db, actor, status: str = "pending"):
+    if status not in ("pending", "acknowledged", "rejected"):
+        status = "pending"
+    return payments.pending(db, actor, status)
+
+
+@router.post("/fees/online/{intent_id}/acknowledge")
+@guarded(portal="finance", module="fees", action="edit")
+async def acknowledge_intent(db, actor, intent_id: int, request: Request):
+    body = await _json(request)
+    return payments.acknowledge(db, actor, intent_id, body.get("method"))
+
+
+@router.post("/fees/online/{intent_id}/reject")
+@guarded(portal="finance", module="fees", action="edit")
+async def reject_intent(db, actor, intent_id: int, request: Request):
+    body = await _json(request)
+    return payments.reject(db, actor, intent_id, body.get("reason"))
+
+
+@router.post("/fees/online/{intent_id}/verify")
+@guarded(portal="finance", module="fees", action="edit")
+async def verify_intent(db, actor, intent_id: int):
+    return payments.verify_one(db, actor, intent_id)

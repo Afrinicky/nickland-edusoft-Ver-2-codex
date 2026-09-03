@@ -19,7 +19,7 @@
     "test:regressions": "node test/regressions.js && node test/access.js && node test/portals.js && node test/teacher_api.js && node test/webapp.js",
     "test:contrast": "node scripts/contrast.mjs",
     "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
-    "test:online": "cd cloud-python && python3 tests/test_school.py"
+    "test:online": "cd cloud-python && python3 tests/test_school.py && python3 tests/test_payments.py"
   },
   "dependencies": {
     "better-sqlite3": "^12.0.0",

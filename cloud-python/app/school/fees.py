@@ -237,9 +237,12 @@ def record_payment(db, actor, data):
         })
 
         if bill_id:
-            # Recomputed from the payments table rather than added to the stored
-            # total: a reversal or a correction then arrives at the same answer.
-            billing.recompute_bill_totals(tx, bill_id)
+            # Only the PAID side. Recomputed from the payments table rather
+            # than added to the stored total, so a reversal or a correction
+            # arrives at the same answer — and deliberately not the full
+            # recompute, because taking money must never rewrite what the
+            # pupil was charged. See billing.recompute_paid.
+            billing.recompute_paid(tx, bill_id)
 
         ledger.post_income(tx, {
             "receipt_number": receipt_no, "category": "fees", "amount": amount,
@@ -285,7 +288,7 @@ def reverse_payment(db, actor, payment_id, reason):
                 datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                 payment_id))
         if pay["student_bill_id"]:
-            billing.recompute_bill_totals(tx, pay["student_bill_id"])
+            billing.recompute_paid(tx, pay["student_bill_id"])
         ledger.post_expense(tx, {
             "category": "refund", "amount": pay["amount"],
             "description": f'Reversal of receipt {pay["receipt_number"]} — {reason}',

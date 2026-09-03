@@ -59,9 +59,42 @@ def template_total(db, template_id):
         (template_id,), 0))
 
 
+def recompute_paid(tx, bill_id):
+    """Recompute what has been PAID, and nothing else.
+
+    This is what a payment or a reversal calls, and the distinction from
+    ``recompute_bill_totals`` below is not cosmetic — it is a bug this system
+    had and no longer has.
+
+    Taking money must never rewrite what a pupil was CHARGED. The full recompute
+    rebuilds ``total_billed`` from the bill's line items, which is right when
+    the bill's composition changes and catastrophic when it has not: a bill row
+    whose items are missing — a legacy import, a bill raised by another path —
+    had its ``total_billed`` silently zeroed by the next payment, and the parent
+    was then told they owed nothing. A payment changes what was paid. That is
+    all it may touch.
+    """
+    bill = tx.one("SELECT student_id, term_id, total_billed FROM student_bills WHERE id = %s",
+                  (bill_id,))
+    if not bill:
+        return None
+    paid = round2(tx.one("""
+      SELECT COALESCE(SUM(amount), 0) AS t FROM payments
+       WHERE student_id = %s AND term_id = %s AND COALESCE(is_reversed, 0) = 0""",
+                         (bill["student_id"], bill["term_id"]))["t"])
+    billed = round2(bill["total_billed"] or 0)
+    tx.run("UPDATE student_bills SET total_paid = %s, balance = %s WHERE id = %s",
+           (paid, round2(billed - paid), bill_id))
+    return {"total_billed": billed, "total_paid": paid, "balance": round2(billed - paid)}
+
+
 def recompute_bill_totals(tx, bill_id):
     """Recompute a bill's stored money columns from its line items and from the
-    payments table, which is the source of truth for what was received."""
+    payments table, which is the source of truth for what was received.
+
+    For changes to what a pupil is CHARGED — generating a bill, adding a
+    supplementary line. A payment calls ``recompute_paid`` instead.
+    """
     bill = tx.one("SELECT * FROM student_bills WHERE id = %s", (bill_id,))
     if not bill:
         return None
@@ -76,6 +109,12 @@ def recompute_bill_totals(tx, bill_id):
                   (bill["student_id"], bill["term_id"]))["t"]
 
     gross = round2(sums["fees"] + sums["arrears"] + sums["extra"])
+    if gross <= 0 and (bill["total_billed"] or 0) > 0:
+        # A bill with a figure on it but no line items behind it. Something
+        # raised it another way — an import, an older release — and rebuilding
+        # from nothing would tell the parent they owe nothing. Recompute what
+        # was paid and leave what was charged exactly where it is.
+        return recompute_paid(tx, bill_id)
     # The discount was agreed against the fee schedule, so it stays capped at
     # the gross rather than being re-derived — re-deriving a percentage after a
     # supplementary charge would quietly widen a discount nobody re-approved.
