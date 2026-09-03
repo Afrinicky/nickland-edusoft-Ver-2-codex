@@ -196,7 +196,7 @@ export function PrintButton({
 
 const styles = {
   fabWrap: { position: 'absolute', right: spacing.lg, alignItems: 'flex-end' },
-  fab: { paddingVertical: 13, paddingHorizontal: 18, borderRadius: radius.pill },
+  fab: { paddingVertical: 13, paddingHorizontal: 18, borderRadius: radius.md },
 };
 
 export default { ContactSchool, ContactFab, ContactSheet, SettleBalance, PrintButton };

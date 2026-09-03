@@ -1228,9 +1228,21 @@ function seedDefaults(db) {
     ['canteen_attendance_exempt_enabled', 'true', 'canteen'],
     ['canteen_clockin_enabled', 'false', 'canteen'],
     // Notifications
+    // SMS goes through Arkesel, which is the gateway Ghanaian schools can
+    // actually buy credit for locally. The sender ID is what a parent sees as
+    // the sender of the message; Arkesel caps it at 11 characters and it has
+    // to be registered with them before it will deliver.
     ['sms_provider', 'arkesel', 'notifications'],
     ['sms_api_key', '', 'notifications'],
     ['sms_sender_id', 'EduSoft', 'notifications'],
+    // Email goes one of two ways. `resend` is an HTTPS API and is what a
+    // cloud deployment should use — there is no SMTP handshake to be blocked
+    // by a host that closes port 587. `smtp` is for a school with its own mail
+    // account. Migration 13 also seeds these for an existing database; they
+    // belong in the base defaults too so a fresh one does not depend on the
+    // migration having run.
+    ['email_provider', 'smtp', 'notifications'],
+    ['resend_api_key', '', 'notifications'],
     ['email_smtp_host', '', 'notifications'],
     ['email_smtp_port', '587', 'notifications'],
     ['email_smtp_user', '', 'notifications'],
@@ -2038,6 +2050,25 @@ function runMigrations(db) {
       );
       CREATE INDEX IF NOT EXISTS idx_wb_import_sheet ON workbook_import_log(sheet, imported_at);
     `);
+  });
+
+  // 31. Point every school at the SMS gateway that is actually implemented.
+  //
+  //     The settings screen used to offer Hubtel and mNotify alongside Arkesel.
+  //     Neither was ever written: `_transport.js` has one branch, and any other
+  //     value fell straight through to `unsupported_sms_provider`. A school
+  //     that picked one saved happily and then never sent a message, which is
+  //     the worst kind of broken — it looks configured.
+  //
+  //     Anyone on one of those two has non-working SMS today, so moving them to
+  //     Arkesel takes nothing away. They still have to put in an Arkesel key
+  //     before anything sends; without one the transport simulates and logs,
+  //     which is the same place they are now, only legible.
+  safe(() => {
+    db.prepare(`
+      UPDATE settings SET value = 'arkesel'
+      WHERE key = 'sms_provider' AND value IS NOT 'arkesel'
+    `).run();
   });
 }
 

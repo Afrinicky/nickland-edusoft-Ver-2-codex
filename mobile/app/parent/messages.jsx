@@ -70,7 +70,7 @@ export default function Messages() {
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ fontWeight: '700', flex: 1 }}>{t.subject || (t.student_name ? `Re: ${t.student_name}` : 'Conversation')}</Text>
                   {t.parent_unread > 0 && (
-                    <View style={{ backgroundColor: colors.accent, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 }}>
+                    <View style={{ backgroundColor: colors.accent, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 1 }}>
                       <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>{t.parent_unread}</Text>
                     </View>
                   )}

@@ -40,6 +40,38 @@ const portal = flag('--portal') || process.env.EXPO_PUBLIC_PORTAL_URL || '';
 const school = flag('--school') || process.env.EXPO_PUBLIC_SCHOOL_ID || '';
 const onlyBuild = argv.includes('--only-build');
 
+// A Vercel build has to know where its API is, and there are exactly two
+// answers: a separate origin baked in as EXPO_PUBLIC_PORTAL_URL, or the same
+// origin the page is served from, declared with EXPO_PUBLIC_SAME_ORIGIN_API.
+//
+// The failure this guards against is silent and expensive: a deploy with
+// neither set builds green, uploads, and produces an app that cannot reach any
+// API at all. `discoverConnection()` probes its own origin, finds nothing,
+// falls back to a DEFAULT_PORTAL_URL that is the empty string, and every
+// parent and teacher sees the Connect screen. Nothing says why.
+//
+// Only Vercel is held to this, and the condition is `VERCEL` alone. It was
+// briefly `--only-build` as well, which broke CI: that flag means "do not copy
+// the result into the server directories", which is exactly what the Actions
+// job wants because it uploads the artefact instead. It says nothing about
+// where the API is. A build with no portal address is a perfectly good build —
+// it is the copy the desktop host serves over the school Wi-Fi, which answers
+// for itself — and it is what CI produces.
+const sameOrigin = process.env.EXPO_PUBLIC_SAME_ORIGIN_API === '1';
+if (process.env.VERCEL && !portal && !sameOrigin) {
+  console.error(
+    '\n✖ This build has no API address.\n\n' +
+    '  Set one of these before building:\n' +
+    '    EXPO_PUBLIC_PORTAL_URL=https://your-api.example.com\n' +
+    '        the API is on its own origin (Render, Fly, a separate service)\n' +
+    '    EXPO_PUBLIC_SAME_ORIGIN_API=1\n' +
+    '        the API is served from this same deployment under /api/v1\n\n' +
+    '  On Vercel these go in Project → Settings → Environment Variables.\n' +
+    '  See DEPLOY.md.\n'
+  );
+  process.exit(1);
+}
+
 const TARGETS = [
   path.join(repo, 'resources', 'webapp'),
   path.join(repo, 'cloud', 'webapp'),

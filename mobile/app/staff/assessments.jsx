@@ -271,6 +271,7 @@ function AssessmentsScreen() {
         <Select
           label="What kind of assessment" value={column.assessmentType}
           onChange={v => setColumn(c => ({ ...c, assessmentType: v }))}
+          icon="note" title="Kind of assessment" placeholder="Choose a kind"
           options={TYPES.map(t => ({ value: t, label: t }))}
         />
         <Field
