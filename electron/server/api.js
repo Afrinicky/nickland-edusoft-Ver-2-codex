@@ -946,7 +946,7 @@ function createApiServer(db, opts = {}) {
     }
     const scope = scopeOf(ctx);
     const visible = scopeLib.visibleClassIds(db, scope);
-    let classes = db.prepare('SELECT id, name, short_code FROM class_groups ORDER BY level_order, name').all();
+    let classes = db.prepare('SELECT id, name, short_code, level_category FROM class_groups ORDER BY level_order, name').all();
     // A teacher is not offered Basic 6 and then told access denied on choosing
     // it. `null` means unrestricted — a head teacher sees the whole school.
     if (visible) classes = classes.filter(c => visible.has(Number(c.id)));

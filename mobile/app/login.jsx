@@ -287,7 +287,7 @@ export default function Login() {
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
                 {['Register', 'Class work', 'Report cards', 'Lesson notes', 'Homework', 'Canteen', 'Bills', 'Notices'].map(t => (
                   <View key={t} style={{
-                    paddingHorizontal: 11, paddingVertical: 6, borderRadius: radius.pill,
+                    paddingHorizontal: 11, paddingVertical: 6, borderRadius: radius.xs,
                     backgroundColor: 'rgba(255,255,255,0.09)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
                   }}>
                     <Text style={{ color: 'rgba(255,255,255,0.86)', fontSize: 12, fontWeight: '700' }}>{t}</Text>

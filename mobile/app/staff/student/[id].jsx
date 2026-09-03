@@ -300,11 +300,12 @@ function StudentScreen() {
         <Select
           label="What kind of entry" value={entry.eventType}
           onChange={v => setEntry(e => ({ ...e, eventType: v }))}
+          icon="note" title="Kind of entry" placeholder="Choose a kind"
           options={[
-            { value: 'achievement', label: 'Commendation' },
-            { value: 'misconduct', label: 'Incident' },
-            { value: 'note', label: 'Note' },
-            { value: 'health', label: 'Health' },
+            { value: 'achievement', label: 'Commendation', icon: 'award', note: 'Something done well' },
+            { value: 'misconduct', label: 'Incident', icon: 'alert', note: 'Something that went wrong' },
+            { value: 'note', label: 'Note', icon: 'note', note: 'For the record' },
+            { value: 'health', label: 'Health', icon: 'shield', note: 'Something the school should watch' },
           ]}
         />
         <Field

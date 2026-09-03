@@ -26,13 +26,13 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  View, Text as RNText, TextInput, TouchableOpacity, ActivityIndicator,
-  StyleSheet, ScrollView, Platform, Modal as RNModal, Pressable, Image, Animated,
+  View, Text as RNText, TextInput, TouchableOpacity,
+  StyleSheet, ScrollView, Platform, Modal as RNModal, Pressable, Image, Animated, Easing,
 } from 'react-native';
 import { colors, palette, gradients, type, fontFamily, spacing, radius, shadow, motion, z } from './theme';
 import { useLayout, pageWidth } from './responsive';
 import { Icon } from './icons';
-import { Appear, AppearList, Press, useEased, useReducedMotion } from './motion';
+import { Appear, AppearList, Press, useEased, useReducedMotion, EASE_OUT } from './motion';
 
 // ── gradients without a native dependency ───────────────────────────────────
 // The browser gets a real CSS gradient. The phone gets the base colour with a
@@ -261,7 +261,7 @@ export function Button({
         ]}
       >
         {busy
-          ? <ActivityIndicator size="small" color={t.fg} />
+          ? <Spinner size={dims.icon} color={t.fg} track={variant === 'primary' ? 'rgba(255,255,255,0.32)' : colors.border} />
           : (icon ? <Icon name={icon} size={dims.icon} color={t.fg} /> : null)}
         <RNText numberOfLines={1} style={{ ...type.body, color: t.fg, fontWeight: '700', fontSize: dims.fs, letterSpacing: -0.1 }}>
           {title}
@@ -360,50 +360,361 @@ export function TextArea(props) {
 }
 
 /**
- * A choice, as a row of pills. Below four options it lays out flat; above it
- * wraps. A native picker was rejected on purpose: on Android it is a modal
- * with a different visual language, and a teacher choosing a class fifty times
- * a day should not be opening a dialog to do it.
+ * A choice, as a field that opens a panel.
+ *
+ * This used to be a wall of pills. It read acceptably with four options and
+ * badly with eleven: the form lost its shape, every class in the school shouted
+ * at the same volume, and on a phone the "Class" and "Subject" pickers together
+ * pushed the actual work off the bottom of the screen.
+ *
+ * So a Select is now one closed row that states the current answer, and a panel
+ * that opens over the page to change it. The panel is a bottom sheet on a phone
+ * — the thumb is at the bottom of the phone, not the top — and a popover
+ * anchored under the field on a tablet or a desktop, where there is a pointer
+ * and the field has a fixed position on screen worth pointing back at.
+ *
+ * Inside the panel each option is a row, not a pill: a leading marker, the name
+ * at reading weight, whatever qualifies it underneath in muted text, and a tick
+ * on the one in force. Rows can be searched once there are more than eight of
+ * them, and grouped when the options come with a `group`.
+ *
+ * Props are unchanged from the pill version, so every existing call site keeps
+ * working; `columns` is accepted and ignored.
  */
-export function Select({ label, value, options, onChange, hint, empty = 'Nothing to choose from.', columns }) {
+export function Select({
+  label, value, options, onChange, hint, error,
+  empty = 'Nothing to choose from.',
+  placeholder = 'Choose…',
+  loading, loadingLabel = 'Loading…',
+  title, icon, groups, searchable, disabled,
+  columns, // accepted for compatibility with the pill version; no longer used
+}) {
   const list = options || [];
+  const layout = useLayout();
+  const reduced = useReducedMotion();
+  const triggerRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState(null);
+  const [query, setQuery] = useState('');
+  const [group, setGroup] = useState(null);
+  const t = useRef(new Animated.Value(0)).current;
+
+  const selected = useMemo(
+    () => list.find(o => String(o.value) === String(value)) || null,
+    [list, value],
+  );
+
+  const groupList = useMemo(() => {
+    if (groups && groups.length) return groups;
+    const seen = [];
+    for (const o of list) {
+      if (o.group && !seen.some(g => g.value === o.group)) seen.push({ value: o.group, label: o.group });
+    }
+    return seen.length > 1 ? seen : [];
+  }, [groups, list]);
+
+  const showSearch = searchable != null ? searchable : list.length > 8;
+  const showGroups = groupList.length > 1 && list.length > 6;
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return list.filter(o => {
+      if (group && o.group !== group) return false;
+      if (!q) return true;
+      return `${o.label || ''} ${o.note || ''}`.toLowerCase().includes(q);
+    });
+  }, [list, query, group]);
+
+  const close = useCallback(() => setOpen(false), []);
+
+  const openPanel = useCallback(() => {
+    if (disabled || list.length === 0) return;
+    setQuery('');
+    const node = triggerRef.current;
+    if (node && node.measureInWindow) {
+      node.measureInWindow((x, y, width, height) => {
+        setAnchor({ x, y, width, height });
+        setOpen(true);
+      });
+    } else {
+      setAnchor(null);
+      setOpen(true);
+    }
+  }, [disabled, list.length]);
+
+  React.useEffect(() => {
+    if (!open) return undefined;
+    t.setValue(reduced ? 1 : 0);
+    const a = Animated.timing(t, {
+      toValue: 1, duration: reduced ? 0 : motion.fast,
+      easing: EASE_OUT, useNativeDriver: Platform.OS !== 'web',
+    });
+    a.start();
+    return () => a.stop();
+  }, [open, t, reduced]);
+
+  // Escape closes it in a browser, as every other dropdown on the machine does.
+  React.useEffect(() => {
+    if (!open || Platform.OS !== 'web' || typeof document === 'undefined') return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [open]);
+
+  const choose = useCallback((o) => {
+    setOpen(false);
+    if (onChange) onChange(o.value);
+  }, [onChange]);
+
+  const emptied = list.length === 0;
+
   return (
     <View style={{ marginBottom: spacing.md }}>
       {label ? (
         <RNText style={[type.small, { color: colors.textSoft, fontWeight: '600', marginBottom: 7 }]}>{label}</RNText>
       ) : null}
-      {list.length === 0 ? <Muted>{empty}</Muted> : (
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>
-          {list.map(o => {
-            const on = String(o.value) === String(value);
+
+      {loading ? (
+        // The second half of a cascade, waiting on the first. The field keeps
+        // its place in the form and says what it is doing, rather than being
+        // absent and then shoving the rest of the screen down when it arrives.
+        <View style={[styles.selectTrigger, styles.selectTriggerOff]}>
+          <Spinner size={18} />
+          <RNText numberOfLines={1} style={{ ...type.body, color: colors.muted, flex: 1 }}>{loadingLabel}</RNText>
+        </View>
+      ) : emptied ? (
+        <View style={[styles.selectTrigger, styles.selectTriggerOff]}>
+          <RNText numberOfLines={2} style={{ ...type.small, color: colors.muted, flex: 1 }}>{empty}</RNText>
+        </View>
+      ) : (
+        <View ref={triggerRef} collapsable={false}>
+          <Press onPress={openPanel} disabled={disabled}
+            accessibilityRole="button"
+            accessibilityLabel={`${label || title || 'Choose'}: ${selected ? selected.label : placeholder}`}
+            accessibilityState={{ expanded: open, disabled: !!disabled }}>
+            <View style={[
+              styles.selectTrigger,
+              open && styles.selectTriggerOpen,
+              disabled && styles.selectTriggerOff,
+            ]}>
+              {icon ? (
+                <View style={styles.selectIcon}>
+                  <Icon name={icon} size={16} color={colors.primary} />
+                </View>
+              ) : null}
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <RNText numberOfLines={1} style={{
+                  ...type.body, fontWeight: '700',
+                  color: selected ? colors.text : colors.muted,
+                }}>{selected ? selected.label : placeholder}</RNText>
+                {selected && selected.note ? (
+                  <RNText numberOfLines={1} style={{ ...type.small, color: colors.muted, marginTop: 1 }}>
+                    {selected.note}
+                  </RNText>
+                ) : null}
+              </View>
+              <View style={[styles.selectCaret, open && { backgroundColor: colors.primarySoft }]}>
+                <Icon name="chevron" size={14} color={open ? colors.primary : colors.textSoft}
+                  style={{ transform: [{ rotate: open ? '270deg' : '90deg' }] }} />
+              </View>
+            </View>
+          </Press>
+        </View>
+      )}
+
+      {error
+        ? <RNText style={[type.small, { color: colors.danger, marginTop: 5 }]}>{error}</RNText>
+        : hint ? <Muted style={{ marginTop: 6 }}>{hint}</Muted> : null}
+
+      {open ? (
+        <SelectPanel
+          t={t} layout={layout} anchor={anchor} onClose={close}
+          title={title || label || 'Choose'}
+          showSearch={showSearch} query={query} onQuery={setQuery}
+          groups={showGroups ? groupList : null} group={group} onGroup={setGroup}
+          options={shown} value={value} onChoose={choose}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The panel itself. Kept separate so the closed field costs nothing until it
+ * is opened, and so the two placements — sheet and popover — are one piece of
+ * markup with two frames around it rather than two components drifting apart.
+ */
+function SelectPanel({
+  t, layout, anchor, onClose, title,
+  showSearch, query, onQuery, groups, group, onGroup,
+  options, value, onChoose,
+}) {
+  const phone = layout.isPhone || !anchor;
+
+  // Where the popover sits. Under the field if it fits, above it if it does
+  // not, and never past the edge of the window on either side.
+  const frame = useMemo(() => {
+    if (phone) return null;
+    const gap = 8;
+    const margin = spacing.md;
+    // Wide enough to read a class name and its qualifier, and no wider. A
+    // panel that inherits the width of a full-width form field is a banner,
+    // not a menu: the eye has to travel the whole window to reach the tick.
+    const width = Math.min(
+      Math.max(anchor.width, 300), 400,
+      Math.max(260, layout.width - margin * 2),
+    );
+    const left = Math.min(
+      Math.max(margin, anchor.x),
+      Math.max(margin, layout.width - width - margin),
+    );
+    const below = layout.height - (anchor.y + anchor.height) - gap - margin;
+    const above = anchor.y - gap - margin;
+    const flip = below < 240 && above > below;
+    return {
+      left, width,
+      top: flip ? undefined : anchor.y + anchor.height + gap,
+      bottom: flip ? layout.height - anchor.y + gap : undefined,
+      maxHeight: Math.max(200, Math.min(420, flip ? above : below)),
+    };
+  }, [phone, anchor, layout.width, layout.height]);
+
+  const rise = phone ? 32 : 8;
+  const body = (
+    <>
+      <View style={styles.selectHead}>
+        <Heading style={{ flex: 1 }} numberOfLines={1}>{title}</Heading>
+        <IconButton name="close" size={32} tone="plain" color={colors.muted} onPress={onClose} label="Close" />
+      </View>
+
+      {showSearch ? (
+        <View style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.sm }}>
+          <SearchField value={query} onChangeText={onQuery} placeholder="Type to narrow the list…"
+            onClear={() => onQuery('')} />
+        </View>
+      ) : null}
+
+      {groups ? (
+        // The strip wraps rather than scrolling sideways. A school has four or
+        // five levels, not forty, and a row that runs off the edge of a 400px
+        // panel reads as clipped even when it scrolls perfectly well.
+        <View style={{
+          flexDirection: 'row', flexWrap: 'wrap', gap: 6,
+          paddingHorizontal: spacing.md, paddingBottom: spacing.sm,
+        }}>
+          {[{ value: null, label: 'All' }, ...groups].map(g => {
+            const on = (g.value || null) === (group || null);
             return (
-              <Press
-                key={String(o.value)}
-                onPress={() => onChange(o.value)}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: on }}
-                style={columns ? { flexBasis: `${Math.floor(100 / columns) - 2}%`, flexGrow: 1 } : null}
-              >
-                <View style={[styles.choice, on && styles.choiceOn]}>
-                  <RNText numberOfLines={1} style={{
+              <Press key={String(g.value)} onPress={() => onGroup(g.value || null)}
+                accessibilityRole="tab" accessibilityState={{ selected: on }}>
+                <View style={[styles.selectTab, on && styles.selectTabOn]}>
+                  <RNText style={{
                     ...type.small, fontWeight: '700',
                     color: on ? '#fff' : colors.textSoft,
-                  }}>{o.label}</RNText>
-                  {o.note ? (
-                    <RNText numberOfLines={1} style={{
-                      ...type.small, fontSize: 11,
-                      color: on ? 'rgba(255,255,255,0.78)' : colors.muted,
-                    }}>{o.note}</RNText>
-                  ) : null}
+                  }}>{g.label}</RNText>
                 </View>
               </Press>
             );
           })}
         </View>
-      )}
-      {hint ? <Muted style={{ marginTop: 6 }}>{hint}</Muted> : null}
-    </View>
+      ) : null}
+
+      <ScrollView
+        style={{ flexGrow: 0, flexShrink: 1 }}
+        contentContainerStyle={{ paddingHorizontal: spacing.sm, paddingBottom: spacing.sm }}
+        keyboardShouldPersistTaps="handled">
+        {options.length === 0 ? (
+          <View style={{ padding: spacing.lg, alignItems: 'center' }}>
+            <Muted>Nothing here matches that.</Muted>
+          </View>
+        ) : options.map((o, i) => {
+          const on = String(o.value) === String(value);
+          return (
+            <Press key={`${String(o.value)}-${i}`} onPress={() => onChoose(o)}
+              accessibilityRole="radio" accessibilityState={{ selected: on }}>
+              <View style={[styles.optionRow, on && styles.optionRowOn]}>
+                <View style={[styles.optionMark, on && styles.optionMarkOn]}>
+                  {o.icon
+                    ? <Icon name={o.icon} size={16} color={on ? '#fff' : colors.primary} />
+                    : (
+                      <RNText numberOfLines={1} style={{
+                        ...type.small, fontWeight: '800', fontSize: 12,
+                        color: on ? '#fff' : colors.primary,
+                      }}>{o.mark || initialsOf(o.label)}</RNText>
+                    )}
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <RNText numberOfLines={1} style={{
+                    ...type.body, fontWeight: on ? '700' : '600', color: colors.text,
+                  }}>{o.label}</RNText>
+                  {o.note ? (
+                    <RNText numberOfLines={1} style={{ ...type.small, color: colors.muted, marginTop: 1 }}>
+                      {o.note}
+                    </RNText>
+                  ) : null}
+                </View>
+                {on ? <Icon name="tick" size={18} color={colors.primary} /> : null}
+              </View>
+            </Press>
+          );
+        })}
+      </ScrollView>
+    </>
   );
+
+  return (
+    <RNModal transparent animationType="none" visible onRequestClose={onClose}>
+      <Animated.View style={[StyleSheet.absoluteFill, {
+        backgroundColor: phone ? 'rgba(14,11,36,0.42)' : 'rgba(14,11,36,0.06)', opacity: t,
+      }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+      </Animated.View>
+      <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+        <Animated.View
+          style={[
+            styles.selectPanel, shadow.floating,
+            {
+              opacity: t,
+              transform: [
+                { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [rise, 0] }) },
+                { scale: phone ? 1 : t.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }) },
+              ],
+            },
+            phone
+              ? {
+                position: 'absolute', left: 0, right: 0, bottom: 0,
+                borderBottomLeftRadius: 0, borderBottomRightRadius: 0, maxHeight: '76%',
+              }
+              : { position: 'absolute', ...frame },
+          ]}>
+          {phone ? <View style={styles.grabber} /> : null}
+          {body}
+        </Animated.View>
+      </View>
+    </RNModal>
+  );
+}
+
+// The fallback marker on an option row, used when the option carries no `mark`
+// of its own. Word initials, plus a trailing number when the name ends in one:
+// "Basic 4" → B4, "Nursery 1" → N1, "English Language" → EL, "Cash" → CA.
+//
+// It reads the FIRST letter of each word. Reading whatever letter happened to
+// sit before the digit is how "Basic 1" once came out as "C1".
+function initialsOf(label) {
+  const s = String(label || '').trim();
+  if (!s) return '—';
+  const words = s.split(/\s+/).filter(Boolean);
+  const tail = words.length > 1 && /^\d+$/.test(words[words.length - 1])
+    ? words.pop()
+    : null;
+  const letters = words
+    .map(w => (w.match(/[A-Za-z0-9]/) || [''])[0])
+    .join('')
+    .toUpperCase();
+  if (tail) return `${letters.slice(0, 2)}${tail}`.slice(0, 3);
+  if (letters.length > 1) return letters.slice(0, 2);
+  return s.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '—';
 }
 
 export function SearchField({ value, onChangeText, placeholder = 'Search…', onClear }) {
@@ -982,12 +1293,96 @@ export function Crest({ logo, size = 40, tone = 'chrome', rounded = true }) {
 }
 
 // ── states ──────────────────────────────────────────────────────────────────
-export function Loading({ label }) {
+/**
+ * The spinner. A ring in the hairline colour with one arc in violet, turning
+ * once every three-quarters of a second — fast enough to read as working,
+ * slow enough not to buzz.
+ *
+ * It is drawn from a border rather than an SVG or a platform indicator, so it
+ * is the same object on the phone and in the browser and costs nothing to
+ * render. The platform `ActivityIndicator` was the previous answer and it is
+ * grey, differently shaped on each OS, and belongs to no design system.
+ *
+ * Under `prefers-reduced-motion` it stops turning and shows the ring at rest;
+ * the label beside it is doing the talking by then anyway.
+ */
+export function Spinner({ size = 22, color = colors.primary, track = colors.primaryLine, style }) {
+  const reduced = useReducedMotion();
+  const spin = useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    if (reduced) return undefined;
+    spin.setValue(0);
+    const loop = Animated.loop(Animated.timing(spin, {
+      toValue: 1, duration: 760, easing: Easing.linear, useNativeDriver: Platform.OS !== 'web',
+    }));
+    loop.start();
+    return () => loop.stop();
+  }, [spin, reduced]);
+
+  const bw = Math.max(2, Math.round(size * 0.115));
   return (
-    <View style={styles.center}>
-      <ActivityIndicator color={colors.primary} size="large" />
-      {label ? <Muted style={{ marginTop: spacing.md }}>{label}</Muted> : null}
+    <Animated.View
+      accessibilityRole="progressbar"
+      style={[{
+        width: size, height: size, borderRadius: size / 2,
+        borderWidth: bw, borderColor: track, borderTopColor: color, borderRightColor: color,
+        transform: reduced ? undefined : [{
+          rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }),
+        }],
+      }, style]}
+    />
+  );
+}
+
+/**
+ * Three dots that rise in sequence. Used where a spinner would be too loud —
+ * beside a line of text, inside a row that is refreshing itself in place.
+ */
+export function LoadingDots({ size = 6, color = colors.primary, style }) {
+  const reduced = useReducedMotion();
+  const dots = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
+  React.useEffect(() => {
+    if (reduced) return undefined;
+    const runs = dots.map((d, i) => Animated.loop(Animated.sequence([
+      Animated.delay(i * 140),
+      Animated.timing(d, { toValue: 1, duration: 320, easing: EASE_OUT, useNativeDriver: Platform.OS !== 'web' }),
+      Animated.timing(d, { toValue: 0, duration: 320, easing: EASE_OUT, useNativeDriver: Platform.OS !== 'web' }),
+      Animated.delay((2 - i) * 140),
+    ])));
+    runs.forEach(r => r.start());
+    return () => runs.forEach(r => r.stop());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reduced]);
+
+  return (
+    <View accessibilityRole="progressbar" accessibilityLabel="Loading"
+      style={[{ flexDirection: 'row', alignItems: 'center', gap: size * 0.7 }, style]}>
+      {dots.map((d, i) => (
+        <Animated.View key={i} style={{
+          width: size, height: size, borderRadius: size / 2, backgroundColor: color,
+          opacity: reduced ? 0.5 : d.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }),
+          transform: reduced ? undefined : [{
+            translateY: d.interpolate({ inputRange: [0, 1], outputRange: [0, -size * 0.7] }),
+          }],
+        }} />
+      ))}
     </View>
+  );
+}
+
+/**
+ * The whole-screen wait. It fades in over 180ms rather than appearing at once,
+ * so a request that comes back in 80ms — which on the school's own Wi-Fi most
+ * of them do — never flashes a spinner at the reader.
+ */
+export function Loading({ label, size = 30 }) {
+  return (
+    <Appear>
+      <View style={styles.center}>
+        <Spinner size={size} />
+        {label ? <Muted style={{ marginTop: spacing.md }}>{label}</Muted> : null}
+      </View>
+    </Appear>
   );
 }
 
@@ -1003,20 +1398,31 @@ export function Skeleton({ rows = 4, height = 56 }) {
   React.useEffect(() => {
     if (reduced) return undefined;
     const loop = Animated.loop(Animated.sequence([
-      Animated.timing(pulse, { toValue: 1, duration: 720, useNativeDriver: Platform.OS !== 'web' }),
-      Animated.timing(pulse, { toValue: 0, duration: 720, useNativeDriver: Platform.OS !== 'web' }),
+      Animated.timing(pulse, { toValue: 1, duration: 720, easing: EASE_OUT, useNativeDriver: Platform.OS !== 'web' }),
+      Animated.timing(pulse, { toValue: 0, duration: 720, easing: EASE_OUT, useNativeDriver: Platform.OS !== 'web' }),
     ]));
     loop.start();
     return () => loop.stop();
   }, [pulse, reduced]);
-  const opacity = reduced ? 1 : pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] });
+
+  // Each row breathes a beat behind the one above it. One block blinking reads
+  // as a broken screen; a run of rows offset by a fraction reads as a list on
+  // its way. The offset is capped so a twenty-row skeleton does not end up
+  // with a row that is out of phase with every other.
   return (
-    <View style={{ gap: 10 }} accessibilityLabel="Loading">
-      {Array.from({ length: rows }).map((_, i) => (
-        <Animated.View key={i} style={{
-          height, borderRadius: radius.sm, backgroundColor: colors.borderSoft, opacity,
-        }} />
-      ))}
+    <View style={{ gap: 10 }} accessibilityRole="progressbar" accessibilityLabel="Loading">
+      {Array.from({ length: rows }).map((_, i) => {
+        const phase = (i % 4) * 0.14;
+        const opacity = reduced ? 1 : pulse.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0.48 + phase, 0.94 + phase * 0.06],
+        });
+        return (
+          <Animated.View key={i} style={{
+            height, borderRadius: radius.sm, backgroundColor: colors.borderSoft, opacity,
+          }} />
+        );
+      })}
     </View>
   );
 }
@@ -1190,7 +1596,7 @@ const styles = StyleSheet.create({
   btn: { alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, minHeight: 40 },
   fabWrap: { position: 'absolute', right: spacing.lg, bottom: spacing.lg + 6 },
   fab: {
-    backgroundColor: colors.primary, borderRadius: radius.pill,
+    backgroundColor: colors.primary, borderRadius: radius.md,
     paddingVertical: 15, paddingHorizontal: 19,
     flexDirection: 'row', alignItems: 'center', gap: 8,
   },
@@ -1212,14 +1618,50 @@ const styles = StyleSheet.create({
   search: {
     flexDirection: 'row', alignItems: 'center', gap: 9,
     backgroundColor: colors.surfaceAlt, borderWidth: 1.5, borderColor: colors.border,
-    borderRadius: radius.pill, paddingHorizontal: 15, minHeight: 46,
+    borderRadius: radius.sm, paddingHorizontal: 15, minHeight: 46,
   },
-  choice: {
-    paddingVertical: 9, paddingHorizontal: 15, borderRadius: radius.pill,
-    backgroundColor: colors.surfaceAlt, borderWidth: 1.5, borderColor: colors.border,
-    alignItems: 'center', minHeight: 40, justifyContent: 'center',
+  // ── the dropdown: a closed field, and the panel it opens ──────────────────
+  selectTrigger: {
+    flexDirection: 'row', alignItems: 'center', gap: 11,
+    minHeight: 52, paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: radius.sm, backgroundColor: colors.card,
+    borderWidth: 1.5, borderColor: colors.border,
   },
-  choiceOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  selectTriggerOpen: { borderColor: colors.primary, backgroundColor: colors.surfaceAlt },
+  selectTriggerOff: { backgroundColor: colors.surfaceAlt, opacity: 0.75 },
+  selectIcon: {
+    width: 32, height: 32, borderRadius: 10, backgroundColor: colors.primarySoft,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  selectCaret: {
+    width: 26, height: 26, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  selectPanel: {
+    backgroundColor: colors.card, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
+  },
+  selectHead: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    paddingLeft: spacing.lg, paddingRight: spacing.sm,
+    paddingTop: spacing.md, paddingBottom: spacing.sm,
+  },
+  selectTab: {
+    paddingVertical: 7, paddingHorizontal: 14, borderRadius: radius.control,
+    backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border,
+  },
+  selectTabOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  optionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    minHeight: 54, paddingVertical: 8, paddingHorizontal: 10,
+    borderRadius: radius.sm,
+  },
+  optionRowOn: { backgroundColor: colors.primarySoft },
+  optionMark: {
+    width: 36, height: 36, borderRadius: 12, backgroundColor: colors.primarySoft,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  optionMarkOn: { backgroundColor: colors.primary },
 
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 10 },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 11, minHeight: 56 },
@@ -1248,30 +1690,30 @@ const styles = StyleSheet.create({
 
   badge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 9, paddingVertical: 4, borderRadius: radius.pill, alignSelf: 'flex-start',
+    paddingHorizontal: 9, paddingVertical: 4, borderRadius: radius.xs, alignSelf: 'flex-start',
   },
 
   segment: {
-    flexDirection: 'row', backgroundColor: colors.surfaceAlt, borderRadius: radius.pill,
+    flexDirection: 'row', backgroundColor: colors.surfaceAlt, borderRadius: radius.sm + 2,
     padding: 4, borderWidth: 1, borderColor: colors.border,
   },
   segmentThumb: {
     position: 'absolute', top: 4, bottom: 4, left: 4,
-    borderRadius: radius.pill, backgroundColor: colors.card,
+    borderRadius: radius.control, backgroundColor: colors.card,
   },
   segmentItem: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 6, paddingVertical: 9, borderRadius: radius.pill, minHeight: 38,
+    gap: 6, paddingVertical: 9, borderRadius: radius.control, minHeight: 38,
   },
 
   tab: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 10, paddingHorizontal: 15, borderRadius: radius.pill,
+    paddingVertical: 10, paddingHorizontal: 15, borderRadius: radius.control,
     backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border, minHeight: 40,
   },
   tabOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   tabCount: {
-    minWidth: 19, paddingHorizontal: 5, paddingVertical: 1, borderRadius: radius.pill,
+    minWidth: 19, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6,
     backgroundColor: colors.primarySoft, alignItems: 'center',
   },
 

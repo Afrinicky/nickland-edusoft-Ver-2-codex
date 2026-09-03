@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { api } from './api';
-import { Select, Muted, Button, Field, InfoNote } from './ui';
+import { Select, Button, Field, InfoNote } from './ui';
 import { spacing } from './theme';
 
 /** The classes this teacher may open, loaded once per screen. */
@@ -27,11 +27,22 @@ export function useClasses(token) {
   return { classes, error };
 }
 
-/** The subjects this teacher may touch in `classId`. */
+/**
+ * The subjects this teacher may touch in `classId`.
+ *
+ * Three states, and the difference between the last two matters to the reader:
+ *   undefined  no class has been chosen yet — nothing is being fetched
+ *   null       a class has been chosen and the list is on its way
+ *   array      the answer, possibly empty
+ *
+ * Collapsing "waiting for you" and "waiting for the server" into one `null`
+ * is why the subject field used to say "Choose a class first" for a second
+ * after a class had, in fact, been chosen.
+ */
 export function useSubjects(token, classId) {
-  const [subjects, setSubjects] = useState(null);
+  const [subjects, setSubjects] = useState(undefined);
   useEffect(() => {
-    if (!classId) { setSubjects(null); return undefined; }
+    if (!classId) { setSubjects(undefined); return undefined; }
     let live = true;
     setSubjects(null);
     api.scoreSubjects(token, classId)
@@ -42,8 +53,49 @@ export function useSubjects(token, classId) {
   return subjects;
 }
 
-export function ClassPicker({ classes, value, onChange, label = 'Class', hint }) {
-  if (classes === null) return <Muted>Loading your classes…</Muted>;
+// A head teacher sees every class in the school; a class teacher sees one or
+// two. Where the list is long enough to need it, the panel groups it the way
+// the school itself talks about the school.
+const LEVEL_ORDER = ['Creche', 'Nursery', 'Kindergarten', 'Primary', 'JHS'];
+
+function levelRank(category) {
+  const i = LEVEL_ORDER.indexOf(category);
+  return i < 0 ? 99 : i;
+}
+
+function levelGroups(classes) {
+  const seen = [];
+  for (const c of classes) {
+    const g = c.level_category;
+    if (g && !seen.includes(g)) seen.push(g);
+  }
+  seen.sort((a, b) => levelRank(a) - levelRank(b));
+  return seen.map(g => ({ value: g, label: g }));
+}
+
+/**
+ * Nursery before Kindergarten before Primary before JHS, and within a level
+ * whatever order the server sent.
+ *
+ * The server sorts by `level_order`, which is a per-school number an office
+ * can set to anything; a school that numbered Nursery 1 and Basic 1 both as 1
+ * gets the two interleaved. The reader's mental order is the school's own
+ * ladder, so the picker imposes it.
+ */
+function inSchoolOrder(classes) {
+  return classes
+    .map((c, i) => [c, i])
+    .sort((a, b) => (levelRank(a[0].level_category) - levelRank(b[0].level_category)) || (a[1] - b[1]))
+    .map(([c]) => c);
+}
+
+export function ClassPicker({ classes, value, onChange, label = 'Class', hint, placeholder = 'Which class?' }) {
+  // A field that says it is loading, rather than a line of text that is then
+  // replaced by a field — the form keeps its height and nothing jumps.
+  if (classes === null) {
+    return <Select label={label} value={null} options={[]} onChange={onChange}
+      icon="users" loading loadingLabel="Loading your classes…" />;
+  }
   if (classes.length === 0) {
     return (
       <InfoNote message="No classes are assigned to you yet. Ask the school office to set your teaching assignments — until then there is nothing here for you to open." />
@@ -52,21 +104,49 @@ export function ClassPicker({ classes, value, onChange, label = 'Class', hint })
   return (
     <Select
       label={label} value={value} onChange={onChange} hint={hint}
-      options={classes.map(c => ({
+      icon="users" placeholder={placeholder} title="Choose a class"
+      groups={levelGroups(classes)}
+      options={inSchoolOrder(classes).map(c => ({
         value: c.id,
         label: c.name,
+        // The school's own short code — B4, KG1, JHS2 — is what is written on
+        // the classroom door and on the register, so it is what goes in the
+        // marker rather than anything derived from the long name.
+        mark: c.short_code || undefined,
+        group: c.level_category || undefined,
         note: c.is_class_teacher ? 'Class teacher' : undefined,
       }))}
     />
   );
 }
 
-export function SubjectPicker({ subjects, value, onChange, label = 'Subject' }) {
-  if (subjects === null) return null;
+/**
+ * The second half of the cascade. It is drawn disabled — not hidden — before a
+ * class is chosen, so the shape of the form does not jump when one is, and so
+ * a teacher can see there is a second step coming before taking the first.
+ */
+export function SubjectPicker({ subjects, value, onChange, label = 'Subject', hint }) {
+  if (subjects === undefined) {
+    return (
+      <Select
+        label={label} value={null} options={[]} onChange={onChange} hint={hint}
+        icon="book" empty="Choose a class first."
+      />
+    );
+  }
+  if (subjects === null) {
+    return (
+      <Select
+        label={label} value={null} options={[]} onChange={onChange} hint={hint}
+        icon="book" loading loadingLabel="Finding your subjects…"
+      />
+    );
+  }
   return (
     <Select
-      label={label} value={value} onChange={onChange}
-      options={subjects.map(s => ({ value: s.id, label: s.name, note: s.code || undefined }))}
+      label={label} value={value} onChange={onChange} hint={hint}
+      icon="book" placeholder="Which subject?" title="Choose a subject"
+      options={subjects.map(s => ({ value: s.id, label: s.name, mark: s.code || undefined, note: s.code || undefined }))}
       empty="You do not take a subject in this class."
     />
   );

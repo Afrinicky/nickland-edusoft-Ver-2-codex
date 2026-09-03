@@ -222,9 +222,11 @@ function ResultsScreen() {
                       label="Term"
                       value={report.term?.id}
                       onChange={(v) => openReport(open, v)}
+                      icon="calendar" title="Which term" placeholder="Choose a term"
                       options={(report.terms || []).map(t => ({
                         value: t.id,
-                        label: t.average_score != null ? `${t.label} — avg ${Number(t.average_score).toFixed(1)}` : t.label,
+                        label: t.label,
+                        note: t.average_score != null ? `Average ${Number(t.average_score).toFixed(1)}` : undefined,
                       }))}
                     />
                     <Trend

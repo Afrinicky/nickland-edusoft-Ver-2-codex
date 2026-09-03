@@ -70,9 +70,11 @@ function StudentsScreen() {
         {classes && classes.length > 1 ? (
           <View style={{ marginTop: spacing.md }}>
             <Select
-              label="Class" value={classId} onChange={v => setClassId(v === classId ? null : v)}
-              options={[{ value: null, label: 'All my classes' }, ...classes.map(c => ({
-                value: c.id, label: c.name, note: c.is_class_teacher ? 'Class teacher' : undefined,
+              label="Class" value={classId} onChange={setClassId}
+              icon="users" title="Show which class" placeholder="All my classes"
+              options={[{ value: null, label: 'All my classes', icon: 'grid' }, ...classes.map(c => ({
+                value: c.id, label: c.name, group: c.level_category || undefined,
+                note: c.is_class_teacher ? 'Class teacher' : undefined,
               }))]}
             />
           </View>

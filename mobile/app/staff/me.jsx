@@ -346,6 +346,7 @@ export default function MyWork() {
         <Select
           label="Kind of leave" value={form.leaveType}
           onChange={v => setForm(f => ({ ...f, leaveType: v }))}
+          icon="calendar" title="Kind of leave" placeholder="Choose a kind"
           options={LEAVE_TYPES.map(t => ({ value: t, label: t }))}
         />
         <Field label="From" value={form.startDate} onChangeText={v => setForm(f => ({ ...f, startDate: v }))}

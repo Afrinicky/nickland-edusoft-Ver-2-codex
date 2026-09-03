@@ -29,6 +29,7 @@ import { useLayout } from '../../src/responsive';
 import { colors, palette, spacing, radius, type } from '../../src/theme';
 
 const METHODS = ['Cash', 'Mobile Money', 'Bank'];
+const METHOD_ICON = { Cash: 'cash', 'Mobile Money': 'phone', Bank: 'wallet' };
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
 function CanteenScreen() {
@@ -200,7 +201,8 @@ function QuickPay({ token, classId, cloud, canCollect, onError, onSaved, layout 
           <View style={{ flex: 1 }}>
             <Select
               label="How it was paid" value={method} onChange={setMethod}
-              options={METHODS.map(m => ({ value: m, label: m }))}
+              icon="cash" title="How it was paid" placeholder="Choose a method"
+              options={METHODS.map(m => ({ value: m, label: m, icon: METHOD_ICON[m] }))}
             />
           </View>
         </View>
@@ -471,7 +473,8 @@ function OnePupil({ token, classId, canCollect, onError, onSaved, cloud }) {
             <Select
               label="How it was paid" value={form.method}
               onChange={v => setForm(f => ({ ...f, method: v }))}
-              options={METHODS.map(m => ({ value: m, label: m }))}
+              icon="cash" title="How it was paid" placeholder="Choose a method"
+              options={METHODS.map(m => ({ value: m, label: m, icon: METHOD_ICON[m] }))}
             />
             <Field label="Note (optional)" value={form.notes} onChangeText={v => setForm(f => ({ ...f, notes: v }))}
               placeholder="Anything the office should know" autoCapitalize="sentences" />

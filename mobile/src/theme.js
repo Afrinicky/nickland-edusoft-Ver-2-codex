@@ -148,7 +148,13 @@ export const type = {
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 };
 
 // Soft, not round. A card is 20, a row inside it is 12, a button is 14.
-export const radius = { xs: 8, sm: 12, md: 16, lg: 20, xl: 28, pill: 999 };
+// `control` is the shape of anything you press that is not a card: a tab, a
+// segment, a chip in a filter strip. It matches the medium Button's 14 closely
+// enough to read as one family and is deliberately NOT a lozenge — a fully
+// rounded choice button reads as a toy next to a school's own paperwork.
+// `pill` survives for the things that genuinely are round: a progress track,
+// an avatar, the dot on a notification.
+export const radius = { xs: 8, control: 10, sm: 12, md: 16, lg: 20, xl: 28, pill: 999 };
 
 // ── elevation ───────────────────────────────────────────────────────────────
 // Three levels: resting, raised, floating. Borders do the structural work;
