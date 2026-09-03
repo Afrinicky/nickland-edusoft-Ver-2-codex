@@ -40,6 +40,35 @@ const portal = flag('--portal') || process.env.EXPO_PUBLIC_PORTAL_URL || '';
 const school = flag('--school') || process.env.EXPO_PUBLIC_SCHOOL_ID || '';
 const onlyBuild = argv.includes('--only-build');
 
+// A hosted build has to know where its API is, and there are exactly two
+// answers: a separate origin baked in as EXPO_PUBLIC_PORTAL_URL, or the same
+// origin the page is served from — a Vercel deployment that also serves
+// /api/v1, or the desktop host serving the app over the school Wi-Fi.
+//
+// The failure this guards against is silent and expensive: a Vercel deploy
+// with neither set builds green, uploads, and produces an app that cannot
+// reach any API at all. `discoverConnection()` probes its own origin, finds
+// nothing, falls back to a DEFAULT_PORTAL_URL that is empty, and every user
+// sees the Connect screen. Nothing in the build output says why.
+//
+// The desktop's own copy is exempt: it is served by the host that answers for
+// itself, and `npm run build:web` with no arguments is how it is made.
+const sameOrigin = process.env.EXPO_PUBLIC_SAME_ORIGIN_API === '1';
+const hosted = onlyBuild || process.env.VERCEL === '1';
+if (hosted && !portal && !sameOrigin) {
+  console.error(
+    '\n✖ This build has no API address.\n\n' +
+    '  Set one of these before building:\n' +
+    '    EXPO_PUBLIC_PORTAL_URL=https://your-api.example.com\n' +
+    '        the API is on its own origin (Render, Fly, a separate service)\n' +
+    '    EXPO_PUBLIC_SAME_ORIGIN_API=1\n' +
+    '        the API is served from this same deployment under /api/v1\n\n' +
+    '  On Vercel these go in Project → Settings → Environment Variables.\n' +
+    '  See DEPLOY.md.\n'
+  );
+  process.exit(1);
+}
+
 const TARGETS = [
   path.join(repo, 'resources', 'webapp'),
   path.join(repo, 'cloud', 'webapp'),
