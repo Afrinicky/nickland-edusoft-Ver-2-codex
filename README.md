@@ -96,10 +96,24 @@ npm run serve:web        # preview it at http://localhost:4748
   (Settings → Mobile App → Start server). Full features for teachers and
   parents, and it works with the school's internet down.
 - **Over the internet** the hosted service serves it on HTTPS, for teachers as
-  well as parents — a teacher can mark a register, enter scores, collect
-  canteen money and set homework **with the school's computer switched off**,
-  and the work reaches the school when it next syncs. It can be added to a
-  phone's home screen like an installed app.
+  well as parents — a teacher can mark a register, enter scores and set
+  homework **with the school's computer switched off**, and the work reaches
+  the school when it next syncs. It can be added to a phone's home screen like
+  an installed app.
+
+Teachers get the register, class work and exam marks, the broadsheet and report
+cards, lesson notes, homework, the morning **canteen collection**, class
+performance and attendance insight, a contact book for their class, and their
+own record with a printable profile. Parents get their child's marks against
+the grading scale, conduct and remarks, this term's report card and every past
+one with the trend across them, the register day by day, the bill line by line
+with arrears and payment history, the canteen, homework, timetable, notices and
+a message button to the school.
+
+**No money is taken in the app.** A parent sees the balance and every receipt;
+settling it opens the school's WhatsApp with the child, class and figures
+already written into the message, and the office confirms how to pay. Set the
+WhatsApp number and the school crest in Settings → School identity.
 
 The installer packages the web build automatically, so any desktop running the
 mobile server is already serving it. Full guide:

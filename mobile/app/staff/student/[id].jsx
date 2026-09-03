@@ -14,10 +14,16 @@ import { RequireModule } from '../../../src/guard';
 import { useScreenTitle } from '../../../src/shell';
 import { api, money } from '../../../src/api';
 import {
-  Screen, Card, Section, Title, Heading, Muted, Micro, Button, Badge, Avatar,
-  ErrorNote, InfoNote, Skeleton, EmptyState, ListRow, Grid, StatCard,
-  KeyValue, ProgressBar, Divider, Gradient, IconTile,
+  Screen, Card, Section, Title, Heading, Body, Muted, Micro, Button, Badge, Avatar,
+  ErrorNote, InfoNote, SuccessNote, Skeleton, EmptyState, ListRow, Grid, StatCard,
+  KeyValue, ProgressBar, Divider, Gradient, IconTile, Hero, HeroStat, Toolbar, Sheet, Tabs,
+  Field, TextArea, Select, DateField,
 } from '../../../src/ui';
+import { useBranding } from '../../../src/brand';
+import { PrintButton } from '../../../src/actions';
+import { studentProfileHtml, terminalReportHtml } from '../../../src/print';
+import { Bars, Meter, DayStrip, toneForScore } from '../../../src/charts';
+import { whatsappHref, telHref, open as openLink } from '../../../src/contact';
 import { useLayout } from '../../../src/responsive';
 import { colors, palette, gradients, spacing, radius, shadow, type } from '../../../src/theme';
 
@@ -26,7 +32,14 @@ function StudentScreen() {
   const { token } = useAuth();
   const router = useRouter();
   const layout = useLayout();
+  const brand = useBranding();
   const [data, setData] = useState(null);
+  const [report, setReport] = useState(null);
+  const [conduct, setConduct] = useState(null);
+  const [writing, setWriting] = useState(false);
+  const [entry, setEntry] = useState({ eventType: 'achievement', title: '', description: '', date: '' });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(null);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -34,11 +47,35 @@ function StudentScreen() {
 
   const load = useCallback(async () => {
     setError(null);
-    try { setData(await api.student(token, id)); }
-    catch (e) { setError(e.message); setData({ student: null }); }
+    try {
+      const [d, r, c] = await Promise.all([
+        api.student(token, id),
+        // The terminal report, so a teacher stopped at the gate can print the
+        // child's report card there and then rather than sending the parent to
+        // the office. It is allowed to fail on its own: a teacher with the
+        // roll but not academics still gets the record.
+        api.studentReport(token, id).then(x => x).catch(() => null),
+        // Commendations and incidents. Fails on its own — an older school
+        // desktop has no such route and the record is still worth showing.
+        api.studentEvents(token, id).then(x => x).catch(() => ({ events: [], can_write: false })),
+      ]);
+      setData(d); setReport(r); setConduct(c);
+    } catch (e) { setError(e.message); setData({ student: null }); }
   }, [token, id]);
 
   useEffect(() => { load(); }, [load]);
+
+  async function saveEntry() {
+    if (!entry.title.trim()) { setError('Give the entry a title.'); return; }
+    setSaving(true); setError(null);
+    try {
+      await api.addStudentEvent(token, id, entry);
+      setWriting(false);
+      setSaved('Recorded. The pupil\u2019s parent can see it in their app.');
+      setConduct(await api.studentEvents(token, id).catch(() => conduct));
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
+  }
 
   if (data === null) return <Screen><Card><Skeleton rows={3} height={80} /></Card><Card><Skeleton rows={5} /></Card></Screen>;
   if (!data.student) {
@@ -60,23 +97,57 @@ function StudentScreen() {
   const att = data.attendance || {};
   const rate = att.total ? Math.round(((att.present || 0) / att.total) * 100) : null;
 
+  const schoolHeader = report?.school || {
+    name: brand.school?.name, motto: brand.school?.motto, address: brand.school?.address,
+    phone: brand.contact?.phone, email: brand.contact?.email, logo: brand.logo,
+  };
+
+  const printProfile = () => studentProfileHtml({
+    student: data.profile || {
+      ...s, guardians: data.guardians,
+    },
+    school: schoolHeader,
+    term: data.term?.label,
+    fees: data.fees, canteen: data.canteen, attendance: att,
+  });
+
+  const printReport = () => terminalReportHtml({ ...(report || {}), school: schoolHeader });
+
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
       <ErrorNote message={error} />
+      <SuccessNote message={saved} />
 
-      <Gradient colors={gradients.brand} angle={130} style={[{ borderRadius: radius.lg, padding: spacing.xl }, shadow.raised]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg }}>
-          <Avatar name={s.name} size={layout.isPhone ? 54 : 64} tone="chrome" />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text numberOfLines={2} style={{ color: '#fff', fontSize: layout.isPhone ? 21 : 26, fontWeight: '800', letterSpacing: -0.5 }}>
-              {s.name}
-            </Text>
-            <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 13.5, fontWeight: '600', marginTop: 3 }}>
-              {[s.index_number, s.class_name, s.gender].filter(Boolean).join(' · ')}
-            </Text>
+      <Hero
+        crest={<Avatar name={s.name} photo={s.photo} size={layout.isPhone ? 58 : 72} tone="chrome" ring />}
+        eyebrow={data.term?.label || 'This term'}
+        title={s.name}
+        subtitle={[s.index_number, s.class_name, s.gender].filter(Boolean).join('  ·  ')}
+        right={layout.isPhone ? null : (
+          <View style={{ gap: spacing.sm }}>
+            {data.summary?.average_score != null
+              ? <HeroStat label="Average" value={Number(data.summary.average_score).toFixed(1)}
+                  note={data.summary.class_rank ? `Position ${data.summary.class_rank}` : undefined} />
+              : null}
+            {rate != null ? <HeroStat label="Attendance" value={`${rate}%`} /> : null}
           </View>
-        </View>
-      </Gradient>
+        )}
+      />
+
+      {/* Everything a teacher is asked for at the gate, in one row: the child's
+          report card and their profile sheet, both printed from here. */}
+      <Card>
+        <Toolbar>
+          <PrintButton build={printProfile} title="Print profile" />
+          {report && (report.subjects || []).length ? (
+            <PrintButton build={printReport} title="Print report card" variant="subtle" />
+          ) : null}
+          <Button
+            size="sm" variant="ghost" icon="award" title="Report & remarks" full={false}
+            onPress={() => router.push('/staff/results')}
+          />
+        </Toolbar>
+      </Card>
 
       <Grid min={150}>
         <StatCard label="Days present" value={att.present ?? '—'} tone="success" icon="check" />
@@ -98,11 +169,19 @@ function StudentScreen() {
                 title={g.name || g.relation}
                 subtitle={g.name ? g.relation : null}
                 right={g.contact ? (
-                  <Button
-                    size="sm" variant="subtle" title={g.contact} icon="phone" full={false}
-                    onPress={() => Linking.openURL(`tel:${String(g.contact).replace(/\s/g, '')}`).catch(() => {})}
-                  />
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <Button
+                      size="sm" variant="subtle" title="Call" icon="phone" full={false}
+                      onPress={() => openLink(telHref(g.contact))}
+                    />
+                    <Button
+                      size="sm" variant="outline" title="WhatsApp" icon="whatsapp" full={false}
+                      onPress={() => openLink(whatsappHref(g.contact,
+                        `Good day. This is ${s.class_name || 'the class'} teacher at ${brand.school?.name || 'school'}, about ${s.name}.`))}
+                    />
+                  </View>
                 ) : null}
+                meta={<Muted>{g.contact}</Muted>}
               />
             ))}
       </Section>
@@ -123,7 +202,15 @@ function StudentScreen() {
       </Section>
 
       {(data.subjects || []).length > 0 && (
-        <Section title="This term's marks" icon="award" subtitle={data.term?.label}>
+        <Section title="This term's marks" icon="award" subtitle={data.term?.label}
+          action={report && (report.subjects || []).length ? <PrintButton build={printReport} title="Print" /> : null}>
+          <View style={{ marginBottom: spacing.lg }}>
+            <Bars items={(data.subjects || []).map(sub => ({
+              label: sub.subject, value: sub.total_score,
+              note: [sub.class_score != null ? `CW ${sub.class_score}` : null,
+                sub.exam_score != null ? `Exam ${sub.exam_score}` : null].filter(Boolean).join(' · '),
+            }))} />
+          </View>
           {(data.subjects || []).map((sub, i) => (
             <View key={i} style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderSoft }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
@@ -150,6 +237,11 @@ function StudentScreen() {
           ) : null}
         </Section>
       )}
+
+      <ConductLog
+        conduct={conduct}
+        onAdd={() => { setSaved(null); setEntry({ eventType: 'achievement', title: '', description: '', date: '' }); setWriting(true); }}
+      />
 
       {(data.homework || []).length > 0 && (
         <Section title="Homework" icon="book">
@@ -194,28 +286,52 @@ function StudentScreen() {
       )}
 
       {(data.recent_attendance || []).length > 0 && (
-        <Section title="Recent register" icon="calendar">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-            {(data.recent_attendance || []).map((r, i) => (
-              <View key={i} style={{
-                paddingHorizontal: 9, paddingVertical: 6, borderRadius: radius.sm,
-                backgroundColor: r.status === 'absent' ? palette.red100 : r.status === 'late' ? palette.amber100 : palette.green100,
-              }}>
-                <Text style={{
-                  fontSize: 11.5, fontWeight: '700',
-                  color: r.status === 'absent' ? palette.red600 : r.status === 'late' ? palette.amber600 : palette.green600,
-                }}>
-                  {String(r.date).slice(5)}
-                </Text>
-              </View>
-            ))}
+        <Section title="Recent register" icon="calendar" subtitle="Most recent first.">
+          <View style={{ marginBottom: spacing.md }}>
+            <Meter
+              value={att.present || 0} total={att.total || 0} label="Attendance this term" goodAbove={90}
+              caption={att.total ? `${att.present || 0} present, ${att.absent || 0} absent of ${att.total} days.` : undefined}
+            />
           </View>
+          <DayStrip days={data.recent_attendance} />
         </Section>
       )}
 
       {data.stale ? (
         <InfoNote message="This is the school's record as of its last sync. It refreshes when the school's computer next connects." />
       ) : null}
+
+      <Sheet
+        visible={writing} onClose={() => setWriting(false)} title={`Record something about ${s.name}`}
+        footer={<>
+          <Button variant="outline" title="Cancel" onPress={() => setWriting(false)} full={false} />
+          <Button title={saving ? 'Saving…' : 'Save entry'} busy={saving} full={false} onPress={saveEntry} />
+        </>}
+      >
+        <Select
+          label="What kind of entry" value={entry.eventType}
+          onChange={v => setEntry(e => ({ ...e, eventType: v }))}
+          options={[
+            { value: 'achievement', label: 'Commendation' },
+            { value: 'misconduct', label: 'Incident' },
+            { value: 'note', label: 'Note' },
+            { value: 'health', label: 'Health' },
+          ]}
+        />
+        <Field
+          label="Title" value={entry.title} autoCapitalize="sentences"
+          onChangeText={v => setEntry(e => ({ ...e, title: v }))}
+          placeholder="Won the class spelling bee"
+        />
+        <TextArea
+          label="What happened" value={entry.description} numberOfLines={4} autoCapitalize="sentences"
+          onChangeText={v => setEntry(e => ({ ...e, description: v }))}
+          placeholder="Anything the parent and the next teacher should know"
+        />
+        <DateField label="Date" value={entry.date} onChange={v => setEntry(e => ({ ...e, date: v }))}
+          hint="Leave blank for today." />
+        <InfoNote message="The pupil's parent sees this in their app, so write it as you would say it to them." />
+      </Sheet>
     </Screen>
   );
 }
@@ -225,5 +341,53 @@ export default function Student() {
     <RequireModule modules={[['students', 'view']]}>
       <StudentScreen />
     </RequireModule>
+  );
+}
+
+
+// ── conduct: commendations and incidents ────────────────────────────────────
+// Both kinds in one list, in the order they happened. A log that showed only
+// the incidents would be a thing families dread opening; one that showed only
+// the commendations would be worth nothing to the next teacher.
+const CONDUCT = {
+  achievement: { label: 'Commendation', icon: 'award', tone: 'success' },
+  misconduct: { label: 'Incident', icon: 'alert', tone: 'danger' },
+  health: { label: 'Health', icon: 'shield', tone: 'info' },
+  note: { label: 'Note', icon: 'note', tone: 'primary' },
+};
+
+function ConductLog({ conduct, onAdd }) {
+  if (conduct === null) return null;
+  const events = conduct.events || [];
+  return (
+    <Section
+      title="Conduct and commendations" icon="shield"
+      subtitle="What the school has recorded. The pupil's parent sees the same list."
+      action={conduct.can_write
+        ? <Button size="sm" icon="plus" title="Add an entry" full={false} onPress={onAdd} />
+        : null}
+    >
+      {events.length === 0 ? (
+        <EmptyState
+          icon="shield" title="Nothing recorded"
+          message={conduct.can_write
+            ? 'Record a commendation or an incident and it reaches the parent straight away.'
+            : 'Only the teacher answerable for this class records conduct for its pupils.'}
+          action={conduct.can_write ? <Button title="Add an entry" icon="plus" full={false} onPress={onAdd} /> : null}
+        />
+      ) : events.map(e => {
+        const k = CONDUCT[e.event_type] || CONDUCT.note;
+        return (
+          <ListRow
+            key={e.id}
+            icon={k.icon} iconTone={k.tone}
+            title={e.title}
+            subtitle={[e.date, e.recorded_by_name].filter(Boolean).join(' · ')}
+            badge={<Badge tone={k.tone} label={k.label} />}
+            meta={e.description ? <Muted numberOfLines={3}>{e.description}</Muted> : null}
+          />
+        );
+      })}
+    </Section>
   );
 }

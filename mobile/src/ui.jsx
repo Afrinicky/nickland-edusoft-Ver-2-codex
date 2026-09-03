@@ -19,7 +19,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   View, Text as RNText, TextInput, TouchableOpacity, ActivityIndicator,
-  StyleSheet, ScrollView, Platform, Modal as RNModal, Pressable,
+  StyleSheet, ScrollView, Platform, Modal as RNModal, Pressable, Image,
 } from 'react-native';
 import { colors, palette, gradients, type, spacing, radius, shadow } from './theme';
 import { useLayout, pageWidth } from './responsive';
@@ -359,10 +359,12 @@ export function Row({ left, right, onPress, style }) {
   return onPress ? <TouchableOpacity activeOpacity={0.7} onPress={onPress}>{body}</TouchableOpacity> : body;
 }
 
-export function ListRow({ title, subtitle, meta, icon, iconTone, right, onPress, badge, style }) {
+export function ListRow({ title, subtitle, meta, icon, iconTone, right, onPress, badge, avatar, style }) {
   const body = (
     <View style={[styles.listRow, style]}>
-      {icon ? <IconTile name={icon} tone={iconTone} size={38} /> : null}
+      {/* A face beats an icon wherever there is one: a teacher scanning a roll
+          for a child recognises the photograph long before the name. */}
+      {avatar || (icon ? <IconTile name={icon} tone={iconTone} size={38} /> : null)}
       <View style={{ flex: 1, minWidth: 0 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <RNText numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text, flexShrink: 1 }}>{title}</RNText>
@@ -475,15 +477,39 @@ export function StatCard({ label, value, tone, icon, note, onPress, style }) {
 }
 
 // Lays cards out in the number of columns the window can take.
+//
+// The width is measured rather than expressed as a percentage. A percentage
+// basis of 25% for four columns plus three 12px gaps comes to more than the
+// container, so the fourth card wrapped onto its own line and every four-card
+// row in the app rendered as three-and-one. Measuring costs one extra render
+// on mount and gets it right at every window size.
 export function Grid({ children, min = 160, gap = spacing.md, columns }) {
   const layout = useLayout();
-  const cols = columns || layout.columns;
-  const basis = `${Math.floor(1000 / cols) / 10}%`;
+  const [width, setWidth] = useState(0);
+  const items = React.Children.toArray(children).filter(Boolean);
+  const wanted = columns || layout.columns;
+
+  // Never more columns than the content can bear at `min`, and never more than
+  // there are cards — three cards across four columns leaves a hole.
+  const fit = width > 0 ? Math.max(1, Math.floor((width + gap) / (min + gap))) : wanted;
+  const cols = Math.max(1, Math.min(wanted, fit, items.length || 1));
+  const basis = width > 0 ? (width - gap * (cols - 1)) / cols : undefined;
+
   return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap, marginHorizontal: 0 }}>
-      {React.Children.map(children, (child, i) => child ? (
-        <View key={i} style={{ flexGrow: 1, flexBasis: basis, minWidth: min, maxWidth: '100%' }}>{child}</View>
-      ) : null)}
+    <View
+      onLayout={e => setWidth(e.nativeEvent.layout.width)}
+      style={{ flexDirection: 'row', flexWrap: 'wrap', gap }}
+    >
+      {items.map((child, i) => (
+        <View
+          key={i}
+          style={basis
+            ? { width: basis, flexGrow: 0, flexShrink: 0 }
+            : { flexGrow: 1, flexBasis: `${Math.floor(1000 / cols) / 10}%`, minWidth: min }}
+        >
+          {child}
+        </View>
+      ))}
     </View>
   );
 }
@@ -556,17 +582,66 @@ export function SegmentedControl({ value, options, onChange, style }) {
   );
 }
 
-export function Avatar({ name, photo, size = 40, tone = 'primary' }) {
+// A face where there is one, initials where there is not.
+//
+// The `photo` prop has been on this component since the first version and was
+// never once read: every screen passed a pupil's or a teacher's picture in and
+// got two letters in a circle back. It is read now — the server sends the image
+// itself rather than a path into the school's hard disk — and a photograph that
+// fails to decode falls back to the initials rather than to an empty hole.
+export function Avatar({ name, photo, size = 40, tone = 'primary', ring, square }) {
+  const [broken, setBroken] = useState(false);
   const initials = useMemo(() => String(name || '?')
     .split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?', [name]);
   const bg = tone === 'chrome' ? 'rgba(255,255,255,0.16)' : colors.primarySoft;
   const fg = tone === 'chrome' ? '#fff' : colors.primary;
+  const radiusOf = square ? size * 0.26 : size / 2;
+  const show = photo && !broken;
   return (
     <View style={{
-      width: size, height: size, borderRadius: size / 2, backgroundColor: bg,
+      width: size, height: size, borderRadius: radiusOf, backgroundColor: bg,
       alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+      ...(ring ? {
+        borderWidth: Math.max(2, size * 0.045),
+        borderColor: tone === 'chrome' ? 'rgba(255,255,255,0.35)' : colors.card,
+      } : null),
     }}>
-      <RNText style={{ color: fg, fontWeight: '800', fontSize: size * 0.36 }}>{initials}</RNText>
+      {show ? (
+        <Image
+          source={{ uri: photo }}
+          onError={() => setBroken(true)}
+          accessibilityLabel={name ? `Photograph of ${name}` : 'Photograph'}
+          style={{ width: '100%', height: '100%' }}
+          resizeMode="cover"
+        />
+      ) : (
+        <RNText style={{ color: fg, fontWeight: '800', fontSize: size * 0.36 }}>{initials}</RNText>
+      )}
+    </View>
+  );
+}
+
+// The school's crest. Falls back to the app's own mark, so a school that has
+// never uploaded one still gets something deliberate rather than a gap.
+export function Crest({ logo, size = 40, tone = 'chrome', rounded = true }) {
+  const [broken, setBroken] = useState(false);
+  const bg = tone === 'chrome' ? 'rgba(255,255,255,0.12)' : colors.primarySoft;
+  const fg = tone === 'chrome' ? palette.gold400 : colors.primary;
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: rounded ? size * 0.3 : 0,
+      backgroundColor: logo && !broken ? (tone === 'chrome' ? 'rgba(255,255,255,0.94)' : '#fff') : bg,
+      alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+      padding: logo && !broken ? size * 0.08 : 0,
+    }}>
+      {logo && !broken ? (
+        <Image
+          source={{ uri: logo }} onError={() => setBroken(true)} accessibilityLabel="School crest"
+          style={{ width: '100%', height: '100%' }} resizeMode="contain"
+        />
+      ) : (
+        <Icon name="school" size={size * 0.55} color={fg} />
+      )}
     </View>
   );
 }
@@ -652,6 +727,124 @@ export function Sheet({ visible, onClose, title, children, footer, width = 560 }
   );
 }
 
+// ── tabs ────────────────────────────────────────────────────────────────────
+// SegmentedControl divides the width between its options, which is right for
+// two or three and unreadable at seven: a child's record now has Overview,
+// Academics, Reports, Attendance, Fees, Canteen, Homework and Timetable. This
+// scrolls instead of squeezing, and on a wide window it simply sits still
+// because everything already fits.
+export function Tabs({ value, options, onChange, style }) {
+  return (
+    <ScrollView
+      horizontal showsHorizontalScrollIndicator={false}
+      contentContainerStyle={[{ gap: 6, paddingVertical: 2 }, style]}
+    >
+      {options.map(o => {
+        const active = String(o.value) === String(value);
+        return (
+          <TouchableOpacity
+            key={String(o.value)}
+            accessibilityRole="tab" accessibilityState={{ selected: active }}
+            onPress={() => onChange(o.value)} activeOpacity={0.8}
+            style={[styles.tab, active && styles.tabOn]}
+          >
+            {o.icon ? <Icon name={o.icon} size={15} color={active ? '#fff' : colors.muted} /> : null}
+            <RNText numberOfLines={1} style={{ fontSize: 13.5, fontWeight: '700', color: active ? '#fff' : colors.textSoft }}>
+              {o.label}
+            </RNText>
+            {o.count != null && o.count !== 0 ? (
+              <View style={[styles.tabCount, active && { backgroundColor: 'rgba(255,255,255,0.24)' }]}>
+                <RNText style={{ fontSize: 10.5, fontWeight: '800', color: active ? '#fff' : colors.primary }}>{o.count}</RNText>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+// ── selection ───────────────────────────────────────────────────────────────
+// A tick box that is a real target on a phone: the whole row is pressable, not
+// a 16px square a teacher has to aim at while forty children file past.
+export function CheckRow({ checked, onToggle, title, subtitle, right, avatar, disabled, tone }) {
+  return (
+    <TouchableOpacity
+      accessibilityRole="checkbox" accessibilityState={{ checked: !!checked, disabled: !!disabled }}
+      onPress={disabled ? undefined : onToggle} activeOpacity={disabled ? 1 : 0.7}
+      style={[styles.checkRow, checked && styles.checkRowOn, disabled && { opacity: 0.55 }]}
+    >
+      <View style={[styles.box, checked && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
+        {checked ? <Icon name="tick" size={13} color="#fff" /> : null}
+      </View>
+      {avatar || null}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <RNText numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text }}>{title}</RNText>
+        {subtitle ? <Muted numberOfLines={1}>{subtitle}</Muted> : null}
+      </View>
+      {right || null}
+    </TouchableOpacity>
+  );
+}
+
+// ── the school, at the top of a screen ──────────────────────────────────────
+// One hero, used by every landing screen, so the parent app and the teacher app
+// are recognisably the same product and the school's crest is on both.
+export function Hero({ crest, eyebrow, title, subtitle, right, tone = 'brand', children }) {
+  const layout = useLayout();
+  return (
+    <Gradient colors={gradients[tone] || gradients.brand} angle={130} style={[styles.hero, shadow.raised]}>
+      {/* A single soft highlight. It is what stops a flat two-stop gradient
+          reading like a coloured rectangle on a big monitor. */}
+      <View pointerEvents="none" style={styles.heroGlow} />
+      <View style={{
+        flexDirection: layout.isPhone ? 'column' : 'row',
+        alignItems: layout.isPhone ? 'flex-start' : 'center', gap: spacing.lg,
+      }}>
+        {crest ? <View>{crest}</View> : null}
+        <View style={{ flex: 1, minWidth: 0 }}>
+          {eyebrow ? (
+            <RNText numberOfLines={1} style={{ color: 'rgba(255,255,255,0.68)', fontSize: 12, fontWeight: '800', letterSpacing: 0.8 }}>
+              {String(eyebrow).toUpperCase()}
+            </RNText>
+          ) : null}
+          <RNText numberOfLines={2} style={{
+            color: '#fff', fontSize: layout.isPhone ? 23 : 29, fontWeight: '800',
+            letterSpacing: -0.6, marginTop: 3,
+          }}>{title}</RNText>
+          {subtitle ? (
+            <RNText style={{ color: 'rgba(255,255,255,0.74)', fontSize: 13.5, fontWeight: '600', marginTop: 5 }}>
+              {subtitle}
+            </RNText>
+          ) : null}
+        </View>
+        {right || null}
+      </View>
+      {children ? <View style={{ marginTop: spacing.lg }}>{children}</View> : null}
+    </Gradient>
+  );
+}
+
+// A figure carved out of a hero — white on navy, so it belongs to the header
+// rather than sitting on it.
+export function HeroStat({ label, value, tone = 'light', note }) {
+  return (
+    <View style={styles.heroStat}>
+      <RNText style={{ ...type.micro, color: 'rgba(255,255,255,0.62)' }}>{String(label).toUpperCase()}</RNText>
+      <RNText style={{
+        color: tone === 'danger' ? palette.gold200 : '#fff',
+        fontSize: 19, fontWeight: '800', marginTop: 3, fontVariant: ['tabular-nums'],
+      }}>{value}</RNText>
+      {note ? <RNText style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11.5, fontWeight: '600', marginTop: 1 }}>{note}</RNText> : null}
+    </View>
+  );
+}
+
+// ── a row of actions above a list ───────────────────────────────────────────
+export function Toolbar({ children, style }) {
+  return <View style={[{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm }, style]}>{children}</View>;
+}
+
 // ── key/value ───────────────────────────────────────────────────────────────
 export function KeyValue({ items, columns }) {
   const layout = useLayout();
@@ -670,6 +863,40 @@ export function KeyValue({ items, columns }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
+
+  tab: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingVertical: 9, paddingHorizontal: 14, borderRadius: radius.pill,
+    backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border,
+  },
+  tabOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  tabCount: {
+    minWidth: 18, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 999,
+    backgroundColor: colors.primarySoft, alignItems: 'center',
+  },
+
+  checkRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingVertical: 10, paddingHorizontal: 10, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.borderSoft, backgroundColor: colors.card,
+  },
+  checkRowOn: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  box: {
+    width: 22, height: 22, borderRadius: 7, borderWidth: 2,
+    borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.card,
+  },
+
+  hero: { borderRadius: radius.lg, padding: spacing.xl, overflow: 'hidden' },
+  heroGlow: {
+    position: 'absolute', right: -60, top: -70, width: 220, height: 220,
+    borderRadius: 110, backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  heroStat: {
+    backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: radius.md,
+    paddingVertical: 10, paddingHorizontal: 13, minWidth: 120,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)',
+  },
   screenBody: { flexGrow: 1 },
 
   card: {

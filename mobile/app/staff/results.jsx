@@ -13,11 +13,15 @@ import { useAuth } from '../../src/auth';
 import { RequireModule } from '../../src/guard';
 import { api } from '../../src/api';
 import {
-  Screen, Card, Section, Heading, Title, Muted, Micro, Button, Badge, Sheet,
+  Screen, Card, Section, Heading, Title, Body, Muted, Micro, Button, Badge, Sheet,
   Field, TextArea, ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState,
-  DataTable, Grid, StatCard, KeyValue, Divider, SegmentedControl,
+  DataTable, Grid, StatCard, KeyValue, Divider, SegmentedControl, Tabs, Avatar, Toolbar, Select,
 } from '../../src/ui';
 import { ClassPicker, useClasses } from '../../src/pickers';
+import { useBranding } from '../../src/brand';
+import { PrintButton } from '../../src/actions';
+import { terminalReportHtml } from '../../src/print';
+import { Bars, Trend, toneForScore as scoreTone } from '../../src/charts';
 import { useLayout, pageWidth } from '../../src/responsive';
 import { colors, palette, spacing, radius, type } from '../../src/theme';
 
@@ -38,6 +42,7 @@ function toneFor(score) {
 function ResultsScreen() {
   const { token, mode } = useAuth();
   const layout = useLayout();
+  const brand = useBranding();
   const { classes, error: classError } = useClasses(token);
 
   const [classId, setClassId] = useState(null);
@@ -65,10 +70,10 @@ function ResultsScreen() {
 
   useEffect(() => { load(); }, [load]);
 
-  const openReport = useCallback(async (student) => {
-    setOpen(student); setReport(null); setSavedRemarks(null); setTab('report');
+  const openReport = useCallback(async (student, termId) => {
+    setOpen(student); setReport(null); setSavedRemarks(null); if (!termId) setTab('report');
     try {
-      const r = await api.studentReport(token, student.id);
+      const r = await api.studentReport(token, student.id, termId);
       setReport(r);
       const s = r.summary || {};
       setRemarks({
@@ -166,7 +171,7 @@ function ResultsScreen() {
       </View>
 
       <Sheet
-        visible={!!open} onClose={() => setOpen(null)} width={640}
+        visible={!!open} onClose={() => setOpen(null)} width={680}
         title={open ? open.name : 'Report'}
         footer={tab === 'remarks' ? (
           <>
@@ -176,7 +181,22 @@ function ResultsScreen() {
               busy={savingRemarks} disabled={!isClassTeacher} full={false}
             />
           </>
-        ) : null}
+        ) : (
+          <>
+            <Button variant="outline" title="Close" onPress={() => setOpen(null)} full={false} />
+            <PrintButton
+              build={() => terminalReportHtml({
+                ...(report || {}),
+                school: report?.school || {
+                  name: brand.school?.name, motto: brand.school?.motto, address: brand.school?.address,
+                  phone: brand.contact?.phone, email: brand.contact?.email, logo: brand.logo,
+                },
+              })}
+              title="Print report card" variant="primary" size="md"
+              disabled={!report || !(report.subjects || []).length}
+            />
+          </>
+        )}
       >
         {report === null ? <Skeleton rows={6} /> : (
           <>
@@ -191,6 +211,37 @@ function ResultsScreen() {
 
             {tab === 'report' ? (
               <>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md }}>
+                  <Avatar name={report.student?.name || (open && open.name)} photo={report.student?.photo} size={54} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Heading>{report.student?.name || (open && open.name)}</Heading>
+                    <Muted>{[report.student?.index_number, report.student?.class_name].filter(Boolean).join(' · ')}</Muted>
+                  </View>
+                </View>
+
+                {/* Past terms. A class teacher writing a remark needs to know
+                    whether this is a fall or a recovery, and the app has never
+                    let them see last term without leaving the sheet. */}
+                {(report.terms || []).length > 1 ? (
+                  <View style={{ marginBottom: spacing.md }}>
+                    <Select
+                      label="Term"
+                      value={report.term?.id}
+                      onChange={(v) => openReport(open, v)}
+                      options={(report.terms || []).map(t => ({
+                        value: t.id,
+                        label: t.average_score != null ? `${t.label} — avg ${Number(t.average_score).toFixed(1)}` : t.label,
+                      }))}
+                    />
+                    <Trend
+                      label="Average across terms"
+                      points={(report.terms || []).slice().reverse()
+                        .filter(t => t.average_score != null)
+                        .map(t => ({ label: String(t.label).slice(0, 8), value: t.average_score }))}
+                    />
+                  </View>
+                ) : null}
+
                 <KeyValue items={[
                   { label: 'Index number', value: report.student?.index_number },
                   { label: 'Class', value: report.student?.class_name },
@@ -205,6 +256,14 @@ function ResultsScreen() {
                   },
                 ]} />
                 <Divider />
+                {(report.subjects || []).length > 0 ? (
+                  <View style={{ marginBottom: spacing.md }}>
+                    <Bars items={(report.subjects || []).map(sub => ({
+                      label: sub.subject, value: sub.total_score,
+                      note: sub.grade_remark || grade(sub.total_score, report.grading_bands) || undefined,
+                    }))} />
+                  </View>
+                ) : null}
                 {(report.subjects || []).length === 0
                   ? <Muted>No marks recorded for this term yet.</Muted>
                   : (report.subjects || []).map((s, i) => (

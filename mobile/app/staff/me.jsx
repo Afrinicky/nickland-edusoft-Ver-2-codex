@@ -11,11 +11,15 @@ import { View, Text, RefreshControl } from 'react-native';
 import { useAuth } from '../../src/auth';
 import { api, money } from '../../src/api';
 import {
-  Screen, Card, Section, Title, Heading, Muted, Micro, Button, Badge, Sheet,
+  Screen, Card, Section, Title, Heading, Body, Muted, Micro, Button, Badge, Sheet,
   Field, TextArea, Select, ErrorNote, SuccessNote, InfoNote, Skeleton, EmptyState,
   ListRow, Grid, StatCard, KeyValue, Divider, Gradient, Avatar, SegmentedControl,
-  DataTable, PendingBadge,
+  DataTable, PendingBadge, Tabs, Toolbar, Crest,
 } from '../../src/ui';
+import { useBranding } from '../../src/brand';
+import { PrintButton, ContactSchool } from '../../src/actions';
+import { staffProfileHtml } from '../../src/print';
+import { Meter } from '../../src/charts';
 import { useLayout } from '../../src/responsive';
 import { colors, palette, gradients, spacing, radius, shadow, type } from '../../src/theme';
 
@@ -28,6 +32,7 @@ const LEAVE_TONE = { pending: 'warning', approved: 'success', rejected: 'danger'
 export default function MyWork() {
   const { token, profile, mode } = useAuth();
   const layout = useLayout();
+  const brand = useBranding();
 
   const [tab, setTab] = useState('me');
   const [hr, setHr] = useState(null);
@@ -105,6 +110,20 @@ export default function MyWork() {
   const present = days.filter(d => d.status === 'present').length;
   const pendingLeave = (leave || []).filter(l => l.status === 'pending').length;
 
+  // The staff profile sheet — employment facts only, and no salary or bank
+  // detail anywhere on it, so it is a document a teacher can hand to a bank or
+  // a landlord without redacting half of it first.
+  const printProfile = () => staffProfileHtml({
+    staff: { ...s, designation: s.designation || hr.designation },
+    designation: hr.designation,
+    teaching: hr.teaching,
+    account: hr.account || { full_name: profile?.user?.full_name },
+    school: hr.school || {
+      name: brand.school?.name, motto: brand.school?.motto, address: brand.school?.address,
+      phone: brand.contact?.phone, email: brand.contact?.email, logo: brand.logo,
+    },
+  });
+
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
       <ErrorNote message={error} />
@@ -112,7 +131,10 @@ export default function MyWork() {
 
       <Gradient colors={gradients.chrome} angle={140} style={[{ borderRadius: radius.lg, padding: spacing.xl }, shadow.raised]}>
         <View style={{ flexDirection: layout.isPhone ? 'column' : 'row', alignItems: layout.isPhone ? 'flex-start' : 'center', gap: spacing.lg }}>
-          <Avatar name={profile?.user?.full_name || s.name} size={layout.isPhone ? 52 : 62} tone="chrome" />
+          {/* The teacher's own photograph, from the school's staff record.
+              It was on the desktop all along and never reached the app. */}
+          <Avatar name={profile?.user?.full_name || s.name} photo={s.photo || profile?.photo}
+            size={layout.isPhone ? 56 : 68} tone="chrome" ring />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text numberOfLines={1} style={{ color: '#fff', fontSize: layout.isPhone ? 21 : 25, fontWeight: '800', letterSpacing: -0.5 }}>
               {profile?.user?.full_name || s.name}
@@ -142,13 +164,14 @@ export default function MyWork() {
         </View>
       </Gradient>
 
-      <Card>
-        <SegmentedControl
+      <Card padded={false} style={{ paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+        <Tabs
           value={tab} onChange={setTab}
           options={[
-            { value: 'me', label: 'Record', icon: 'badge' },
-            { value: 'attendance', label: 'Attendance', icon: 'calendar' },
-            { value: 'leave', label: 'Leave', icon: 'note' },
+            { value: 'me', label: 'My profile', icon: 'badge' },
+            { value: 'teaching', label: 'What I teach', icon: 'grid' },
+            { value: 'attendance', label: 'My attendance', icon: 'calendar' },
+            { value: 'leave', label: 'Leave', icon: 'note', count: pendingLeave || undefined },
             { value: 'pay', label: 'Payslips', icon: 'wallet' },
           ]}
         />
@@ -156,24 +179,57 @@ export default function MyWork() {
 
       {tab === 'me' && (
         <>
-          <Section title="Employment" icon="badge">
+          <Section
+            title="Employment record" icon="badge"
+            subtitle="What the school office holds for you."
+            action={<PrintButton build={printProfile} title="Print profile" />}
+          >
             <KeyValue items={[
               { label: 'Staff number', value: s.staff_number },
               { label: 'Designation', value: s.designation || hr.designation },
               { label: 'Role', value: s.role },
               { label: 'Status', value: s.status },
-              { label: 'Phone', value: s.phone },
-              { label: 'Email', value: s.email },
+              { label: 'Date engaged', value: s.hire_date },
+              { label: 'Gender', value: s.gender },
+              { label: 'Date of birth', value: s.date_of_birth },
               { label: 'Qualification', value: s.qualification },
               { label: 'Specialisation', value: s.specialization },
-              { label: 'Hired', value: s.hire_date },
               { label: 'SSNIT number', value: s.ssnit_number },
             ]} />
-            <Muted style={{ marginTop: spacing.md }}>
-              Your own details are changed at the school office — the app shows what they hold.
-            </Muted>
           </Section>
 
+          <Section title="How you are reached" icon="phone">
+            <KeyValue items={[
+              { label: 'Phone', value: s.phone },
+              { label: 'Email', value: s.email },
+              { label: 'Address', value: s.address },
+              { label: 'Sign-in username', value: hr.account?.username || profile?.user?.username },
+            ]} />
+            <Muted style={{ marginTop: spacing.md }}>
+              Your own details are changed at the school office — the app shows what they hold. Nothing
+              about your pay or your bank is shown on a profile you can print and hand to somebody.
+            </Muted>
+            <View style={{ marginTop: spacing.md }}>
+              <Toolbar>
+                <PrintButton build={printProfile} title="Print my profile" />
+                <ContactSchool variant="outline" size="sm" title="Message the office" icon="whatsapp" />
+              </Toolbar>
+            </View>
+          </Section>
+
+          <Section title="At a glance" icon="chart">
+            <Grid min={150}>
+              <StatCard label="Classes" value={(hr.teaching?.classes || []).length} icon="users" />
+              <StatCard label="Subjects" value={(hr.teaching?.subjects || []).length} icon="book" />
+              <StatCard label="Class teacher of" value={(hr.teaching?.class_teacher_of || []).length} tone="gold" icon="award" />
+              <StatCard label="Days present" value={present} tone="success" icon="check" note="This month" />
+            </Grid>
+          </Section>
+        </>
+      )}
+
+      {tab === 'teaching' && (
+        <>
           <Section title="What you teach" icon="grid" subtitle="Set by whoever handles staffing.">
             {(hr.assignments || []).length === 0
               ? <Muted>No teaching assignments yet. Until they are set, no classes are open to you.</Muted>
@@ -188,6 +244,15 @@ export default function MyWork() {
                   />
                 ))}
           </Section>
+
+          {(hr.teaching?.class_teacher_of || []).length ? (
+            <Section title="You are answerable for" icon="shield"
+              subtitle="End-of-term remarks and the canteen collection for these classes are yours.">
+              {(hr.teaching.class_teacher_of || []).map((c, i) => (
+                <ListRow key={i} icon="users" iconTone="gold" title={c} subtitle="Class teacher" />
+              ))}
+            </Section>
+          ) : null}
         </>
       )}
 
@@ -198,6 +263,12 @@ export default function MyWork() {
             <StatCard label="Days recorded" value={days.length} icon="calendar" />
             <StatCard label="Month" value={attendance?.month ? MONTHS[attendance.month - 1] : '—'} icon="grid" />
           </Grid>
+          <Card>
+            <Meter
+              value={present} total={days.length} label="Attendance this month" goodAbove={90}
+              caption={days.length ? `${present} of ${days.length} recorded days.` : 'Nothing recorded this month yet.'}
+            />
+          </Card>
           <Section title="This month" icon="calendar">
             <DataTable
               keyExtractor={(r) => r.date}

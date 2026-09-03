@@ -14,8 +14,10 @@ import { useAuth } from '../src/auth';
 import { api, setRole } from '../src/api';
 import {
   Card, Title, Heading, Body, Muted, Micro, Field, Button, ErrorNote, InfoNote,
-  Gradient, IconTile, Badge,
+  Gradient, IconTile, Badge, Crest,
 } from '../src/ui';
+import { useBranding } from '../src/brand';
+import { ContactSchool } from '../src/actions';
 import { Icon } from '../src/icons';
 import { useLayout } from '../src/responsive';
 import { colors, palette, gradients, spacing, radius, shadow, type } from '../src/theme';
@@ -27,7 +29,13 @@ const DEVICE = Platform.OS === 'web' ? 'web browser' : Platform.OS + ' app';
 export default function Login() {
   const { host, mode: conn, signIn } = useAuth();
   const layout = useLayout();
+  const brand = useBranding();
   const isCloud = conn === 'cloud';
+  // Whose sign-in page this is. A parent opening a link should recognise their
+  // child's school immediately; falling back to the product's own name is for
+  // the first run, before a connection has been made.
+  const schoolName = brand.school?.name || 'Nickland Edusoft';
+  const motto = brand.school?.motto || '';
 
   // 'signin' | 'register' | 'forgot' | 'claim'
   const [stage, setStage] = useState('signin');
@@ -228,18 +236,13 @@ export default function Login() {
       <Gradient colors={gradients.chrome} angle={150} style={split ? { flex: 1.05, padding: 56, justifyContent: 'center' } : { padding: 24, paddingTop: 40, paddingBottom: 28 }}>
         <View style={{ maxWidth: 460, gap: split ? spacing.lg : spacing.sm }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <View style={{
-              width: split ? 52 : 42, height: split ? 52 : 42, borderRadius: 16,
-              backgroundColor: 'rgba(255,255,255,0.10)', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <Icon name="school" size={split ? 28 : 22} color={palette.gold400} />
-            </View>
-            <View>
-              <Text style={{ color: '#fff', fontWeight: '800', fontSize: split ? 22 : 18, letterSpacing: -0.4 }}>
-                Nickland Edusoft
+            <Crest logo={brand.logo} size={split ? 56 : 44} tone="chrome" />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text numberOfLines={2} style={{ color: '#fff', fontWeight: '800', fontSize: split ? 22 : 18, letterSpacing: -0.4 }}>
+                {schoolName}
               </Text>
-              <Text style={{ color: colors.onChromeMuted, fontSize: 12, fontWeight: '600' }}>
-                {isCloud ? 'School portal' : 'School network'}
+              <Text numberOfLines={1} style={{ color: colors.onChromeMuted, fontSize: 12, fontWeight: '600' }}>
+                {motto || (isCloud ? 'School portal' : 'School network')}
               </Text>
             </View>
           </View>
@@ -247,15 +250,16 @@ export default function Login() {
           {split && (
             <>
               <Text style={{ color: '#fff', fontSize: 34, fontWeight: '800', letterSpacing: -0.8, lineHeight: 42 }}>
-                Your classroom,{'\n'}wherever you are.
+                The whole school,{'\n'}in your hand.
               </Text>
               <Text style={{ color: colors.onChromeMuted, fontSize: 15, lineHeight: 23, maxWidth: 400 }}>
-                Take the register, enter class work and exam marks, write lesson notes, set and mark
-                homework, collect canteen money, answer parents and check your own payslip — from a
-                phone on the school Wi-Fi or a laptop at home.
+                Teachers take the register, enter class work and exam marks, write lesson notes, set
+                homework, run the morning canteen collection and print a report card. Parents follow
+                their child's marks, conduct, attendance, bills and balances — and message the school
+                when they need to.
               </Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                {['Register', 'Class work', 'Results', 'Lesson notes', 'Homework', 'Payslips'].map(t => (
+                {['Register', 'Class work', 'Report cards', 'Lesson notes', 'Homework', 'Canteen', 'Bills', 'Notices'].map(t => (
                   <View key={t} style={{
                     paddingHorizontal: 11, paddingVertical: 6, borderRadius: radius.pill,
                     backgroundColor: 'rgba(255,255,255,0.09)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
@@ -281,9 +285,16 @@ export default function Login() {
       <View style={{ flex: split ? 1 : 1, justifyContent: 'center', padding: split ? 48 : 20 }}>
         <View style={{ width: '100%', maxWidth: 440, alignSelf: 'center' }}>
           <Card style={split ? shadow.raised : null}>{panel}</Card>
-          <TouchableOpacity onPress={() => router.push('/connect')} style={{ alignItems: 'center', marginTop: 14 }}>
-            <Text style={{ color: colors.muted, fontWeight: '700', fontSize: 12.5 }}>Change school or address</Text>
-          </TouchableOpacity>
+
+          {/* Somebody who cannot get in needs the school, not a help page. */}
+          <View style={{ alignItems: 'center', marginTop: 14, gap: 10 }}>
+            {brand.channels && brand.channels.length ? (
+              <ContactSchool variant="ghost" size="sm" title="Message the school" icon="whatsapp" />
+            ) : null}
+            <TouchableOpacity onPress={() => router.push('/connect')}>
+              <Text style={{ color: colors.muted, fontWeight: '700', fontSize: 12.5 }}>Change school or address</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </View>

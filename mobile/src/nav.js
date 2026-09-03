@@ -22,6 +22,11 @@ export const STAFF_NAV = [
     modules: [['academics', 'view']] },
   { key: 'results', href: '/staff/results', label: 'Results', icon: 'award', group: 'Teaching',
     modules: [['academics', 'view']] },
+  // How the class is doing, and how to reach its parents. Read-only, and built
+  // from marks and registers the teacher can already see, so it needs no
+  // permission of its own beyond those.
+  { key: 'insight', href: '/staff/insight', label: 'Class insight', icon: 'trend', group: 'Teaching',
+    modules: [['academics', 'view'], ['students', 'view']] },
   { key: 'homework', href: '/staff/homework', label: 'Homework', icon: 'book', group: 'Teaching',
     modules: [['academics', 'view']] },
   { key: 'notes', href: '/staff/notes', label: 'Lesson notes', icon: 'note', group: 'Teaching', always: true },
@@ -43,18 +48,19 @@ export const STAFF_NAV = [
   { key: 'account', href: '/staff/account', label: 'Account', icon: 'gear', group: 'Me', always: true },
 ];
 
-// The five that fit across the bottom of a phone. Everything else lives one
-// tap away in More, which is better than five taps of a hamburger.
-export const STAFF_PRIMARY = ['dashboard', 'attendance', 'scores', 'students', 'more'];
+// The five that fit across the bottom of a phone. Canteen replaced Exam marks
+// here: the daily collection is a fixed eight-o'clock job every school day,
+// where marks are entered a few times a term and are one tap away in More.
+export const STAFF_PRIMARY = ['dashboard', 'attendance', 'canteen', 'students', 'more'];
 
 export const PARENT_NAV = [
   { key: 'children', href: '/parent', label: 'My children', icon: 'users', group: 'Home', match: ['/parent/child'], always: true },
-  { key: 'messages', href: '/parent/messages', label: 'Messages', icon: 'chat', group: 'Home', match: ['/parent/message'], always: true },
   { key: 'notifications', href: '/parent/notifications', label: 'Notices', icon: 'bell', group: 'Home', always: true },
+  { key: 'messages', href: '/parent/messages', label: 'Messages', icon: 'chat', group: 'Home', match: ['/parent/message'], always: true },
   { key: 'account', href: '/parent/account', label: 'Account', icon: 'gear', group: 'Me', always: true },
 ];
 
-export const PARENT_PRIMARY = ['children', 'messages', 'notifications', 'account'];
+export const PARENT_PRIMARY = ['children', 'notifications', 'messages', 'account'];
 
 const ACTION_KEY = { view: 'canView', create: 'canCreate', edit: 'canEdit', delete: 'canDelete' };
 

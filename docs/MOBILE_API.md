@@ -32,7 +32,8 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Liveness + school name. |
-| GET | `/info` | School identity + whether self-registration is on. |
+| GET | `/info` | School identity + whether self-registration is on. `online_payments` is always `false`: no money moves through this API. |
+| GET | `/branding` | The school's crest, name, motto, address and contact numbers — including the WhatsApp number every "Message the school" button leads to. Public on purpose: the sign-in screen shows a parent their own school before they type anything. Images travel as `data:` URIs (see `electron/server/media.js`). |
 | POST | `/auth/signin` | **One sign-in box** `{ identifier, password, device }` → `{ role, token, … }`. Matches a staff username first, then a parent's phone or email. One message for both failures, so an outsider cannot learn which accounts are real. |
 | POST | `/auth/login` | Staff login `{ username, password, device }` → `{ token }`. Kept for older clients. |
 | POST | `/auth/parent/register` | Parent self-register `{ full_name, phone, email, password }` (must match a student). |
@@ -43,14 +44,17 @@ student's guardian contact on file; otherwise an admin provisions the account.
 |--------|------|------|---------|
 | GET | `/me` | any | Current subject + scope/permissions. |
 | POST | `/auth/logout` | any | Revoke the calling token. |
-| GET | `/parent/children` | parent | Children with fee + canteen balances. |
-| GET | `/parent/children/:id` | parent | One child: payments, attendance summary. |
-| GET | `/parent/children/:id/report` | parent | Academic performance (scores + summary). |
-| POST | `/parent/children/:id/pay` | parent | Submit a manual payment (office/bank/momo) → pending intent. |
-| POST | `/parent/children/:id/pay/online` | parent | Start a gateway checkout → `{ authorization_url, reference }`. |
-| GET | `/parent/pay/verify/:reference` | parent | Verify + settle an online payment (pull). |
-| GET | `/parent/children/:id/intents` | parent | Track submitted payments + status. |
-| GET | `/parent/notifications` | parent | Messages sent to the parent's contacts. |
+| GET | `/parent/children` | parent | Children with fee + canteen balances, the class teacher's name, and the child's photograph. |
+| GET | `/parent/children/:id` | parent | One child: recent receipts, attendance summary. |
+| GET | `/parent/children/:id/report` | parent | One term's report card — marks, summary, the grading scale they are read against, the term's attendance, and the school header a printed copy carries. `?termId=` for a past term. |
+| GET | `/parent/children/:id/reports` | parent | Every term the school has published marks for, with its average and position. |
+| GET | `/parent/children/:id/fees` | parent | The bill line by line, the carry-forward, the discount, the books, every receipt ever issued, and a term-by-term history. `?termId=` for a past term. |
+| GET | `/parent/children/:id/canteen` | parent | Days paid, owed and excused, day by day, plus every collection recorded. |
+| GET | `/parent/children/:id/attendance` | parent | The term's register, day by day, with totals. |
+| GET | `/parent/children/:id/conduct` | parent | The conduct log the school keeps — commendations and incidents both. |
+| GET | `/parent/children/:id/profile` | parent | The child's record, laid out for printing. |
+| GET | `/parent/children/:id/settle` | parent | **Settles nothing.** The amounts owed and the school's contact details, so the app can open WhatsApp with the child, class, term and figures already written into the message. |
+| GET | `/parent/notifications` | parent | The school's notices and the messages sent to the parent's contacts, merged and sorted. |
 | GET | `/parent/children/:id/timetable` | parent | The child's class timetable (bell schedule + weekly grid). |
 | GET | `/parent/messages` | parent | The parent's message threads with the school. |
 | GET | `/parent/messages/:id` | parent | One thread with its messages (marks it read for the parent). |
@@ -139,16 +143,23 @@ only if the school granted them.
 A pupil outside a teacher's scope answers **404, not 403** — which pupils are
 in another class is not theirs to learn either.
 
-### Payment gateway (Paystack by default; pluggable per school)
-- Configured in Settings → Online Payments (`payment_gateway`, `paystack_secret_key`, …).
-- **Online flow:** parent → `pay/online` → open `authorization_url` → after checkout
-  the app calls `pay/verify/:reference`, which verifies with the gateway and, if
-  paid, records the payment + sends the receipt. Settlement is idempotent.
-- **Webhook (public tier):** `POST /webhooks/paystack` — authenticated by the
-  gateway's HMAC-SHA512 signature over the raw body (`x-paystack-signature`);
-  on `charge.success` it verifies and settles. Not needed on LAN (the app
-  verifies directly). Other providers plug in as adapters with the same
-  interface.
+### No money moves through this API
+There is no checkout, no payment form and no gateway webhook. The card /
+mobile-money checkout, the "tell the school what you paid" intent form, the
+verification pull and `POST /webhooks/paystack` were all removed, routes
+included — a request to any of them answers 404, and `/info` reports
+`online_payments: false` so an older client is told plainly.
+
+A parent sees the balance, the itemised bill and every receipt the school has
+issued. Settling it is arranged with the school: `GET
+/parent/children/:id/settle` returns the figures and the contact details, and
+the app turns that into a pre-written WhatsApp message. A school takes payment
+at the office or on WhatsApp with the bursar, which is how these schools work
+and which nothing typed into a phone can fake.
+
+Cash the school takes **in person** is unaffected — the canteen collection
+below is real money handed over at the gate and recorded exactly as the desktop
+records it.
 | GET | `/dashboard` | staff (`dashboard.view`) | Term metrics (students, staff, fees). |
 | GET | `/classes` | staff (`students`/`academics`/`canteen` view) | Class list for the teacher pickers. |
 | GET | `/students?classId=` | staff (`students.view`) | Student roster. |
@@ -160,6 +171,12 @@ in another class is not theirs to learn either.
 | POST | `/scores` | staff (`academics.edit`) | `{ subjectId, marks:[{student_id,exam_score}] }` (raw 0–100). Host converts + totals with the school's weighting and refreshes the cloud snapshot. |
 | GET | `/canteen/student/:id` | staff (`canteen.view`) | A student's canteen balance for the current term (daily rate, unpaid days, amount owed). |
 | POST | `/canteen/collect` | staff (`canteen.create`) | `{ student_id, amount, payment_method, notes }`. Records the payment, marks covered days paid, posts to Finance, and generates + delivers a receipt. |
+| GET | `/canteen/quick-pay?classId=&date=` | staff (`canteen.view`, class teacher) | The class for one day: who has paid, who is excused, who was marked absent, the daily rate, and whether the calendar calls it a school day. |
+| POST | `/canteen/quick-pay` | staff (`canteen.create`, class teacher) | `{ classId, date, studentIds[], paymentMethod }` — the desktop's own `markBulkPaid`, so the ledger entry, term attribution and daily rate are identical either way. A day already settled is skipped, so a second tap cannot charge the same child twice. |
+| POST | `/canteen/exempt` | staff (`canteen.edit`, class teacher) | `{ classId, date, studentIds[], reason }` — excuse the absent. A day already paid for is left as it is rather than stranding a payment row. |
+| GET | `/classes/:id/contacts` | staff (`notifications.view`) | The whole class's guardian contacts and any registered parent accounts, in one request, so a teacher can ring or message from the roll. |
+| GET | `/students/:id/events` | staff (`students.view`) | The pupil's conduct log — commendations, incidents, notes and health entries — plus `can_write`. |
+| POST | `/students/:id/events` | staff (`students.edit`, class teacher) | `{ eventType, title, description?, date? }`. Writes to the same `student_events` table the desktop has used since the first release; the pupil's parent sees the entry immediately. |
 | GET | `/timetable/mine` | staff | The signed-in teacher's own week, grouped by weekday, plus `today`. |
 | GET | `/timetable/class/:id` | staff (`academics`/`students` view) | A class's timetable grid (periods + entries). |
 | GET | `/homework?classId=` | staff (`academics.view`) | Homework for a class (`&all=1` for full history). |
@@ -185,7 +202,7 @@ persisted (`mode` = `host` | `cloud`) — in the device keychain on a phone, in
 
 | Mode | Reaches | Base + routes | Audience | Writes |
 |------|---------|---------------|----------|--------|
-| **host** (the school itself — its Wi-Fi address or a tunnel) | the desktop | `http(s)://<address>/api/v1` — `/auth/*`, `/parent/*`, staff routes | parents **and** staff | everything, immediately: attendance, scores, canteen, homework marking, fee payments |
+| **host** (the school itself — its Wi-Fi address or a tunnel) | the desktop | `http(s)://<address>/api/v1` — `/auth/*`, `/parent/*`, staff routes | parents **and** staff | everything, immediately: attendance, scores, the daily canteen collection, homework marking, the class contact book |
 | **cloud** (Online) | the hosted service | `https://<portal>/api/v1` — `/portal/*` for parents, `/staff/*` for teachers | parents **and** staff | parents read; teachers queue attendance, scores, canteen and homework for the desktop to apply |
 
 In cloud mode the client picks a school from `GET /portal/schools` (or from
@@ -198,10 +215,14 @@ shapes the host's routes return, so no screen knows which mode it is in. A
 staff route that is `/attendance` on the desktop is `/staff/attendance` on the
 cloud, and one helper picks between them.
 
-Host-only, and they say so rather than failing: **taking a fee payment** (it
-writes a receipt against the school's own numbering) and **marking homework**
-(it needs an assignment id that only exists once the desktop has created the
-assignment).
+Host-only, and they say so rather than failing: **the daily canteen
+collection** (it reads the register live and takes real money), **the class
+contact book** (guardian numbers are not projected over the internet),
+**marking homework** (it needs an assignment id that only exists once the
+desktop has created the assignment) and **a pupil's full profile**. Over the
+internet a parent still sees the totals, the receipts the portal was given and
+the current term's report; the screens say which parts are the school's last
+sync rather than showing an empty table pretending to be complete.
 
 ### Discovery: one request, not a guess
 
@@ -274,8 +295,11 @@ solve. GET and HEAD only; the API keeps priority on every path.
    URL, then `GET /portal/schools` to pick the school). Skipped entirely on the
    web, where the connection is discovered from the serving origin (above).
 2. **Auth:** parent vs staff login; store the token in secure storage.
-3. **Parent tabs:** Children → per-child fees/canteen/attendance/reports,
-   Notifications, Pay (initiates a payment the host records + receipts).
+3. **Parent tabs:** Children → per-child overview, academics, report cards
+   (this term and past terms, with the trend), register, itemised fees and
+   payment history, canteen, homework and timetable; Notices; Messages;
+   Account. Settling a balance opens the school's WhatsApp — no payment is
+   taken in the app.
 4. **Staff tabs:** role-driven — Dashboard (with quick actions), Students,
    Debtors, Account. The dashboard surfaces **Take Attendance**, **Enter
    Scores**, and **Collect Canteen** actions based on `/me` permissions

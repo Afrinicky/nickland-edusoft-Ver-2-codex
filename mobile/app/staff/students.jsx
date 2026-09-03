@@ -32,7 +32,11 @@ function StudentsScreen() {
 
   const load = useCallback(async () => {
     setError(null);
-    try { const r = await api.students(token, classId); setRows(r.students || []); }
+    // Photographs are asked for only when one class is selected. A roll of
+    // forty faces is a couple of megabytes over the school Wi-Fi; the whole
+    // school's six hundred is not something to put on a phone by accident, so
+    // "All my classes" gets names and initials.
+    try { const r = await api.students(token, classId, { photos: !!classId }); setRows(r.students || []); }
     catch (e) { setError(e.message); setRows([]); }
   }, [token, classId]);
 
@@ -44,7 +48,7 @@ function StudentsScreen() {
     const needle = q.trim().toLowerCase();
     if (!needle) return rows || [];
     return (rows || []).filter(s =>
-      `${s.surname || ''} ${s.first_name || ''} ${s.index_number || ''}`.toLowerCase().includes(needle));
+      `${s.name || ''} ${s.surname || ''} ${s.first_name || ''} ${s.index_number || ''}`.toLowerCase().includes(needle));
   }, [rows, q]);
 
   const byClass = useMemo(() => {
@@ -98,11 +102,13 @@ function StudentsScreen() {
               {pupils.map(s => (
                 <ListRow
                   key={s.id}
-                  title={`${s.surname || ''} ${s.first_name || ''}`.trim()}
+                  title={s.name || `${s.surname || ''} ${s.first_name || ''}`.trim()}
                   subtitle={s.index_number}
                   right={s.gender ? <Badge tone="neutral" label={s.gender} /> : null}
                   onPress={() => router.push(`/staff/student/${s.id}`)}
                   icon="user"
+                  avatar={<Avatar name={s.name || `${s.surname || ''} ${s.first_name || ''}`}
+                    photo={s.photo} size={38} />}
                 />
               ))}
             </Section>

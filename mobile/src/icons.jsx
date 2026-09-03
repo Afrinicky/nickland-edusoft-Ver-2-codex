@@ -310,6 +310,54 @@ const DRAW = {
     <Bar {...p} x={0.48} y={0.46} w={0.24} rotate={-45} />
     <Bar {...p} x={0.14} y={0.84} w={0.72} />
   </>),
+
+  // ── added for the report cards, the daily collection and the chat button ──
+  // A printer: the paper going in at the top, the body, the sheet coming out.
+  print: (p) => (<>
+    <R {...p} x={0.28} y={0.08} w={0.44} h={0.20} radius={0.03} />
+    <R {...p} x={0.12} y={0.30} w={0.76} h={0.36} radius={0.07} />
+    <Ring {...p} cx={0.74} cy={0.42} r={0.045} fill />
+    <R {...p} x={0.28} y={0.62} w={0.44} h={0.30} radius={0.03} />
+  </>),
+  // A speech bubble with a tail, distinct from `chat` so "message the school"
+  // and "messages" are not the same mark doing two jobs.
+  whatsapp: (p) => (<>
+    <Ring {...p} cx={0.5} cy={0.47} r={0.36} />
+    <Tri {...p} x={0.16} y={0.72} w={0.24} h={0.22} rotate={0} />
+    <Bar {...p} x={0.34} y={0.40} w={0.32} />
+    <Bar {...p} x={0.34} y={0.55} w={0.22} />
+  </>),
+  // A banknote — used where a figure is money rather than a mark.
+  cash: (p) => (<>
+    <R {...p} x={0.08} y={0.26} w={0.84} h={0.48} radius={0.06} />
+    <Ring {...p} cx={0.5} cy={0.50} r={0.13} />
+  </>),
+  // A rising line: a trend, a term-on-term comparison.
+  trend: (p) => (<>
+    <Bar {...p} x={0.10} y={0.62} w={0.28} rotate={-28} />
+    <Bar {...p} x={0.36} y={0.50} w={0.24} rotate={22} />
+    <Bar {...p} x={0.56} y={0.40} w={0.32} rotate={-38} />
+    <Ring {...p} cx={0.86} cy={0.22} r={0.075} fill />
+  </>),
+  // A ticked list — a register, a roll being marked.
+  list: (p) => (<>
+    <Bar {...p} x={0.36} y={0.24} w={0.52} />
+    <Bar {...p} x={0.36} y={0.50} w={0.52} />
+    <Bar {...p} x={0.36} y={0.76} w={0.52} />
+    <Ring {...p} cx={0.18} cy={0.25} r={0.07} fill />
+    <Ring {...p} cx={0.18} cy={0.51} r={0.07} fill />
+    <Ring {...p} cx={0.18} cy={0.77} r={0.07} fill />
+  </>),
+  // A shield — conduct, standing, anything about character rather than marks.
+  shield: (p) => (<>
+    <R {...p} x={0.20} y={0.10} w={0.60} h={0.52} radius={0.06} />
+    <Tri {...p} x={0.24} y={0.58} w={0.52} h={0.32} rotate={180} />
+  </>),
+  // An open box — nothing here yet, a cleared list.
+  box: (p) => (<>
+    <R {...p} x={0.12} y={0.32} w={0.76} h={0.52} radius={0.06} />
+    <Bar {...p} x={0.12} y={0.46} w={0.76} />
+  </>),
 };
 
 /**

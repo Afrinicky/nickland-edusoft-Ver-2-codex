@@ -13,7 +13,10 @@ import { api, money } from '../../src/api';
 import {
   Screen, Card, Section, Grid, StatCard, Heading, Title, Body, Muted, Micro,
   Button, Badge, ErrorNote, Skeleton, IconTile, Gradient, EmptyState, ListRow, Divider,
+  Hero, HeroStat, Avatar, Crest, Toolbar,
 } from '../../src/ui';
+import { useBranding } from '../../src/brand';
+import { ContactSchool } from '../../src/actions';
 import { Icon } from '../../src/icons';
 import { visibleNav, STAFF_NAV } from '../../src/nav';
 import { useLayout } from '../../src/responsive';
@@ -32,6 +35,7 @@ export default function Dashboard() {
   const { token, profile, mode } = useAuth();
   const router = useRouter();
   const layout = useLayout();
+  const brand = useBranding();
   const [data, setData] = useState(null);
   const [timetable, setTimetable] = useState(null);
   const [hr, setHr] = useState(null);
@@ -82,42 +86,48 @@ export default function Dashboard() {
       <ErrorNote message={error} />
 
       {/* Who, where, when — and the one action that belongs to arriving. */}
-      <Gradient colors={gradients.brand} angle={130} style={[styles.hero, shadow.raised]}>
-        <View style={{ flexDirection: layout.isPhone ? 'column' : 'row', alignItems: layout.isPhone ? 'flex-start' : 'center', gap: spacing.lg }}>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12.5, fontWeight: '700', letterSpacing: 0.4 }}>
-              {greeting().toUpperCase()}
+      <Hero
+        crest={<Avatar name={profile?.user?.full_name || 'Teacher'} photo={profile?.photo}
+          size={layout.isPhone ? 54 : 66} tone="chrome" ring />}
+        eyebrow={greeting()}
+        title={profile?.user?.full_name || 'Teacher'}
+        subtitle={[profile?.designation, data.term?.label, `${DAY[now.getDay()]} ${now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}`]
+          .filter(Boolean).join('  ·  ')}
+        right={hr?.has_staff ? (
+          <View style={styles.clock}>
+            <Micro style={{ color: 'rgba(255,255,255,0.65)' }}>{clockedIn ? 'On duty since' : 'Not clocked in'}</Micro>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 20, marginTop: 2, fontVariant: ['tabular-nums'] }}>
+              {clockedIn ? String(clockedIn).slice(0, 5) : '—:—'}
             </Text>
-            <Text numberOfLines={1} style={{ color: '#fff', fontSize: layout.isPhone ? 23 : 28, fontWeight: '800', letterSpacing: -0.6, marginTop: 2 }}>
-              {profile?.user?.full_name || 'Teacher'}
-            </Text>
-            <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 13.5, fontWeight: '600', marginTop: 4 }}>
-              {[profile?.designation, data.term?.label, `${DAY[now.getDay()]} ${now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}`]
-                .filter(Boolean).join(' · ')}
-            </Text>
+            {clockedOut ? (
+              <Muted style={{ color: 'rgba(255,255,255,0.6)', marginTop: 2 }}>Left at {String(clockedOut).slice(0, 5)}</Muted>
+            ) : (
+              <Button
+                size="sm" variant={clockedIn ? 'outline' : 'gold'}
+                title={clockedIn ? 'Clock out' : 'Clock in'}
+                busy={clocking}
+                onPress={() => punch(clockedIn ? 'out' : 'in')}
+                style={clockedIn ? { borderColor: 'rgba(255,255,255,0.4)', marginTop: 8 } : { marginTop: 8 }}
+              />
+            )}
           </View>
+        ) : null}
+      />
 
-          {hr?.has_staff ? (
-            <View style={styles.clock}>
-              <Micro style={{ color: 'rgba(255,255,255,0.65)' }}>{clockedIn ? 'On duty since' : 'Not clocked in'}</Micro>
-              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 20, marginTop: 2, fontVariant: ['tabular-nums'] }}>
-                {clockedIn ? String(clockedIn).slice(0, 5) : '—:—'}
-              </Text>
-              {clockedOut ? (
-                <Muted style={{ color: 'rgba(255,255,255,0.6)', marginTop: 2 }}>Left at {String(clockedOut).slice(0, 5)}</Muted>
-              ) : (
-                <Button
-                  size="sm" variant={clockedIn ? 'outline' : 'gold'}
-                  title={clockedIn ? 'Clock out' : 'Clock in'}
-                  busy={clocking}
-                  onPress={() => punch(clockedIn ? 'out' : 'in')}
-                  style={clockedIn ? { borderColor: 'rgba(255,255,255,0.4)', marginTop: 8 } : { marginTop: 8 }}
-                />
-              )}
-            </View>
-          ) : null}
+      {/* The school's own crest and a way to reach the office, on the first
+          screen of the day. Neither had a home in the app before. */}
+      <Card>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md, flexWrap: 'wrap' }}>
+          <Crest logo={brand.logo} size={44} tone="light" />
+          <View style={{ flex: 1, minWidth: 160 }}>
+            <Heading>{brand.school?.name || profile?.school?.name || 'Your school'}</Heading>
+            {brand.school?.motto ? <Muted numberOfLines={1}>{brand.school.motto}</Muted> : null}
+          </View>
+          <Toolbar>
+            <ContactSchool variant="subtle" size="sm" title="Message the school" icon="whatsapp" />
+          </Toolbar>
         </View>
-      </Gradient>
+      </Card>
 
       {/* Today's lessons. The single most-asked question of the school day. */}
       <Section
@@ -200,7 +210,6 @@ export default function Dashboard() {
 }
 
 const styles = {
-  hero: { borderRadius: radius.lg, padding: spacing.xl },
   clock: {
     backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: radius.md,
     padding: spacing.md, minWidth: 150,

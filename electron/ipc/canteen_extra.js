@@ -41,6 +41,125 @@ function isAttendanceExemptEnabled(db) {
   return r ? r.value === 'true' : true;
 }
 
+
+// ── Quick daily collection, shared ────────────────────────────────────────────
+// These three were written inside the IPC closure, which meant only the desktop
+// could reach them: the teacher's app had no quick-pay at all and had to
+// collect from one pupil at a time. Lifting them out is what lets both surfaces
+// run the SAME code — the alternative, a second implementation behind the API,
+// is a second set of rounding bugs and a second place to forget the ledger.
+
+// Who is in the class, and where each pupil stands on one particular day.
+function classRosterForDate(db, classId, date) {
+  const students = db.prepare(`
+    SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names, s.photo_path
+    FROM students s
+    WHERE s.current_class_id = ? AND s.status = 'Active'
+    ORDER BY s.surname, s.first_name
+  `).all(classId);
+
+  if (students.length === 0) return [];
+
+  const sids = students.map(s => s.id);
+  const placeholders = sids.map(() => '?').join(',');
+  const att = db.prepare(`
+    SELECT student_id, status FROM student_attendance
+    WHERE student_id IN (${placeholders}) AND date = ?
+  `).all(...sids, date);
+  const attMap = Object.fromEntries(att.map(a => [a.student_id, a.status]));
+
+  const cds = db.prepare(`
+    SELECT student_id, status FROM canteen_day_status
+    WHERE student_id IN (${placeholders}) AND date = ?
+  `).all(...sids, date);
+  const cdsMap = Object.fromEntries(cds.map(c => [c.student_id, c.status]));
+
+  return students.map(s => ({
+    ...s,
+    attendance_status: attMap[s.id] || null,
+    canteen_status: cdsMap[s.id] || 'unpaid',
+  }));
+}
+
+// Mark a batch of pupils paid for one day, at the daily rate, posting each
+// collection to the finance ledger as it goes.
+function markBulkPaid(db, { studentIds, date, paymentMethod, receivedBy }) {
+  if (!studentIds || studentIds.length === 0) return { ok: false, error: 'No students selected' };
+  const dailyRate = getDailyRate(db);
+  const today = new Date().toISOString().slice(0, 10);
+  const termId = resolveCanteenTerm(db, date);
+
+  const tx = db.transaction(() => {
+    let totalAmount = 0;
+    let marked = 0;
+    for (const sid of studentIds) {
+      // A day already settled is left exactly as it is. Without this a second
+      // tap of "Record" — a slow connection, a teacher pressing twice — bills
+      // the same child for the same lunch again, and the ledger believes it.
+      const existing = db.prepare('SELECT status FROM canteen_day_status WHERE student_id = ? AND date = ?').get(sid, date);
+      if (existing && (existing.status === 'paid' || existing.status === 'exempt')) continue;
+
+      const payRes = db.prepare(`
+        INSERT INTO canteen_payments
+          (student_id, term_id, payment_date, amount, days_covered, start_date, end_date,
+           received_by, notes)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'Bulk daily collection')
+      `).run(sid, termId, today, dailyRate, date, date, receivedBy || null);
+
+      db.prepare(`
+        INSERT INTO canteen_day_status (student_id, date, status, payment_id)
+        VALUES (?, ?, 'paid', ?)
+        ON CONFLICT (student_id, date) DO UPDATE SET
+          status = 'paid', payment_id = excluded.payment_id
+      `).run(sid, date, payRes.lastInsertRowid);
+
+      // Post this collection to the finance ledger. This was missing
+      // entirely: the whole-class daily collection created payment rows and
+      // marked the days paid, but never posted income — so real cash taken
+      // at the gate never appeared in Finance, and the canteen module
+      // reported money the ledger had no record of.
+      postIncome(db, {
+        category: 'canteen',
+        amount: dailyRate,
+        description: `Canteen — ${date} (daily collection)`,
+        payment_method: paymentMethod || 'Cash',
+        date: today,
+        term_id: termId,
+        source: 'canteen_bulk',
+        student_id: sid,
+        linked_canteen_payment_id: payRes.lastInsertRowid,
+        recorded_by: receivedBy || null,
+        is_auto: 1,
+      });
+
+      totalAmount += dailyRate;
+      marked++;
+    }
+    return { total: Math.round(totalAmount * 100) / 100, marked };
+  });
+
+  const { total, marked } = tx();
+  return { ok: true, count: marked, skipped: studentIds.length - marked, total, daily_rate: dailyRate };
+}
+
+// Excuse a pupil from paying on given days — absent, or excused by the office.
+function markExempt(db, { studentId, dates }) {
+  if (!dates || dates.length === 0) return { ok: false, error: 'No dates given.' };
+  const stmt = db.prepare(`
+    INSERT INTO canteen_day_status (student_id, date, status)
+    VALUES (?, ?, 'exempt')
+    ON CONFLICT (student_id, date) DO UPDATE SET status = 'exempt'
+  `);
+  // A day already paid for is not quietly turned into an exemption: that would
+  // strand a real payment row against a day the school now says was free.
+  const paid = db.prepare("SELECT date FROM canteen_day_status WHERE student_id = ? AND status = 'paid'").all(studentId)
+    .map(r => r.date);
+  const doable = dates.filter(d => !paid.includes(d));
+  const tx = db.transaction(() => { for (const d of doable) stmt.run(studentId, d); });
+  tx();
+  return { ok: true, count: doable.length, skipped: dates.length - doable.length };
+}
+
 module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
 
   // ── Dashboard ────────────────────────────────────────
@@ -150,37 +269,7 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
   });
 
   // ── Class roster for a date (for quick-pay) ──────────
-  ipcMain.handle('canteen:class-roster-for-date', (_e, { classId, date }) => {
-    const students = db.prepare(`
-      SELECT s.id, s.index_number, s.surname, s.first_name, s.photo_path
-      FROM students s
-      WHERE s.current_class_id = ? AND s.status = 'Active'
-      ORDER BY s.surname, s.first_name
-    `).all(classId);
-
-    if (students.length === 0) return [];
-
-    // Get attendance and canteen status for this date
-    const sids = students.map(s => s.id);
-    const placeholders = sids.map(() => '?').join(',');
-    const att = db.prepare(`
-      SELECT student_id, status FROM student_attendance
-      WHERE student_id IN (${placeholders}) AND date = ?
-    `).all(...sids, date);
-    const attMap = Object.fromEntries(att.map(a => [a.student_id, a.status]));
-
-    const cds = db.prepare(`
-      SELECT student_id, status FROM canteen_day_status
-      WHERE student_id IN (${placeholders}) AND date = ?
-    `).all(...sids, date);
-    const cdsMap = Object.fromEntries(cds.map(c => [c.student_id, c.status]));
-
-    return students.map(s => ({
-      ...s,
-      attendance_status: attMap[s.id] || null,
-      canteen_status: cdsMap[s.id] || 'unpaid',
-    }));
-  });
+  ipcMain.handle('canteen:class-roster-for-date', (_e, { classId, date }) => classRosterForDate(db, classId, date));
 
   // ── WHONET multi-day canteen sheet (students × multiple dates) ──
   // Returns each student with their canteen status for each given date.
@@ -391,73 +480,12 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
   });
 
   // ── Mark bulk paid for a class on a date (quick daily pay) ──
-  ipcMain.handle('canteen:mark-bulk-paid', (_e, { studentIds, date, paymentMethod, receivedBy }) => {
-    if (!studentIds || studentIds.length === 0) return { ok: false, error: 'No students selected' };
-    const dailyRate = getDailyRate(db);
-    const today = new Date().toISOString().slice(0, 10);
-
-    const termId = resolveCanteenTerm(db, date);
-
-    const tx = db.transaction(() => {
-      let totalAmount = 0;
-      for (const sid of studentIds) {
-        // Create individual payment for each student
-        const payRes = db.prepare(`
-          INSERT INTO canteen_payments
-            (student_id, term_id, payment_date, amount, days_covered, start_date, end_date,
-             received_by, notes)
-          VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'Bulk daily collection')
-        `).run(sid, termId, today, dailyRate, date, date, receivedBy || null);
-
-        db.prepare(`
-          INSERT INTO canteen_day_status (student_id, date, status, payment_id)
-          VALUES (?, ?, 'paid', ?)
-          ON CONFLICT (student_id, date) DO UPDATE SET
-            status = 'paid', payment_id = excluded.payment_id
-        `).run(sid, date, payRes.lastInsertRowid);
-
-        // Post this collection to the finance ledger. This was missing
-        // entirely: the whole-class daily collection created payment rows and
-        // marked the days paid, but never posted income — so real cash taken
-        // at the gate never appeared in Finance, and the canteen module
-        // reported money the ledger had no record of.
-        postIncome(db, {
-          category: 'canteen',
-          amount: dailyRate,
-          description: `Canteen — ${date} (daily collection)`,
-          payment_method: paymentMethod || 'Cash',
-          date: today,
-          term_id: termId,
-          source: 'canteen_bulk',
-          student_id: sid,
-          linked_canteen_payment_id: payRes.lastInsertRowid,
-          recorded_by: receivedBy || null,
-          is_auto: 1,
-        });
-
-        totalAmount += dailyRate;
-      }
-      return Math.round(totalAmount * 100) / 100;
-    });
-
-    const total = tx();
-    return { ok: true, count: studentIds.length, total };
-  });
+  ipcMain.handle('canteen:mark-bulk-paid', (_e, { studentIds, date, paymentMethod, receivedBy }) =>
+    markBulkPaid(db, { studentIds, date, paymentMethod, receivedBy }));
 
   // ── Mark exempt (absent or excused) for a student on dates ──
-  ipcMain.handle('canteen:mark-exempt', (_e, { studentId, dates, reason }) => {
-    if (!dates || dates.length === 0) return { ok: false };
-    const stmt = db.prepare(`
-      INSERT INTO canteen_day_status (student_id, date, status)
-      VALUES (?, ?, 'exempt')
-      ON CONFLICT (student_id, date) DO UPDATE SET status = 'exempt'
-    `);
-    const tx = db.transaction(() => {
-      for (const d of dates) stmt.run(studentId, d);
-    });
-    tx();
-    return { ok: true, count: dates.length };
-  });
+  ipcMain.handle('canteen:mark-exempt', (_e, { studentId, dates, reason }) =>
+    markExempt(db, { studentId, dates, reason }));
 
   // ── Apply attendance-linked exemption for a date range ──
   // For every student absent on a school day, mark canteen as exempt
@@ -483,3 +511,11 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
     return { ok: true, count: result.changes };
   });
 };
+
+// Shared with the mobile/web API (electron/server/staff_api.js), so a teacher
+// collecting on a phone runs the same code as the office does on the desktop.
+module.exports.classRosterForDate = classRosterForDate;
+module.exports.markBulkPaid = markBulkPaid;
+module.exports.markExempt = markExempt;
+module.exports.getDailyRate = getDailyRate;
+module.exports.resolveCanteenTerm = resolveCanteenTerm;

@@ -1,14 +1,17 @@
 // Parent home — each child, and what they owe.
 // Copyright © 2026 Nickland Sales. All rights reserved.
 import React, { useCallback, useState } from 'react';
-import { View, Text, RefreshControl } from 'react-native';
+import { View, Text, RefreshControl, TouchableOpacity } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { api, money } from '../../src/api';
 import {
-  Screen, Card, Section, Title, Heading, Muted, Micro, Badge, Avatar,
+  Screen, Card, Section, Title, Heading, Body, Muted, Micro, Badge, Avatar,
   ErrorNote, Skeleton, EmptyState, Grid, StatCard, Gradient, ProgressBar,
+  Hero, HeroStat, Crest, ListRow, Divider, Toolbar, Button,
 } from '../../src/ui';
+import { useBranding } from '../../src/brand';
+import { ContactSchool, SettleBalance } from '../../src/actions';
 import { Icon } from '../../src/icons';
 import { useLayout } from '../../src/responsive';
 import { colors, gradients, spacing, radius, shadow, type } from '../../src/theme';
@@ -17,14 +20,22 @@ export default function Children() {
   const { token, profile } = useAuth();
   const router = useRouter();
   const layout = useLayout();
+  const brand = useBranding();
   const [children, setChildren] = useState(null);
+  const [notices, setNotices] = useState([]);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
-    try { const r = await api.children(token); setChildren(r.children || []); }
-    catch (e) { setError(e.message); setChildren([]); }
+    try {
+      const [r, n] = await Promise.all([
+        api.children(token),
+        api.parentNotifications(token).catch(() => ({ notifications: [] })),
+      ]);
+      setChildren(r.children || []);
+      setNotices(n.notifications || []);
+    } catch (e) { setError(e.message); setChildren([]); }
   }, [token]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -32,68 +43,96 @@ export default function Children() {
   if (children === null) return <Screen><Card><Skeleton rows={3} height={110} /></Card></Screen>;
 
   const owed = children.reduce((n, c) => n + (c.fees?.balance || 0) + (c.canteen?.amount_owed || 0), 0);
+  const parentName = profile?.parent?.full_name;
 
   return (
     <Screen refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}>
       <ErrorNote message={error} />
 
       {children.length === 0 ? (
-        <Card>
-          <EmptyState
-            icon="users" title="No children linked yet"
-            message="Ask the school to link your child to this account. They match on the phone number or email you gave them."
-          />
-        </Card>
+        <>
+          <Card>
+            <EmptyState
+              icon="users" title="No children linked yet"
+              message="Ask the school to link your child to this account. They match on the phone number or email you gave them."
+              action={<ContactSchool title="Message the school" icon="whatsapp" full={false} />}
+            />
+          </Card>
+        </>
       ) : (
         <>
-          <Gradient colors={gradients.brand} angle={130} style={[{ borderRadius: radius.lg, padding: spacing.xl }, shadow.raised]}>
-            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12.5, fontWeight: '700', letterSpacing: 0.4 }}>
-              {String(profile?.parent?.full_name || 'WELCOME').toUpperCase()}
-            </Text>
-            <Text style={{ color: '#fff', fontSize: layout.isPhone ? 24 : 30, fontWeight: '800', letterSpacing: -0.6, marginTop: 4 }}>
-              {children.length} {children.length === 1 ? 'child' : 'children'} at school
-            </Text>
-            <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 14, fontWeight: '600', marginTop: 4 }}>
-              {owed > 0 ? `${money(owed)} outstanding across fees and canteen` : 'Everything is settled — nothing owing'}
-            </Text>
-          </Gradient>
+          <Hero
+            crest={<Crest logo={brand.logo} size={layout.isPhone ? 46 : 58} tone="chrome" />}
+            eyebrow={brand.school?.name || 'Welcome'}
+            title={parentName || 'Welcome'}
+            subtitle={`${children.length} ${children.length === 1 ? 'child' : 'children'} at school · ${
+              owed > 0 ? `${money(owed)} outstanding across fees and canteen` : 'everything settled — nothing owing'
+            }`}
+            right={layout.isPhone ? null : (
+              <View style={{ gap: spacing.sm, alignItems: 'flex-end' }}>
+                <HeroStat label="Outstanding" value={money(owed)} tone={owed > 0 ? 'danger' : 'light'} />
+              </View>
+            )}
+          />
 
-          <Grid min={220} columns={layout.isDesktop ? 2 : 1}>
+          {/* The school is one tap away from the first screen a parent opens.
+              Before this the only way to reach it was to find the class
+              teacher's thread, which most parents never had. */}
+          <Card>
+            <Toolbar>
+              <ContactSchool variant="subtle" size="sm" title="Message the school" icon="whatsapp" />
+              <Button
+                variant="ghost" size="sm" icon="bell" title="Notices" full={false}
+                onPress={() => router.push('/parent/notifications')}
+              />
+              <Button
+                variant="ghost" size="sm" icon="chat" title="Conversations" full={false}
+                onPress={() => router.push('/parent/messages')}
+              />
+            </Toolbar>
+          </Card>
+
+          <Grid min={260} columns={layout.isDesktop ? 2 : 1}>
             {children.map(c => {
               const feeBal = c.fees?.balance || 0;
               const canteen = c.canteen?.amount_owed || 0;
+              const childOwed = { fees: feeBal, canteen, books: c.fees?.books_balance || 0, total: feeBal + canteen };
               return (
-                <Card key={c.id} onPress={() => router.push(`/parent/child/${c.id}`)} elevated>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
-                    <Avatar name={c.name} size={46} />
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text numberOfLines={1} style={{ ...type.heading, color: colors.text }}>{c.name}</Text>
-                      <Muted numberOfLines={1}>{[c.class_name, c.index_number].filter(Boolean).join(' · ')}</Muted>
+                <Card key={c.id} elevated>
+                  <TouchableOpacity activeOpacity={0.8} onPress={() => router.push(`/parent/child/${c.id}`)}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+                      {/* The child's own photograph. The app has always been
+                          sent one; it simply never drew it. */}
+                      <Avatar name={c.name} photo={c.photo} size={54} />
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text numberOfLines={1} style={{ ...type.heading, color: colors.text }}>{c.name}</Text>
+                        <Muted numberOfLines={1}>{[c.class_name, c.index_number].filter(Boolean).join(' · ')}</Muted>
+                        {c.class_teacher ? <Muted numberOfLines={1}>Class teacher: {c.class_teacher}</Muted> : null}
+                      </View>
+                      <Icon name="chevron" size={16} color={colors.faint} />
                     </View>
-                    <Icon name="chevron" size={16} color={colors.faint} />
-                  </View>
 
-                  <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg }}>
-                    <View style={{ flex: 1, backgroundColor: colors.surfaceAlt, borderRadius: radius.md, padding: spacing.md }}>
-                      <Micro>School fees</Micro>
-                      <Text style={{ ...type.body, fontWeight: '800', marginTop: 2, color: feeBal > 0 ? colors.danger : colors.success }}>
-                        {money(feeBal)}
-                      </Text>
+                    <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg }}>
+                      <Money label="School fees" value={feeBal} />
+                      <Money label="Canteen" value={canteen} />
                     </View>
-                    <View style={{ flex: 1, backgroundColor: colors.surfaceAlt, borderRadius: radius.md, padding: spacing.md }}>
-                      <Micro>Canteen</Micro>
-                      <Text style={{ ...type.body, fontWeight: '800', marginTop: 2, color: canteen > 0 ? colors.danger : colors.success }}>
-                        {money(canteen)}
-                      </Text>
-                    </View>
-                  </View>
 
-                  {c.fees?.billed ? (
+                    {c.fees?.billed ? (
+                      <View style={{ marginTop: spacing.md }}>
+                        <ProgressBar
+                          value={c.fees.paid} max={c.fees.billed}
+                          tone={feeBal > 0 ? 'warning' : 'success'}
+                          label={`${money(c.fees.paid)} of ${money(c.fees.billed)} paid`}
+                        />
+                      </View>
+                    ) : null}
+                  </TouchableOpacity>
+
+                  {childOwed.total > 0 ? (
                     <View style={{ marginTop: spacing.md }}>
-                      <ProgressBar
-                        value={c.fees.paid} max={c.fees.billed}
-                        tone={feeBal > 0 ? 'warning' : 'success'}
-                        label={`${money(c.fees.paid)} of ${money(c.fees.billed)} paid`}
+                      <SettleBalance
+                        child={c} owed={childOwed} term={c.term}
+                        parentName={parentName} variant="subtle" size="sm" full
                       />
                     </View>
                   ) : null}
@@ -101,8 +140,37 @@ export default function Children() {
               );
             })}
           </Grid>
+
+          {notices.length ? (
+            <Section
+              title="From the school" icon="bell"
+              subtitle="The latest notices and messages."
+              action={<Button size="sm" variant="ghost" title="All notices" full={false} onPress={() => router.push('/parent/notifications')} />}
+            >
+              {notices.slice(0, 4).map((n, i) => (
+                <View key={n.id ?? i} style={{ paddingVertical: 8 }}>
+                  {n.title ? <Text style={{ ...type.body, fontWeight: '700', color: colors.text }}>{n.title}</Text> : null}
+                  <Muted numberOfLines={2} style={{ marginTop: 2 }}>{n.body || n.message_body}</Muted>
+                  {n.at || n.sent_at ? <Micro style={{ marginTop: 3 }}>{String(n.at || n.sent_at).slice(0, 16).replace('T', ' ')}</Micro> : null}
+                  {i < Math.min(3, notices.length - 1) ? <Divider /> : null}
+                </View>
+              ))}
+            </Section>
+          ) : null}
         </>
       )}
     </Screen>
+  );
+}
+
+// A figure that is money, in the tile a parent's eye goes to first.
+function Money({ label, value }) {
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.surfaceAlt, borderRadius: radius.md, padding: spacing.md }}>
+      <Micro>{label}</Micro>
+      <Text style={{ ...type.body, fontWeight: '800', marginTop: 3, color: value > 0 ? colors.danger : colors.success, fontVariant: ['tabular-nums'] }}>
+        {money(value)}
+      </Text>
+    </View>
   );
 }

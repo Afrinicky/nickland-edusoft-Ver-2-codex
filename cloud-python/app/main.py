@@ -94,6 +94,36 @@ def create_app(store=None) -> FastAPI:
     def schools():
         return {"ok": True, "schools": S().list_schools()}
 
+    # ── One school's identity ──
+    # Public, and answered before anyone signs in: a parent opening the portal
+    # should see their own school's crest and name, not a generic page. The
+    # desktop projects this (see electron/server/sync/outbox.js
+    # `enqueueSchoolProfile`), so the portal and the app on the school Wi-Fi
+    # draw the same crest and offer the same contact numbers.
+    #
+    # A school that has not yet pushed one falls back to its name, which is all
+    # the portal has ever had — no worse than before, and never an error.
+    @app.get("/api/v1/portal/branding")
+    def portal_branding(school_id: str = ""):
+        if not school_id:
+            return _err(400, "school_id is required")
+        name = next((s["name"] for s in S().list_schools() if str(s["school_id"]) == str(school_id)), None)
+        if name is None:
+            return _err(404, "Unknown school")
+        rec = next((s["payload"] for s in S().list_snapshots(school_id, "school_profile")
+                    if s.get("payload")), None)
+        if not rec:
+            return {"ok": True, "school": {"name": name}, "contact": {}, "logo": None, "currency": "GHS"}
+        school = dict(rec.get("school") or {})
+        school.setdefault("name", name)
+        return {
+            "ok": True,
+            "school": school,
+            "contact": rec.get("contact") or {},
+            "logo": rec.get("logo"),
+            "currency": rec.get("currency") or "GHS",
+        }
+
     @app.post("/api/v1/portal/login")
     async def login(request: Request):
         body = await _json(request)

@@ -2,6 +2,21 @@
 const fs = require('fs');
 const path = require('path');
 
+// Settings the parent and teacher apps read: the school's name, its crest, and
+// the numbers the "Message the school" button dials. When one of them changes,
+// the copy the internet portal serves has to change with it — otherwise a school
+// that updates its WhatsApp number finds parents still messaging the old one.
+const PROJECTED_KEYS = new Set([
+  'school_name', 'school_abbreviation', 'school_motto', 'school_type',
+  'school_location', 'school_address', 'school_digital_address', 'school_website',
+  'school_email', 'school_phone_1', 'school_phone_2', 'school_whatsapp',
+  'school_logo_path', 'payment_currency',
+]);
+
+function reprojectSchool(db) {
+  try { require('../server/sync/outbox').enqueueSchoolProfile(db); } catch (_) {}
+}
+
 function registerSettingsHandlers(ipcMain, db, getResourcePath) {
   // ===== Generic key-value settings =====
   ipcMain.handle('settings:get-all', () => {
@@ -23,6 +38,7 @@ function registerSettingsHandlers(ipcMain, db, getResourcePath) {
       db.prepare('INSERT INTO settings (key, value, category) VALUES (?, ?, ?)')
         .run(key, String(value ?? ''), 'custom');
     }
+    if (PROJECTED_KEYS.has(key)) reprojectSchool(db);
     return { ok: true };
   });
 
@@ -34,6 +50,10 @@ function registerSettingsHandlers(ipcMain, db, getResourcePath) {
     const destPath = path.join(destDir, `school_logo${ext}`);
     fs.copyFileSync(sourcePath, destPath);
     db.prepare("UPDATE settings SET value = ? WHERE key = 'school_logo_path'").run(destPath);
+    // A new crest has to reach the browser portal too, and a stale cached copy
+    // of the old file would otherwise be served until the host restarted.
+    try { require('../server/media').forget(); } catch (_) {}
+    reprojectSchool(db);
     return { ok: true, path: destPath };
   });
 

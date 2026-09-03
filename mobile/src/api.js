@@ -3,8 +3,8 @@
 // Two connection modes, one method surface:
 //   • host  — talks to a school's DESKTOP, over the school Wi-Fi or a tunnel:
 //             http(s)://<address>/api/v1, routes under /auth/*, /parent/* and
-//             the staff routes. Everything, including taking payments, and it
-//             works with the internet down.
+//             the staff routes. Everything a school does, and it works with
+//             the internet down.
 //   • cloud — talks to the hosted multi-tenant service over the internet:
 //             https://<portal>/api/v1, routes under /portal/* for parents and
 //             /staff/* for teachers. Works with the school's DESKTOP switched
@@ -13,8 +13,15 @@
 //
 // Cloud responses are normalised here into the SAME shapes the screens already
 // use, so no screen knows or cares which mode it is running in. Where the
-// cloud genuinely cannot do something — taking a fee payment, which needs the
-// desktop's own receipt numbering — the method says so rather than pretending.
+// cloud genuinely cannot do something, the method says so rather than
+// pretending.
+//
+// One thing neither mode does any more: move money. The app used to offer a
+// card/mobile-money checkout and a "tell the school what you paid" form. Both
+// are gone, along with the routes behind them. A balance is shown, in full and
+// itemised, and settling it hands the parent to the school's own WhatsApp or
+// telephone — which is how these schools take money anyway, and which cannot be
+// gamed by anything typed into a phone.
 
 let BASE = null;
 let MODE = 'host';          // 'host' | 'cloud'
@@ -109,6 +116,92 @@ async function cloudChildReport(token, id) {
   };
 }
 
+// The cloud carries a snapshot, not the school's whole ledger. These reshape
+// what it does have into the shapes the screens expect, and are honest about
+// what it does not: a bill's line items and the year's payment history live on
+// the desktop, so over the internet a parent sees the totals and the receipts
+// the portal was given rather than an empty table pretending to be complete.
+async function cloudChildFees(token, id) {
+  const c = (await cloudChildren(token)).find(x => String(x.id) === String(id));
+  if (!c) { const e = new Error('Child not found.'); e.status = 404; throw e; }
+  let payments = [];
+  try {
+    const rc = await request('/portal/receipts', { token });
+    payments = (rc.receipts || [])
+      .filter(r => String(r.student_id) === String(id))
+      .map(r => ({
+        receipt_number: r.receipt_number, payment_date: r.date,
+        payment_method: r.payment_method, amount: r.amount, term_label: null,
+      }));
+  } catch (_) {}
+  const fees = c.fees || { billed: 0, paid: 0, balance: 0 };
+  return {
+    ok: true,
+    partial: true,
+    term: c.term ? { label: c.term } : null,
+    bill: {
+      total_billed: fees.billed || 0, total_paid: fees.paid || 0, balance: fees.balance || 0,
+      arrears_from_prev: fees.arrears || 0, discount_amount: 0,
+    },
+    items: [], history: [], books: null, payments,
+  };
+}
+
+async function cloudChildCanteen(token, id) {
+  const c = (await cloudChildren(token)).find(x => String(x.id) === String(id));
+  const ct = (c && c.canteen) || { unpaid_days: 0, amount_owed: 0 };
+  return {
+    ok: true, partial: true,
+    daily_rate: ct.daily_rate || null,
+    term: c && c.term ? { label: c.term } : null,
+    unpaid_days: ct.unpaid_days || 0, amount_owed: ct.amount_owed || 0,
+    paid_days: 0, exempt_days: 0, days: [], payments: [],
+  };
+}
+
+async function cloudChildReports(token, id) {
+  const c = (await cloudChildren(token)).find(x => String(x.id) === String(id));
+  const rep = c && c.report;
+  if (!rep) return { ok: true, terms: [], partial: true };
+  return {
+    ok: true, partial: true,
+    terms: [{
+      id: null, label: rep.term || 'This term',
+      average_score: rep.average, class_rank: rep.rank,
+      number_on_roll: rep.number_on_roll,
+      subject_count: (rep.subjects || []).length,
+    }],
+  };
+}
+
+// Over the internet the school's contact details come from the portal's
+// branding record rather than from a route on the desktop, but the shape the
+// screen consumes is identical either way.
+async function cloudSettle(token, id) {
+  const c = (await cloudChildren(token)).find(x => String(x.id) === String(id));
+  if (!c) { const e = new Error('Child not found.'); e.status = 404; throw e; }
+  let brand = {};
+  try { brand = await api.branding(); } catch (_) {}
+  const fees = c.fees || {}; const ct = c.canteen || {};
+  return {
+    ok: true,
+    child: { id: c.id, name: c.name, class_name: c.class_name, index_number: c.index_number },
+    owed: {
+      fees: fees.balance || 0, canteen: ct.amount_owed || 0, books: 0,
+      total: (fees.balance || 0) + (ct.amount_owed || 0),
+    },
+    term: c.term ? { label: c.term } : null,
+    contact: {
+      school: (brand.school && brand.school.name) || '',
+      phone: (brand.contact && brand.contact.phone) || '',
+      whatsapp: (brand.contact && brand.contact.whatsapp) || '',
+      email: (brand.contact && brand.contact.email) || '',
+      address: (brand.school && brand.school.address) || '',
+    },
+    instructions: 'Payments are arranged with the school directly. Send a message or call, and the office will confirm the amount and how to pay.',
+  };
+}
+
 // A few things genuinely need the desktop: taking a fee payment writes a
 // receipt against the school's own numbering, and a parent registering has to
 // be matched against the school's guardian contacts. Both say so plainly
@@ -124,6 +217,9 @@ const staffPath = (path) => (MODE === 'cloud' ? `/staff${path}` : path);
 export const api = {
   // Public
   info: () => request('/info'),
+  // The school's crest, name and contact details. Public: the sign-in screen
+  // should show the parent their own school before they have typed anything.
+  branding: () => request(MODE === 'cloud' ? `/portal/branding?school_id=${encodeURIComponent(SCHOOL_ID || '')}` : '/branding'),
   health: () => request('/health'),
   schools: () => request('/portal/schools'),          // cloud: list tenants to pick from
   staffLogin: (username, password, device) =>
@@ -227,18 +323,55 @@ export const api = {
     MODE === 'cloud' ? cloudChildren(token).then(children => ({ ok: true, children })) : request('/parent/children', { token }),
   child: (token, id) =>
     MODE === 'cloud' ? cloudChild(token, id) : request(`/parent/children/${id}`, { token }),
-  childReport: (token, id) =>
-    MODE === 'cloud' ? cloudChildReport(token, id) : request(`/parent/children/${id}/report`, { token }),
+  childReport: (token, id, termId) =>
+    MODE === 'cloud'
+      ? cloudChildReport(token, id)
+      : request(`/parent/children/${id}/report${termId ? `?termId=${termId}` : ''}`, { token }),
   childIntents: (token, id) =>
     MODE === 'cloud' ? Promise.resolve({ ok: true, intents: [] }) : request(`/parent/children/${id}/intents`, { token }),
-  // Payments are a host/tunnel capability (the cloud is read-only). The child
-  // screen hides these controls in cloud mode; guard here as a backstop.
-  pay: (token, id, opts) =>
-    MODE === 'cloud' ? hostOnly('Making a payment')() : request(`/parent/children/${id}/pay`, { method: 'POST', token, body: opts }),
-  payOnline: (token, id, { amount, email }) =>
-    MODE === 'cloud' ? hostOnly('Online payment')() : request(`/parent/children/${id}/pay/online`, { method: 'POST', token, body: { amount, email } }),
-  verifyPayment: (token, reference) =>
-    MODE === 'cloud' ? hostOnly('Payment verification')() : request(`/parent/pay/verify/${encodeURIComponent(reference)}`, { token }),
+  // What is owed, and who to talk to about it. The nearest thing to a payment
+  // route this app has, and it deliberately moves nothing: it returns the
+  // figures and the school's contact details, and the screen turns that into a
+  // pre-written WhatsApp message.
+  settle: (token, id) =>
+    MODE === 'cloud'
+      ? cloudSettle(token, id)
+      : request(`/parent/children/${id}/settle`, { token }),
+
+  // The bill, line by line, with every payment ever received against it and a
+  // term-by-term history so a carry-forward can be traced to where it came from.
+  childFees: (token, id, termId) =>
+    MODE === 'cloud'
+      ? cloudChildFees(token, id)
+      : request(`/parent/children/${id}/fees${termId ? `?termId=${termId}` : ''}`, { token }),
+
+  // The canteen, day by day, and every collection recorded.
+  childCanteen: (token, id) =>
+    MODE === 'cloud'
+      ? cloudChildCanteen(token, id)
+      : request(`/parent/children/${id}/canteen`, { token }),
+
+  // Which terms this child has a published report for. Over the internet the
+  // projection carries the current term only, so the list is that one term
+  // rather than an empty picker.
+  childReports: (token, id) =>
+    MODE === 'cloud'
+      ? cloudChildReports(token, id)
+      : request(`/parent/children/${id}/reports`, { token }),
+
+  // The register, day by day.
+  childAttendance: (token, id) =>
+    MODE === 'cloud'
+      ? cloudChild(token, id).then(c => ({
+          ok: true, days: [], totals: c.attendance || { present: 0, absent: 0, total: 0 },
+        }))
+      : request(`/parent/children/${id}/attendance`, { token }),
+
+  // The child's own record, laid out for printing.
+  childProfile: (token, id) =>
+    MODE === 'cloud'
+      ? hostOnly("A pupil's full profile")()
+      : request(`/parent/children/${id}/profile`, { token }),
   parentNotifications: (token) =>
     MODE === 'cloud'
       ? request('/portal/announcements', { token }).then(r => ({
@@ -321,7 +454,11 @@ export const api = {
   // queue writes for the desktop to apply — which is what lets a teacher mark
   // a register at home with the school's machine switched off.
   dashboard: (token) => request(staffPath('/dashboard'), { token }),
-  students: (token, classId) => request(staffPath(`/students${classId ? `?classId=${classId}` : ''}`), { token }),
+  students: (token, classId, opts = {}) => {
+    const q = [classId ? `classId=${classId}` : '', opts.photos && classId ? 'photos=1' : '']
+      .filter(Boolean).join('&');
+    return request(staffPath(`/students${q ? `?${q}` : ''}`), { token });
+  },
   debtors: (token) => request(MODE === 'cloud' ? '/staff/debtors' : '/fees/debtors', { token }),
   classes: (token) => request(staffPath('/classes'), { token }),
 
@@ -338,6 +475,27 @@ export const api = {
   canteenStudent: (token, studentId) => request(staffPath(`/canteen/student/${studentId}`), { token }),
   canteenCollect: (token, { student_id, amount, payment_method, notes }) =>
     request(staffPath('/canteen/collect'), { method: 'POST', token, body: { student_id, amount, payment_method, notes } }),
+
+  // ── Conduct: commendations and incidents ──
+  // The desktop has kept this per pupil since the first release and neither
+  // app could read it. A teacher records it; a parent sees the same list.
+  studentEvents: (token, id) => request(staffPath(`/students/${id}/events`), { token }),
+  addStudentEvent: (token, id, { eventType, title, description, date }) =>
+    MODE === 'cloud'
+      ? hostOnly('Recording conduct')()
+      : request(`/students/${id}/events`, { method: 'POST', token, body: { eventType, title, description, date } }),
+  childConduct: (token, id) =>
+    MODE === 'cloud'
+      ? Promise.resolve({ ok: true, events: [], partial: true })
+      : request(`/parent/children/${id}/conduct`, { token }),
+
+  // ── Staff — the class's contact book ──
+  // Every guardian in one class in one request, so a teacher can ring or
+  // message a parent from the roll rather than opening records one at a time.
+  classContacts: (token, classId) =>
+    MODE === 'cloud'
+      ? hostOnly("A class's contact book")()
+      : request(`/classes/${classId}/contacts`, { token }),
 
   // ── Staff — a pupil's record ──
   student: (token, id) => request(staffPath(`/students/${id}`), { token }),
@@ -411,6 +569,24 @@ export const api = {
 
   // ── Staff — canteen sheet and class timetable ──
   canteenClass: (token, classId) => request(staffPath(`/canteen/class?classId=${classId}`), { token }),
+
+  // ── Canteen: the daily collection ──
+  // The desktop's quick-pay, which the teacher's app never had: the class for
+  // one day, who has paid, who was absent, and one press to mark the rest.
+  // Host-only by design — the roster is a live read and the money is real, so
+  // it is not something to queue from a phone with the school's computer off.
+  canteenQuickPay: (token, classId, date) =>
+    MODE === 'cloud'
+      ? hostOnly('The daily canteen collection')()
+      : request(`/canteen/quick-pay?classId=${classId}&date=${encodeURIComponent(date)}`, { token }),
+  canteenQuickPaySave: (token, { classId, date, studentIds, paymentMethod }) =>
+    MODE === 'cloud'
+      ? hostOnly('The daily canteen collection')()
+      : request('/canteen/quick-pay', { method: 'POST', token, body: { classId, date, studentIds, paymentMethod } }),
+  canteenExempt: (token, { classId, date, studentIds, reason }) =>
+    MODE === 'cloud'
+      ? hostOnly('Excusing a pupil from the canteen')()
+      : request('/canteen/exempt', { method: 'POST', token, body: { classId, date, studentIds, reason } }),
   classTimetable: (token, classId) =>
     MODE === 'cloud'
       ? hostOnly('A class timetable')()

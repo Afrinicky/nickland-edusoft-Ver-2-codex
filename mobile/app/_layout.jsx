@@ -8,26 +8,40 @@ import React from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { AuthProvider } from '../src/auth';
+import { AuthProvider, useAuth } from '../src/auth';
+import { BrandingProvider } from '../src/brand';
 import { colors } from '../src/theme';
 
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <StatusBar style="light" />
-        <Stack screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: colors.bg },
-          animation: 'fade',
-        }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="connect" />
-          <Stack.Screen name="login" />
-          <Stack.Screen name="parent" />
-          <Stack.Screen name="staff" />
-        </Stack>
+        <Branded />
       </AuthProvider>
     </SafeAreaProvider>
+  );
+}
+
+// The school's crest and its contact numbers, fetched once the connection is
+// known and before anyone signs in — so the login screen shows the parent
+// their own school rather than a generic blue page, and every "Message the
+// school" button in either portal has a number to dial.
+function Branded() {
+  const { host } = useAuth();
+  return (
+    <BrandingProvider host={host}>
+      <StatusBar style="light" />
+      <Stack screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: colors.bg },
+        animation: 'fade',
+      }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="connect" />
+        <Stack.Screen name="login" />
+        <Stack.Screen name="parent" />
+        <Stack.Screen name="staff" />
+      </Stack>
+    </BrandingProvider>
   );
 }

@@ -75,6 +75,29 @@ function createServer(store) {
         const schools = await store.listSchools();
         return json(res, 200, { ok: true, schools });
       }
+
+      // One school's identity — its crest, its name, and the numbers a parent
+      // is sent to when they tap "Message the school". Public and answered
+      // before sign-in, so the portal opens on the parent's own school rather
+      // than a generic page. Projected by the desktop as `school_profile`; a
+      // school that has not pushed one falls back to its name.
+      if (p === '/api/v1/portal/branding' && req.method === 'GET') {
+        const schoolId = (parsed.query && parsed.query.school_id) || '';
+        if (!schoolId) return json(res, 400, { ok: false, error: 'school_id is required' });
+        const schools = await store.listSchools();
+        const found = schools.find(x => String(x.school_id) === String(schoolId));
+        if (!found) return json(res, 404, { ok: false, error: 'Unknown school' });
+        const snaps = await store.listSnapshots(schoolId, 'school_profile');
+        const rec = (snaps.find(x => x.payload) || {}).payload;
+        if (!rec) return json(res, 200, { ok: true, school: { name: found.name }, contact: {}, logo: null, currency: 'GHS' });
+        return json(res, 200, {
+          ok: true,
+          school: { name: found.name, ...(rec.school || {}) },
+          contact: rec.contact || {},
+          logo: rec.logo || null,
+          currency: rec.currency || 'GHS',
+        });
+      }
       if (p === '/api/v1/portal/login' && req.method === 'POST') {
         const body = await readBody(req);
         if (!body.school_id || !body.identifier || !body.password) return json(res, 400, { ok: false, error: 'school, identifier and password are required' });

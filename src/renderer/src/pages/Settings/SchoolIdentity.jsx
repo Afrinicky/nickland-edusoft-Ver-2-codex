@@ -30,7 +30,7 @@ export default function SchoolIdentity() {
       'school_levels_offered',
       'school_location', 'school_address', 'school_post_office_address',
       'school_digital_address', 'school_email', 'school_phone_1', 'school_phone_2',
-      'school_website',
+      'school_website', 'school_whatsapp',
       'school_organisation', 'school_company_reg_no', 'school_ges_reg_no',
       'school_tin_number', 'school_ssnit_employer_no',
     ];
@@ -147,6 +147,15 @@ export default function SchoolIdentity() {
           </Field>
           <Field label="Phone 2">
             <input className="input" value={data.school_phone_2 || ''} onChange={e => set('school_phone_2', e.target.value)} />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="WhatsApp number">
+            <input className="input" value={data.school_whatsapp || ''} onChange={e => set('school_whatsapp', e.target.value)} />
+            <div className="helper">
+              Where the parent and teacher apps send anyone who taps "Message the school",
+              and where a parent is sent to arrange payment of a balance. Leave blank to use Phone 1.
+            </div>
           </Field>
         </div>
       </div>

@@ -1171,6 +1171,10 @@ function seedDefaults(db) {
     ['school_phone_1', '', 'school'],
     ['school_phone_2', '', 'school'],
     ['school_website', '', 'school'],
+    // The number parents and staff are sent to when they tap "Message the
+    // school". Blank falls back to school_phone_1 — a school that has only
+    // ever filled in one number still gets a working chat button.
+    ['school_whatsapp', '', 'school'],
     ['school_organisation', '', 'registration'],
     ['school_company_reg_no', '', 'registration'],
     ['school_ges_reg_no', '', 'registration'],

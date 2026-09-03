@@ -34,6 +34,47 @@ fifteen screens along the bottom edge of a 1920-pixel window and hid the rest.
 Routing is unchanged — every screen still has a URL that can be typed,
 bookmarked and shared, and still guards itself.
 
+## The school's own crest, and everybody's face
+
+Both were on the desktop's hard disk all along and neither ever reached a
+phone, because the API sent the *file path* each was stored under. The crest,
+a pupil's photograph and a teacher's photograph now travel as `data:` URIs
+(`electron/server/media.js`), capped in size and cached by path and
+modification time — so they cost one read per image per host, not one per
+request per teacher.
+
+* `GET /api/v1/branding` is public and answers before anyone signs in, so the
+  sign-in page shows a parent their own school rather than a generic blue box.
+* The desktop projects the same record to the cloud, and the portal serves it
+  at `GET /api/v1/portal/branding`, so a parent on the internet sees the same
+  crest as a teacher on the school Wi-Fi.
+* A photograph that fails to decode falls back to initials, and a school with
+  no crest uploaded gets the app's own mark. Nothing renders as a hole.
+
+Set the crest in **Settings → School identity → Logo**, and the WhatsApp number
+in the same place. That number is where every "Message the school" button and
+every "settle this balance" prompt leads; leaving it blank falls back to
+Phone 1.
+
+## Nothing is paid in the app
+
+There is no checkout, no card form and no "tell the school what you paid"
+box — the routes behind them were removed, not hidden. A parent sees the bill
+line by line, what was carried forward from last term, every receipt the
+school has issued and what is still outstanding. When they tap **Settle this
+balance**, the app opens the school's WhatsApp with the child, the class, the
+term and the figures already written into the message, and the office confirms
+the amount and the method.
+
+That is how these schools take money anyway, and it means nothing typed into a
+phone can create a payment the school did not receive.
+
+Cash the school takes **in person** is untouched. The teacher's **Quick Pay**
+screen — the first tab of the canteen module, because it is what the module is
+opened for at eight in the morning — records the real notes handed over at the
+gate, running the desktop's own code so the ledger entry and the daily rate are
+identical whichever machine took it.
+
 ## One sign-in box
 
 There is no "parent or staff?" choice. Nobody answers that question at a school
@@ -68,11 +109,13 @@ is the point of the online column, and it is not a read-only consolation
 prize: the register, class work and exam marks, the broadsheet, lesson notes,
 leave, payslips and a reply to a parent all work.
 
-Four things stay with the school, and each says so plainly rather than failing
+Five things stay with the school, and each says so plainly rather than failing
 with a network error:
 
-- **Taking a fee payment** — it writes a receipt against the school's own
-  numbering.
+- **The daily canteen collection** — it reads the register live and takes real
+  cash, so it belongs on the school's own network.
+- **The class contact book** — guardian phone numbers are read from the
+  school's own system rather than projected over the internet.
 - **Marking homework** — it needs an assignment the desktop actually created.
 - **Adding an assessment column** — the desktop numbers it, and marks queued
   against an id the cloud invented would arrive pointing at nothing.
@@ -336,14 +379,15 @@ desktop re-checks the account before writing.
 A tunnel gives the school desktop an HTTPS address on the public internet.
 Point the app at it and everything works exactly as it does in the staff room:
 same database, same permissions, writes landing immediately rather than being
-queued, and the two things the cloud cannot do — taking a fee payment and
-marking homework — available. One tunnel covers both apps at once, because the
-web app and the API are on the same origin.
+queued, and the things the cloud cannot do — the daily canteen collection,
+marking homework, the class contact book — available. One tunnel covers both
+apps at once, because the web app and the API are on the same origin.
 
 It is **not** required for teachers to work off-site any more; the online
 service carries them. Set one up when a school wants off-site work to land
-instantly, or wants fee payments taken from outside the building. Its cost is
-that the desktop has to stay switched on.
+instantly, or wants the morning canteen collection to work from a phone that
+is not on the school Wi-Fi. Its cost is that the desktop has to stay switched
+on.
 
 ### Cloudflare Tunnel (free, no fixed IP, no router changes)
 
