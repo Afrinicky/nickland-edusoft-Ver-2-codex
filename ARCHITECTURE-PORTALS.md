@@ -203,6 +203,7 @@ The desktop sits in a locked office. This is on the internet.
 | Changing a role or a password | Same | **Every session revoked at once** |
 | Parent password minimum | 4 characters | **8**, with throttling and an audit trail |
 | Failed sign-ins | Counted in memory | **Written to the school's own audit log** |
+| Lockout after wrong passwords | Per account | **Per (account, source)**, so an attacker guessing at a head teacher's username cannot lock the head teacher out; a high per-account backstop still catches a distributed guess |
 | A gateway secret | Readable in Settings | **Write-only.** No route returns it; the audit row does not quote it |
 | A token | One school | **Names its school**, and its hash is only findable in that school's schema |
 | Approving a password reset | Face to face at the desktop | **Not online at all**, deliberately |

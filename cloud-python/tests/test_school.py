@@ -22,6 +22,8 @@ os.environ.setdefault("ALLOW_MEMORY_STORE", "1")
 
 from fastapi.testclient import TestClient          # noqa: E402
 
+from app import ratelimit                          # noqa: E402
+from app.school import session as session_lib      # noqa: E402
 from app.main import create_app                    # noqa: E402
 from app.school import access, db as sdb, session  # noqa: E402
 
@@ -50,6 +52,10 @@ def main():
     sdb.provision(school_id)
     db = sdb.SchoolDb(school_id)
     client = TestClient(create_app())
+    # A clean throttle, so a test that grows does not start failing on the
+    # limit rather than on what it is checking.
+    ratelimit.reset()
+    session_lib.reset_throttle()
 
     # ── a school ────────────────────────────────────────────────────────────
     def designation(name):
@@ -419,6 +425,49 @@ def main():
                     WHERE action = 'permission_denied' AND severity = 'high'""") > 10)
     ck("and so is every failed sign-in",
        db.value("SELECT count(*) FROM audit_log WHERE action = 'login_failed'") >= 1)
+
+    # ── guessing at passwords is throttled ──────────────────────────────────
+    # Per account AND per source. The per-account limit is what stops a slow
+    # guess; the per-source one stops somebody working through the school's
+    # whole user list from one place.
+    ratelimit.reset()
+    session_lib.reset_throttle()
+    refused = 0
+    for _ in range(30):
+        r = client.post("/api/v1/school/signin", json={
+            "school_id": school_id, "username": "adjei", "password": "wrong"})
+        if r.status_code == 429:
+            refused += 1
+    ck("a run of wrong passwords is throttled, not answered", refused > 0)
+    ratelimit.reset()
+    session_lib.reset_throttle()
+    ck("...and clearing it lets the right password back in",
+       client.post("/api/v1/school/signin", json={
+           "school_id": school_id, "username": "adjei", "password": "pass1234"}).json().get("ok"))
+
+    # The thing the desktop's rule would get wrong on the internet: an attacker
+    # guessing from one address must not lock the real person out from theirs.
+    # The count is per (account, source), so it does not.
+    ratelimit.reset()
+    session_lib.reset_throttle()
+    for _ in range(8):
+        client.post("/api/v1/school/signin",
+                    json={"school_id": school_id, "username": "adjei", "password": "wrong"},
+                    headers={"X-Forwarded-For": "203.0.113.9"})
+    blocked = client.post("/api/v1/school/signin",
+                          json={"school_id": school_id, "username": "adjei", "password": "wrong"},
+                          headers={"X-Forwarded-For": "203.0.113.9"})
+    ck("an attacker guessing from one address is shut out", blocked.status_code == 429)
+    ratelimit.reset()   # the per-source HTTP limit, which is by design address-bound
+    ok = client.post("/api/v1/school/signin",
+                     json={"school_id": school_id, "username": "adjei", "password": "pass1234"},
+                     headers={"X-Forwarded-For": "198.51.100.4"})
+    ck("...and the real administrator still signs in from their own phone",
+       ok.status_code == 200 and ok.json().get("ok"))
+
+    ratelimit.reset()
+    session_lib.reset_throttle()
+    tokens["adjei"] = sign_in("adjei")["token"]
 
     # ── the rest of the school ──────────────────────────────────────────────
     # Timetable, homework, notices, stock, transport, books and discounts —

@@ -11,6 +11,7 @@ and therefore the most carefully guarded route in the service. See
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
+from . import ratelimit
 from .school import db as sdb, parents, payments, security, session
 
 router = APIRouter(prefix="/api/v1/school/parent")
@@ -70,6 +71,8 @@ async def signin(request: Request):
     school_id = str(body.get("school_id") or "").strip()
     if not school_id:
         return _err(400, "Which school?")
+    if ratelimit.limited(request, "parent-signin", body.get("identifier") or body.get("phone")):
+        return _err(429, "Too many attempts. Try again shortly.")
     try:
         db = sdb.SchoolDb(school_id)
         if not db.exists():
@@ -81,7 +84,8 @@ async def signin(request: Request):
 
     result = session.parent_sign_in(db, body.get("identifier") or body.get("phone"),
                                     body.get("password"), device=body.get("device"),
-                                    platform=body.get("platform") or "online")
+                                    platform=body.get("platform") or "online",
+                                    source=ratelimit.client_ip(request))
     if not result.get("ok"):
         return _err(result.get("status", 401), result["error"])
     return {"ok": True, "token": f'{school_id}.{result["token"]}',
@@ -96,6 +100,11 @@ async def register(request: Request):
     school_id = str(body.get("school_id") or "").strip()
     if not school_id:
         return _err(400, "Which school?")
+    # Registration is a lookup against every pupil's guardian contacts, so an
+    # unthrottled one is a way to ask "is this number a parent at this school?"
+    # a thousand times a minute.
+    if ratelimit.limited(request, "parent-register", body.get("phone") or body.get("email")):
+        return _err(429, "Too many attempts. Try again shortly.")
     try:
         db = sdb.SchoolDb(school_id)
         if not db.exists():
@@ -191,6 +200,11 @@ async def pay(student_id: int, request: Request, authorization: str = Header(Non
         return refused
     if not _owned(db, actor, student_id):
         return _err(403, "Not your child.")
+    # A checkout is cheap for us and expensive for the gateway; a loop in a
+    # client should not become a thousand abandoned transactions on the
+    # school's account.
+    if ratelimit.limited(request, "pay", str(actor["parent_id"])):
+        return _err(429, "Too many attempts. Try again shortly.")
     body = await _json(request)
     return _send(payments.start_checkout(db, actor, student_id, body.get("amount"),
                                          body.get("email")))
@@ -211,6 +225,8 @@ async def declare(student_id: int, request: Request, authorization: str = Header
         return refused
     if not _owned(db, actor, student_id):
         return _err(403, "Not your child.")
+    if ratelimit.limited(request, "declare", str(actor["parent_id"])):
+        return _err(429, "Too many attempts. Try again shortly.")
     body = await _json(request)
     return _send(payments.declare(db, actor, student_id, body.get("amount"),
                                   body.get("channel"), body.get("reference"), body.get("notes")))

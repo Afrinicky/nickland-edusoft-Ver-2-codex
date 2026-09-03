@@ -24,6 +24,7 @@ os.environ.setdefault("ALLOW_MEMORY_STORE", "1")
 
 from fastapi.testclient import TestClient          # noqa: E402
 
+from app import ratelimit                          # noqa: E402
 from app.main import create_app                    # noqa: E402
 from app.school import db as sdb, parents, payments, session  # noqa: E402
 
@@ -77,6 +78,9 @@ def main():
     sdb.provision(school_id)
     db = sdb.SchoolDb(school_id)
     client = TestClient(create_app())
+    # A clean throttle, so a test that grows does not start failing on the
+    # limit rather than on what it is checking.
+    ratelimit.reset()
 
     # A school, a bursar, a pupil with a bill, and the pupil's mother.
     admin_id = db.insert("users", {

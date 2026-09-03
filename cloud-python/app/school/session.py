@@ -32,10 +32,19 @@ from . import security
 DEFAULT_TTL_DAYS = 14
 MAX_TTL_DAYS = 30
 
-# Five wrong passwords buys a lockout that keeps extending while the guessing
-# continues — the same rule the desktop applies, kept in memory here because a
-# lockout that survives a restart is a denial of service somebody can arrange.
-MAX_LOGIN_FAILURES = 5
+# Throttling a sign-in, without handing anybody a way to lock a teacher out.
+#
+# The desktop counts wrong passwords per USERNAME and locks the account for a
+# minute. On one machine in a locked office that is right. On the internet it
+# is a denial of service anybody can arrange: guess five times at the head
+# teacher's username every minute and the head teacher never gets in.
+#
+# So the count is per (account, source). An attacker guessing from one address
+# locks out that address, and the real person signing in from their own phone
+# is unaffected. A much higher per-account backstop still catches a guess
+# distributed across many addresses, at a threshold no honest person reaches.
+MAX_LOGIN_FAILURES = 5           # from one source, against one account
+MAX_ACCOUNT_FAILURES = 50        # from anywhere, against one account
 LOCKOUT_SECONDS = 60
 
 _failures = {}
@@ -76,10 +85,10 @@ def hash_password(password):
 
 
 # ── throttling ──────────────────────────────────────────────────────────────
-def _locked(key):
+def _locked(key, threshold=MAX_LOGIN_FAILURES):
     with _failures_lock:
         rec = _failures.get(key)
-        if not rec or rec["count"] < MAX_LOGIN_FAILURES:
+        if not rec or rec["count"] < threshold:
             return 0
         remaining = rec["until"] - time.time()
         if remaining <= 0:
@@ -106,11 +115,20 @@ def _clear_failures(key):
         _failures.pop(key, None)
 
 
+def reset_throttle():
+    """Clear every counter. For tests; nothing in the service calls it."""
+    with _failures_lock:
+        _failures.clear()
+
+
 # ── sign in ─────────────────────────────────────────────────────────────────
-def sign_in(db, username, password, device=None, platform=None):
+def sign_in(db, username, password, device=None, platform=None, source=None):
     username = str(username or "").strip()
-    key = f"{db.school_id}:{username.lower()}"
-    wait = _locked(key)
+    # Two keys: this source against this account, and the account from
+    # anywhere. See the note above MAX_LOGIN_FAILURES for why both.
+    source_key = f"{db.school_id}:{username.lower()}:{source or 'unknown'}"
+    account_key = f"{db.school_id}:{username.lower()}:*"
+    wait = _locked(source_key) or _locked(account_key, MAX_ACCOUNT_FAILURES)
     if wait:
         return {"ok": False, "status": 429,
                 "error": f"Too many attempts. Try again in {wait} seconds."}
@@ -122,7 +140,8 @@ def sign_in(db, username, password, device=None, platform=None):
             WHERE lower(u.username) = lower(%s)""", (username,))
 
     if not user or not user["is_active"] or not verify_password(password, user["password_hash"]):
-        count = _record_failure(key)
+        _record_failure(account_key)
+        count = _record_failure(source_key)
         security.audit(db, None, "security", None, "login_failed",
                        f'Failed sign-in for "{username}"',
                        "high" if count >= MAX_LOGIN_FAILURES else "normal")
@@ -132,7 +151,10 @@ def sign_in(db, username, password, device=None, platform=None):
         return {"ok": False, "status": 401,
                 "error": "Those details did not match an account. Check and try again."}
 
-    _clear_failures(key)
+    # A correct password clears this source's count. The account-wide backstop
+    # is left alone: if fifty wrong guesses are in flight against somebody, the
+    # fact that one of them finally worked is not a reason to stop counting.
+    _clear_failures(source_key)
     token = issue_token(db, user["id"], device=device, platform=platform)
     db.run("UPDATE users SET last_login = %s WHERE id = %s", (_now_text(), user["id"]))
     security.audit(db, {"user_id": user["id"]}, "security", user["id"], "login",
@@ -233,25 +255,27 @@ def actor_for(db, raw_token):
 # which is defensible on one machine in a locked office and is not defensible
 # on the internet. Same table, same rules, different subject type.
 
-def parent_sign_in(db, identifier, password, device=None, platform=None):
+def parent_sign_in(db, identifier, password, device=None, platform=None, source=None):
     from . import parents as parents_lib
 
     identifier = str(identifier or "").strip()
-    key = f"{db.school_id}:parent:{identifier.lower()}"
-    wait = _locked(key)
+    source_key = f"{db.school_id}:parent:{identifier.lower()}:{source or 'unknown'}"
+    account_key = f"{db.school_id}:parent:{identifier.lower()}:*"
+    wait = _locked(source_key) or _locked(account_key, MAX_ACCOUNT_FAILURES)
     if wait:
         return {"ok": False, "status": 429,
                 "error": f"Too many attempts. Try again in {wait} seconds."}
 
     result = parents_lib.sign_in(db, identifier, password)
     if not result.get("ok"):
-        count = _record_failure(key)
+        _record_failure(account_key)
+        count = _record_failure(source_key)
         security.audit(db, None, "security", None, "parent_login_failed",
                        f'Failed parent sign-in for "{identifier}"',
                        "high" if count >= MAX_LOGIN_FAILURES else "normal")
         return result
 
-    _clear_failures(key)
+    _clear_failures(source_key)
     parent = result["parent"]
     raw = secrets.token_urlsafe(32)
     try:

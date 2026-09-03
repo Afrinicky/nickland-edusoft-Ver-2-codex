@@ -28,7 +28,7 @@ import inspect
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
-from . import portals
+from . import portals, ratelimit
 from .school import (academics, admin, canteen, communications, db as sdb, fees,
                      finance, homework, payments, payroll, security, session,
                      staff, stores, students, timetable)
@@ -148,6 +148,13 @@ async def signin(request: Request):
     school_id = str(body.get("school_id") or "").strip()
     if not school_id:
         return _err(400, "Which school?")
+    # Throttled by SOURCE as well as by account. The per-account limit lives in
+    # session.sign_in and is the one that actually stops a slow guess; this one
+    # stops somebody working through a school's whole user list from one place,
+    # and it runs before the school is even looked up so a stranger cannot use
+    # this route to find out which schools exist.
+    if ratelimit.limited(request, "school-signin", body.get("username")):
+        return _err(429, "Too many attempts. Try again shortly.")
     try:
         db = sdb.SchoolDb(school_id)
         if not db.exists():
@@ -158,7 +165,9 @@ async def signin(request: Request):
         return _err(400, "Which school?")
 
     result = session.sign_in(db, body.get("username"), body.get("password"),
-                            device=body.get("device"), platform=body.get("platform") or "online")
+                             device=body.get("device"),
+                             platform=body.get("platform") or "online",
+                             source=ratelimit.client_ip(request))
     if not result.get("ok"):
         return _err(result.get("status", 401), result["error"])
 
