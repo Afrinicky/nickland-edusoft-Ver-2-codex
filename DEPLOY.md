@@ -87,11 +87,16 @@ set by hand is where the API is.
 | `EXPO_PUBLIC_PORTAL_URL` | `https://your-api.onrender.com` — no trailing slash |
 | `EXPO_PUBLIC_SCHOOL_ID` | *optional.* The `school_id` from step 2. Set it and the app skips the school picker; leave it out and a one-school portal auto-picks anyway |
 
-The build **fails** if neither `EXPO_PUBLIC_PORTAL_URL` nor
+**A Vercel build fails** if neither `EXPO_PUBLIC_PORTAL_URL` nor
 `EXPO_PUBLIC_SAME_ORIGIN_API=1` is set. That is on purpose. Without an address
 the app builds green, deploys, finds no API on its own origin, falls back to an
 empty default, and shows every user the Connect screen — with nothing in the
 build log to say why. Better to fail at the point the mistake was made.
+
+Only Vercel is held to this, on the `VERCEL` environment variable it sets
+itself. A build with no portal address is otherwise perfectly valid — it is the
+copy the desktop host serves over the school Wi-Fi, which answers for itself —
+and it is what the Actions workflow produces.
 
 `EXPO_PUBLIC_*` values are compiled **into** the bundle, so changing one needs a
 redeploy, not a restart. The build passes `--clear` for the same reason: Metro's
