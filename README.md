@@ -131,7 +131,7 @@ mobile server is already serving it. Full guide:
 | Word export | docx + docxtemplater |
 | Packaging | electron-builder (NSIS) |
 | Mobile + web app | React Native / Expo SDK 51 (`mobile/`) |
-| Hosted portal | FastAPI on Render, Postgres on Neon, web app on Vercel |
+| Online school | FastAPI on Render, Postgres on Neon (a schema per school), web app on Vercel |
 | CI | GitHub Actions |
 
 ## First Run
@@ -154,8 +154,11 @@ nickland-edusoft/
 │       ├── lib/         # Helpers (formatting, etc.)
 │       └── styles/      # Global CSS
 ├── mobile/              # React Native app — Android, iOS and the web build
-├── cloud/               # Multi-school portal + sync API (Node, reference)
-├── cloud-python/        # The same service in FastAPI — deployed to Render
+├── cloud/               # Thin multi-school portal + sync API (Node, reference)
+├── cloud-python/        # The ONLINE SCHOOL — FastAPI, deployed to Render
+│   ├── schema/          #   generated from electron/db/database.js — do not edit
+│   ├── app/school/      #   the offline modules, ported
+│   └── app/school_api.py#   115 routes, each behind a portal AND a permission
 ├── scripts/             # build-web.mjs, serve-web.mjs
 ├── resources/           # App icon + initial data files
 ├── package.json         # Dependencies + electron-builder config
