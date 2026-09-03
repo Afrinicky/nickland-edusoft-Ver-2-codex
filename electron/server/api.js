@@ -15,9 +15,13 @@ const webapp = require('./webapp');
 const parents = require('./parents');
 const passwords = require('./passwords');
 const media = require('./media');
-const { getSetting } = require('../utils/idgen');
+const { getSetting, setSetting } = require('../utils/idgen');
 const scopeLib = require('../ipc/_scope');
 const { registerStaffRoutes } = require('./staff_api');
+const { registerFinanceRoutes } = require('./finance_api');
+const { registerAdminRoutes } = require('./admin_api');
+const { registerPaymentRoutes, onlinePaymentsEnabled } = require('./payments_api');
+const portals = require('../ipc/_portals');
 // Required at call-time (not destructured at load) to avoid a load-order
 // circular-dependency warning: auth.js attaches resolveEffectivePermissions
 // to module.exports after its main export.
@@ -45,6 +49,18 @@ function readBody(req) {
     req.on('data', (c) => { data += c; if (data.length > 1e6) { tooBig = true; req.destroy(); } });
     req.on('end', () => { if (tooBig) return resolve({}); try { resolve(data ? JSON.parse(data) : {}); } catch { resolve({}); } });
     req.on('error', () => resolve({}));
+  });
+}
+
+// The body as it arrived, before anything has interpreted it. A webhook
+// signature covers the bytes the sender signed, so re-serialising parsed JSON
+// — which reorders keys and changes spacing — verifies against nothing.
+function readRawBody(req) {
+  return new Promise((resolve) => {
+    let data = ''; let tooBig = false;
+    req.on('data', (c) => { data += c; if (data.length > 1e6) { tooBig = true; req.destroy(); } });
+    req.on('end', () => resolve(tooBig ? '' : data));
+    req.on('error', () => resolve(''));
   });
 }
 
@@ -103,6 +119,20 @@ function can(ctx, module, action = 'view') {
   if (!p) return false;
   const map = { view: 'canView', create: 'canCreate', edit: 'canEdit', delete: 'canDelete' };
   return !!p[map[action] || 'canView'];
+}
+
+// Every write that reaches the school over the network leaves a trace naming
+// the account that made it. The desktop audits through _guard.js, which this
+// server does not pass through — so it audits here instead, in one helper,
+// rather than in forty route bodies that would each forget differently.
+function audit(db, ctx, entityType, entityId, action, note, severity = 'normal') {
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(entityType, entityId == null ? null : Number(entityId), action,
+      ctx && ctx.user ? ctx.user.id : null, String(note || '').slice(0, 500), severity);
+  } catch (_) { /* auditing a write must never be what fails it */ }
 }
 
 // Permissions say whether an account may touch a module at all. This says
@@ -232,8 +262,16 @@ function createApiServer(db, opts = {}) {
   // be inferred by scanning the pattern for segments named health/info/login/
   // register, which would silently expose any future route that happened to
   // contain one of those words. Authentication is now opt-out, per route.
+  //
+  // `rawBody: true` additionally hands the handler the body EXACTLY as it
+  // arrived, unparsed. Only the gateway webhook needs that, and it needs it
+  // absolutely: a signature is over the bytes that were sent, and JSON that
+  // has been through a parser and back is a different string.
   const add = (method, pattern, handler, routeOpts = {}) =>
-    routes.push({ method, parts: pattern.split('/').filter(Boolean), handler, public: !!routeOpts.public });
+    routes.push({
+      method, parts: pattern.split('/').filter(Boolean), handler,
+      public: !!routeOpts.public, rawBody: !!routeOpts.rawBody,
+    });
 
   const match = (parts, reqParts) => {
     if (parts.length !== reqParts.length) return null;
@@ -256,11 +294,12 @@ function createApiServer(db, opts = {}) {
     ok: true,
     school: { name: getSetting(db, 'school_name', 'School'), motto: getSetting(db, 'school_motto', ''), phone: getSetting(db, 'school_phone_1', '') },
     parent_self_register: getSetting(db, 'mobile_parent_self_register', 'true') === 'true',
-    // Money is never moved through this app. A balance is shown; settling it
-    // happens with the school, in person or on WhatsApp, and `/branding` says
-    // where. `online_payments: false` is kept in the shape so an older client
-    // that still asks is told plainly rather than left guessing.
-    online_payments: false,
+    // Whether this school takes money through the app. False unless a gateway
+    // is configured AND the school has switched it on, so a school that has
+    // pasted a test key is not quietly live. A client that is told false shows
+    // the school's own channels instead — which every school has, and which
+    // work with the internet down.
+    online_payments: onlinePaymentsEnabled(db),
     payment_currency: getSetting(db, 'payment_currency', 'GHS'),
   }), { public: true });
 
@@ -407,6 +446,11 @@ function createApiServer(db, opts = {}) {
       return json(res, 200, {
         ok: true, role: 'parent', parent: ctx.parent, children: ctx.student_ids.length,
         school: { name: getSetting(db, 'school_name', 'School') },
+        portals: portals.portalListFor(ctx), home_portal: 'parent',
+        // Whether this school takes money through the app at all. The screen
+        // that offers to pay a bill asks first; a school with no gateway
+        // configured never shows a button that cannot work.
+        online_payments: onlinePaymentsEnabled(db),
       });
     }
     // The signed-in person's own photograph, for the chrome. One small read,
@@ -423,6 +467,12 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, {
       ok: true, role: 'staff', user: ctx.user, designation: ctx.designation,
       is_admin: ctx.is_admin, permissions: ctx.permissions, photo,
+      // Which portals this account may enter, and which one it belongs in.
+      // Computed from the permission map that was just resolved from the live
+      // account, so a permission withdrawn in the office takes a portal away
+      // on the next cold start rather than at the next release.
+      portals: portals.portalListFor(ctx),
+      home_portal: portals.homePortal(ctx),
       // The app's chrome names the school. Without this the browser build
       // headed a teacher's screen "Nickland Edusoft" rather than their own
       // school, which the cloud's /staff/me has always returned.
@@ -1272,6 +1322,19 @@ function createApiServer(db, opts = {}) {
   // so this one stays the router rather than the whole school.
   registerStaffRoutes({ add, db, json, html, can, API, getSetting, media, studentProfile, getResourcePath });
 
+  // The finance office, the administration and the system itself. Three
+  // portals' worth of routes, each one checked against the same module
+  // permissions the desktop enforces and, additionally, against the portal —
+  // so an account that cannot see a portal cannot reach it by typing a URL.
+  registerFinanceRoutes({ add, db, json, can, API, getSetting, audit });
+  registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, media, audit });
+
+  // Money moving in from outside the school: a parent's checkout, the
+  // gateway's webhook, and the office's verification of a charge nobody heard
+  // back about. See server/payments_api.js for why the webhook is the only
+  // thing allowed to say that a payment succeeded.
+  registerPaymentRoutes({ add, db, json, API, getSetting, audit, rateLimited });
+
   // There is no payment webhook here any more, and no checkout to answer for.
   // Money is never taken through this app: a balance is shown, and settling it
   // is arranged with the school. Removing the gateway removes the only path by
@@ -1310,9 +1373,18 @@ function createApiServer(db, opts = {}) {
       if (!ctx) return json(res, 401, { ok: false, error: 'Account not found' });
     }
 
-    const body = (req.method === 'POST' || req.method === 'PUT') ? await readBody(req) : {};
+    let body = {};
+    let rawBody = null;
+    if (req.method === 'POST' || req.method === 'PUT') {
+      if (route.rawBody) {
+        rawBody = await readRawBody(req);
+        try { body = rawBody ? JSON.parse(rawBody) : {}; } catch (_) { body = {}; }
+      } else {
+        body = await readBody(req);
+      }
+    }
     try {
-      await route.handler(ctx, req, res, routeParams, body, ip, tokenId, parsed.query || {});
+      await route.handler(ctx, req, res, routeParams, body, ip, tokenId, parsed.query || {}, rawBody);
     } catch (e) {
       json(res, 500, { ok: false, error: 'Server error' });
     }

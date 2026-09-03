@@ -15,6 +15,7 @@ import { View, Text, Animated, Platform, Easing } from 'react-native';
 import { Redirect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '../src/auth';
+import { homeHref } from '../src/portals';
 import { useBranding } from '../src/brand';
 import { Crest } from '../src/ui';
 import { useReducedMotion, EASE_OUT } from '../src/motion';
@@ -44,7 +45,10 @@ export default function Index() {
   // A portal connection is only usable once a school has been chosen.
   if (mode === 'cloud' && !schoolId) return <Redirect href="/connect" />;
   if (!token || !profile) return <Redirect href="/login" />;
-  return <Redirect href={profile.role === 'parent' ? '/parent' : '/staff'} />;
+  // Where this account belongs: the most capable portal it holds, so a bursar
+  // opens on the office and a head teacher on the school rather than on a
+  // register neither of them takes.
+  return <Redirect href={homeHref(profile)} />;
 }
 
 /**

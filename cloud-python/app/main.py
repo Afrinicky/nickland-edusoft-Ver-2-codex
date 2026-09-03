@@ -8,12 +8,18 @@ The cloud holds only the thin read model + change queue; the desktop stays the
 source of truth.
 """
 import datetime
+import json
 import os
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import office
+from . import payments as cloud_payments
+from . import parent_api
+from . import school_api
 from . import portal_auth as pauth
+from . import portals as portal_model
 from . import ratelimit
 from . import staff as staff_api
 from . import webapp
@@ -31,6 +37,13 @@ def create_app(store=None) -> FastAPI:
     app = FastAPI(title="Nickland Edusoft Cloud", docs_url=None, redoc_url=None)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.state.store = store or create_store()
+
+    # The online school itself: every module the offline system has, against
+    # that school's own Postgres schema. Mounted FIRST so it can never be
+    # shadowed by the catch-all that serves the web app's static files.
+    app.include_router(school_api.router)
+    app.include_router(parent_api.router)
+    app.include_router(parent_api.webhook_router)
 
     # Optional seed for dev / cross-language testing: provision a known school.
     seed_id, seed_key = os.environ.get("SEED_SCHOOL_ID"), os.environ.get("SEED_SCHOOL_KEY")
@@ -88,7 +101,22 @@ def create_app(store=None) -> FastAPI:
     # a `school`; this returns the tenant list.
     @app.get("/api/v1/info")
     def info():
-        return {"ok": True, "mode": "cloud", "portal": True, "staff": True, "schools": S().list_schools()}
+        """One question — "what are you?" — so a client never has to be told.
+
+        `online` says this service holds whole schools in Postgres, not only
+        the thin read model, and therefore that the finance, administration and
+        system portals can be reached from here.
+        """
+        online, schools = False, []
+        try:
+            from .school import db as school_db
+            schools = school_db.provisioned()
+            online = bool(schools)
+        except Exception:
+            online, schools = False, []
+        return {"ok": True, "mode": "online" if online else "cloud",
+                "portal": True, "staff": True, "online": online,
+                "schools": schools or S().list_schools()}
 
     @app.get("/api/v1/portal/schools")
     def schools():
@@ -224,6 +252,86 @@ def create_app(store=None) -> FastAPI:
         threads.sort(key=lambda t: str(t.get("last_message_at") or ""), reverse=True)
         return {"ok": True, "threads": threads}
 
+    # ── Settling a bill over the internet ──
+    # What the parent's app asks before it draws the screen: is there a gateway
+    # here at all, what is owed, and what the school's own channels are for a
+    # school that has not switched one on.
+    @app.get("/api/v1/portal/payment-options")
+    def payment_options(student_id: str = None, authorization: str = Header(None)):
+        claims, rec = require_parent(authorization)
+        if not student_id or f"student:{student_id}" not in set(rec.get("student_keys") or []):
+            return _err(403, "Not your child.")
+        child = next((s["payload"] for s in S().list_snapshots(claims["school_id"], "student_snapshot")
+                      if s["entity_key"] == f"student:{student_id}"), None)
+        profile = next((s["payload"] for s in S().list_snapshots(claims["school_id"], "school_profile")
+                        if s.get("payload")), {}) or {}
+        fees = (child or {}).get("fees") or {}
+        contact = profile.get("contact") or {}
+        return {
+            "ok": True,
+            "balance": float(fees.get("balance") or 0),
+            "currency": profile.get("currency") or "GHS",
+            "online": cloud_payments.availability(S(), claims["school_id"]),
+            "offline": {
+                "declare": True,
+                "whatsapp": contact.get("whatsapp") or contact.get("phone") or "",
+                "phone": contact.get("phone") or "",
+            },
+        }
+
+    @app.post("/api/v1/portal/pay")
+    async def portal_pay(request: Request, authorization: str = Header(None)):
+        claims, rec = require_parent(authorization)
+        if ratelimit.limited(request, "pay", str(claims["parent_id"])):
+            return _err(429, "Too many attempts. Try again shortly.")
+        body = await _json(request)
+        return _send(cloud_payments.create_checkout(
+            S(), claims["school_id"], claims["parent_id"], body.get("student_id"),
+            body.get("amount"), rec.get("email"), set(rec.get("student_keys") or [])))
+
+    # Where the app comes back to. It does not take the app's word that the
+    # payment worked — it asks the gateway. So a phone that never returns costs
+    # nothing: the webhook settles it regardless.
+    @app.get("/api/v1/portal/payments/{reference}")
+    def portal_payment_status(reference: str, authorization: str = Header(None)):
+        claims, rec = require_parent(authorization)
+        return _send(cloud_payments.status(S(), claims["school_id"], reference,
+                                           set(rec.get("student_keys") or [])))
+
+    # A payment made at the bank, declared. Not a payment: a message with a
+    # number on it, which the office confirms against its own statement. It
+    # reaches the desktop as a pending intent and nothing more.
+    @app.post("/api/v1/portal/declare-payment")
+    async def portal_declare(request: Request, authorization: str = Header(None)):
+        claims, rec = require_parent(authorization)
+        body = await _json(request)
+        student_id = str(body.get("student_id") or "")
+        if not student_id or f"student:{student_id}" not in set(rec.get("student_keys") or []):
+            return _err(403, "Not your child.")
+        try:
+            amount = float(body.get("amount"))
+        except (TypeError, ValueError):
+            amount = 0
+        if amount <= 0:
+            return _err(400, "Enter the amount you paid.")
+        reference = str(body.get("reference") or "").strip()[:80]
+        if not reference:
+            return _err(400, "Enter the transaction or deposit reference, so the office can find it.")
+        if ratelimit.limited(request, "declare", str(claims["parent_id"])):
+            return _err(429, "Too many attempts. Try again shortly.")
+        channel = body.get("channel")
+        S().enqueue_change(claims["school_id"], {
+            "type": "payment_declared",
+            "payload": {
+                "student_id": student_id, "parent_id": claims["parent_id"], "amount": amount,
+                "channel": channel if channel in ("bank", "mobile_money", "cash") else "bank",
+                "reference": reference, "notes": str(body.get("notes") or "")[:300],
+                "declared_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            },
+        })
+        return {"ok": True,
+                "message": "The office has it. Your account updates once they confirm it against the school’s statement."}
+
     @app.post("/api/v1/portal/profile")
     async def profile(request: Request, authorization: str = Header(None)):
         claims, rec = require_parent(authorization)
@@ -287,13 +395,79 @@ def create_app(store=None) -> FastAPI:
     @app.get("/api/v1/staff/me")
     def staff_me(authorization: str = Header(None)):
         claims, rec = require_staff(authorization)
+        # Which portals this account holds, from the same rules the desktop
+        # applies. One of them cannot be served from here at all — the app is
+        # told which, and why, rather than handed a door that opens onto an
+        # error.
+        held = []
+        for entry in portal_model.portal_list_for(rec):
+            if entry["key"] == "system":
+                held.append({**entry, "available": False,
+                             "reason": "Administered on the school's own network."})
+            else:
+                held.append({**entry, "available": True})
         return {
             "ok": True, "role": "staff", "mode": "cloud",
             "user": {"id": rec["user_id"], "full_name": rec.get("full_name"),
                      "username": rec.get("username"), "staff_id": rec.get("staff_id")},
             "designation": rec.get("designation"), "is_admin": bool(rec.get("is_admin")),
+            "must_change_password": bool(rec.get("must_change_password")),
             "permissions": rec.get("permissions") or {}, "school": S().get_school(claims["school_id"]),
+            "portals": held,
+            "home_portal": portal_model.home_portal(rec),
         }
+
+    # ── The finance office and the administration, off-LAN ──
+    # Summaries the desktop projected, and the two approvals that move no
+    # money. See app/office.py for what is deliberately absent.
+    @app.get("/api/v1/staff/finance/overview")
+    def staff_finance_overview(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return _send(office.finance_overview(S(), claims["school_id"], rec))
+
+    @app.get("/api/v1/staff/finance/debtors")
+    def staff_finance_debtors(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return _send(office.finance_debtors(S(), claims["school_id"], rec))
+
+    @app.get("/api/v1/staff/admin/overview")
+    def staff_admin_overview(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return _send(office.admin_overview(S(), claims["school_id"], rec))
+
+    @app.get("/api/v1/staff/admin/approvals")
+    def staff_admin_approvals(authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return _send(office.approvals(S(), claims["school_id"], rec))
+
+    @app.post("/api/v1/staff/admin/leave/decision")
+    async def staff_leave_decision(request: Request, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return _send(office.submit_decision(S(), claims["school_id"], rec, "leave", await _json(request)))
+
+    @app.post("/api/v1/staff/admin/lesson-note/decision")
+    async def staff_note_decision(request: Request, authorization: str = Header(None)):
+        claims, rec = require_staff(authorization)
+        return _send(office.submit_decision(S(), claims["school_id"], rec, "lesson_note", await _json(request)))
+
+    # Taking money, and the system portal, are not served from here at all.
+    # Answered plainly so the app can say why rather than 404.
+    @app.get("/api/v1/staff/finance/collections")
+    @app.post("/api/v1/staff/finance/collections")
+    @app.get("/api/v1/staff/finance/payroll")
+    def staff_finance_host_only(authorization: str = Header(None)):
+        require_staff(authorization)
+        return JSONResponse(status_code=400, content={
+            "ok": False, "host_only": True,
+            "error": "The school's own system records money and runs payroll. Connect on the school Wi-Fi."})
+
+    @app.get("/api/v1/staff/system/{rest:path}")
+    @app.post("/api/v1/staff/system/{rest:path}")
+    def staff_system_host_only(rest: str, authorization: str = Header(None)):
+        require_staff(authorization)
+        return JSONResponse(status_code=400, content={
+            "ok": False, "host_only": True,
+            "error": "Accounts, access and the audit trail are administered on the school's own network."})
 
     @app.get("/api/v1/staff/dashboard")
     def staff_dashboard(authorization: str = Header(None)):
@@ -600,11 +774,62 @@ def create_app(store=None) -> FastAPI:
         res = S().changes_since(school["school_id"], since)
         return {"ok": True, "cursor": res["cursor"], "changes": res["changes"]}
 
+    # ── The gateway's webhook (public by necessity) ──
+    # The gateway has no account here, so this route is open — and therefore
+    # the most carefully guarded one in the service. The signature is checked
+    # over the RAW bytes against the school's own secret before the body is
+    # believed about anything, a bad one is answered 401 and nothing else, and
+    # the amount is never read from the body: settlement asks the gateway
+    # directly. See app/payments.py.
+    @app.post("/api/v1/payments/webhook/{school_id}")
+    async def payment_webhook(school_id: str, request: Request):
+        raw = (await request.body()).decode("utf-8", "replace")
+        cfg = cloud_payments.config(S(), school_id)
+        signature = request.headers.get("x-paystack-signature") or request.headers.get("x-signature") or ""
+        if not cfg or not cloud_payments.verify_webhook(cfg.get("secret"), signature, raw):
+            return _err(401, "Unauthorized")
+        try:
+            payload = json.loads(raw) if raw else {}
+        except ValueError:
+            payload = {}
+        if payload.get("event") == "charge.success" and (payload.get("data") or {}).get("reference"):
+            try:
+                cloud_payments.settle(S(), school_id, payload["data"]["reference"])
+            except Exception:                            # pragma: no cover
+                pass
+        return {"ok": True}
+
     # ── School-key: admin (portal backend / read model) ──
     @app.get("/api/v1/admin/snapshots")
     def admin_snapshots(type: str = None, x_school_key: str = Header(None)):
         school = require_school(x_school_key)
         return {"ok": True, "snapshots": S().list_snapshots(school["school_id"], type)}
+
+    # The school's gateway, pushed by its own desktop when the school switches
+    # internet payments on. Write only: there is no route that reads `secret`
+    # back, and there must never be one. A school changing its key re-enters it
+    # on the desktop, which is where it came from.
+    @app.post("/api/v1/admin/payment-config")
+    async def admin_payment_config(request: Request, x_school_key: str = Header(None)):
+        school = require_school(x_school_key)
+        body = await _json(request)
+        if not hasattr(S(), "set_payment_config"):
+            return _err(501, "This service does not hold gateway configuration.")
+        gateway = str(body.get("gateway") or "none")
+        if gateway != "none" and not str(body.get("secret") or ""):
+            return _err(400, "A gateway needs its secret key.")
+        S().set_payment_config(school["school_id"], None if gateway == "none" else {
+            "gateway": gateway,
+            "secret": str(body.get("secret")),
+            "public_key": str(body.get("public_key") or ""),
+            "base_url": str(body.get("base_url") or ""),
+            "currency": str(body.get("currency") or "GHS"),
+            "callback_url": str(body.get("callback_url") or ""),
+            "min_amount": float(body.get("min_amount") or 1),
+            "max_amount": float(body.get("max_amount") or 10000),
+            "enabled": body.get("enabled") is not False,
+        })
+        return {"ok": True, "gateway": gateway, "configured": gateway != "none"}
 
     @app.post("/api/v1/admin/enqueue-change")
     async def admin_enqueue(request: Request, x_school_key: str = Header(None)):

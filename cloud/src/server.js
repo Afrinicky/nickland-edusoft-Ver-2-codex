@@ -15,6 +15,9 @@ const fs = require('fs');
 const path = require('path');
 const pauth = require('./portal_auth');
 const staffApi = require('./staff');
+const office = require('./office');
+const cloudPayments = require('./payments');
+const portalModel = require('./portals');
 const ratelimit = require('./ratelimit');
 const webapp = require('./webapp');
 
@@ -28,6 +31,17 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 function html(res, body) { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(body); }
+// The body as it arrived. A webhook signature covers the bytes that were
+// signed; JSON that has been parsed and re-serialised is a different string.
+function readRawBody(req) {
+  return new Promise((resolve) => {
+    let d = ''; let big = false;
+    req.on('data', (c) => { d += c; if (d.length > 5e6) { big = true; req.destroy(); } });
+    req.on('end', () => resolve(big ? '' : d));
+    req.on('error', () => resolve(''));
+  });
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let d = ''; let big = false;
@@ -222,13 +236,57 @@ function createServer(store) {
 
         if (p === '/api/v1/staff/me' && req.method === 'GET') {
           const school = await store.getSchool(sid);
+          // Which portals this account holds, from the same rules the desktop
+          // applies. Two of them cannot be served from here at all — the app
+          // is told which, and why, rather than being handed a door that opens
+          // onto an error.
+          const held = portalModel.portalListFor(rec).map(x => (
+            x.key === 'system'
+              ? { ...x, available: false, reason: "Administered on the school's own network." }
+              : { ...x, available: true }
+          ));
           return json(res, 200, {
             ok: true, role: 'staff', mode: 'cloud',
             user: { id: rec.user_id, full_name: rec.full_name, username: rec.username, staff_id: rec.staff_id },
             designation: rec.designation, is_admin: !!rec.is_admin,
             must_change_password: !!rec.must_change_password,
             permissions: rec.permissions || {}, school,
+            portals: held,
+            home_portal: portalModel.homePortal(rec),
           });
+        }
+
+        // ── The finance office and the administration, off-LAN ──
+        // Summaries the desktop projected, and the two approvals that move no
+        // money. See src/office.js for what is deliberately absent.
+        if (p === '/api/v1/staff/finance/overview' && req.method === 'GET') {
+          return send(await office.financeOverview(store, sid, rec));
+        }
+        if (p === '/api/v1/staff/finance/debtors' && req.method === 'GET') {
+          return send(await office.financeDebtors(store, sid, rec));
+        }
+        if (p === '/api/v1/staff/admin/overview' && req.method === 'GET') {
+          return send(await office.adminOverview(store, sid, rec));
+        }
+        if (p === '/api/v1/staff/admin/approvals' && req.method === 'GET') {
+          return send(await office.approvals(store, sid, rec));
+        }
+        if (p === '/api/v1/staff/admin/leave/decision' && req.method === 'POST') {
+          return send(await office.submitDecision(store, sid, rec, 'leave', await readBody(req)));
+        }
+        if (p === '/api/v1/staff/admin/lesson-note/decision' && req.method === 'POST') {
+          return send(await office.submitDecision(store, sid, rec, 'lesson_note', await readBody(req)));
+        }
+
+        // Taking money, and the system portal, are not served from here at
+        // all. Answered plainly so the app can say why rather than 404.
+        if (p.startsWith('/api/v1/staff/finance/collections') || p === '/api/v1/staff/finance/payroll') {
+          return json(res, 400, { ok: false, host_only: true,
+            error: "The school's own system records money and runs payroll. Connect on the school Wi-Fi." });
+        }
+        if (p.startsWith('/api/v1/staff/system/')) {
+          return json(res, 400, { ok: false, host_only: true,
+            error: "Accounts, access and the audit trail are administered on the school's own network." });
         }
 
         if (p === '/api/v1/staff/dashboard' && req.method === 'GET') {
@@ -482,6 +540,89 @@ function createServer(store) {
           return json(res, 200, { ok: true, receipts: rcs });
         }
 
+        // ── Settling a bill over the internet ──
+        // What the parent's app asks before it draws the screen: is there a
+        // gateway here at all, what is owed, and what the school's own
+        // channels are for a school that has not switched one on.
+        if (p === '/api/v1/portal/payment-options' && req.method === 'GET') {
+          const sid = String(q.student_id || '');
+          if (!sid || !(authRec.student_keys || []).includes(`student:${sid}`)) {
+            return json(res, 403, { ok: false, error: 'Not your child.' });
+          }
+          const snap = (await store.listSnapshots(claims.school_id, 'student_snapshot'))
+            .find(x => x.entity_key === `student:${sid}`);
+          const child = snap ? snap.payload : null;
+          const profile = ((await store.listSnapshots(claims.school_id, 'school_profile'))
+            .find(x => x.payload) || {}).payload || {};
+          return json(res, 200, {
+            ok: true,
+            balance: child && child.fees ? Number(child.fees.balance) || 0 : 0,
+            currency: profile.currency || 'GHS',
+            online: await cloudPayments.availability(store, claims.school_id),
+            offline: {
+              declare: true,
+              whatsapp: (profile.contact || {}).whatsapp || (profile.contact || {}).phone || '',
+              phone: (profile.contact || {}).phone || '',
+            },
+          });
+        }
+
+        if (p === '/api/v1/portal/pay' && req.method === 'POST') {
+          const body = await readBody(req);
+          if (ratelimit.limited(req, 'pay', String(claims.parent_id))) {
+            return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+          }
+          const r = await cloudPayments.createCheckout(store, claims.school_id, {
+            parent_id: claims.parent_id,
+            student_id: body.student_id,
+            amount: body.amount,
+            email: authRec.email || undefined,
+            studentKeys: new Set(authRec.student_keys || []),
+          });
+          return json(res, r.ok ? 200 : (r.status || 400), r.ok ? r : { ok: false, error: r.error });
+        }
+
+        // Where the app comes back to. It does not take the app's word that
+        // the payment worked — it asks the gateway. So a phone that never
+        // returns costs nothing: the webhook settles it regardless.
+        if (p.startsWith('/api/v1/portal/payments/') && req.method === 'GET') {
+          const reference = decodeURIComponent(p.split('/').pop());
+          const r = await cloudPayments.status(store, claims.school_id, reference,
+            new Set(authRec.student_keys || []));
+          return json(res, r.ok ? 200 : (r.status || 400), r.ok ? r : { ok: false, error: r.error });
+        }
+
+        // A payment made at the bank, declared. Not a payment: a message with
+        // a number on it, which the office confirms against its own statement.
+        // It reaches the desktop as a pending intent and nothing more.
+        if (p === '/api/v1/portal/declare-payment' && req.method === 'POST') {
+          const body = await readBody(req);
+          const sid = String(body.student_id || '');
+          if (!sid || !(authRec.student_keys || []).includes(`student:${sid}`)) {
+            return json(res, 403, { ok: false, error: 'Not your child.' });
+          }
+          const amount = Number(body.amount);
+          if (!Number.isFinite(amount) || amount <= 0) return json(res, 400, { ok: false, error: 'Enter the amount you paid.' });
+          const reference = String(body.reference || '').trim().slice(0, 80);
+          if (!reference) return json(res, 400, { ok: false, error: 'Enter the transaction or deposit reference, so the office can find it.' });
+          if (ratelimit.limited(req, 'declare', String(claims.parent_id))) {
+            return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
+          }
+          await store.enqueueChange(claims.school_id, {
+            type: 'payment_declared',
+            payload: {
+              student_id: sid, parent_id: claims.parent_id, amount,
+              channel: ['bank', 'mobile_money', 'cash'].includes(body.channel) ? body.channel : 'bank',
+              reference, notes: String(body.notes || '').slice(0, 300),
+              declared_at: new Date().toISOString(),
+            },
+          });
+          return json(res, 200, {
+            ok: true,
+            message: 'The office has it. Your account updates once they confirm it against the school’s statement.',
+          });
+        }
+
         if (p === '/api/v1/portal/profile' && req.method === 'POST') {
           const body = await readBody(req);
           const patch = {};
@@ -506,6 +647,32 @@ function createServer(store) {
         }
 
         return json(res, 404, { ok: false, error: 'not found' });
+      }
+
+      // ── The gateway's webhook (public by necessity) ──
+      // The gateway has no account here, so this route is open — and therefore
+      // the most carefully guarded one in the service. The signature is
+      // checked over the RAW bytes against the school's own secret before the
+      // body is believed about anything, a bad one is answered 401 and
+      // nothing else, and the amount is never read from the body: settlement
+      // asks the gateway directly. See src/payments.js.
+      if (p.startsWith('/api/v1/payments/webhook/') && req.method === 'POST') {
+        const schoolId = decodeURIComponent(p.split('/').pop());
+        const raw = await readRawBody(req);
+        const cfg = await cloudPayments.config(store, schoolId);
+        const signature = req.headers['x-paystack-signature'] || req.headers['x-signature'] || '';
+        if (!cfg || !cloudPayments.verifyWebhook(cfg.secret, signature, raw)) {
+          return json(res, 401, { ok: false, error: 'Unauthorized' });
+        }
+        let payload = {};
+        try { payload = raw ? JSON.parse(raw) : {}; } catch (_) { payload = {}; }
+        // Answer at once. A webhook that times out is a webhook the gateway
+        // retries, and retries are how duplicate work gets attempted.
+        json(res, 200, { ok: true });
+        if (payload && payload.event === 'charge.success' && payload.data && payload.data.reference) {
+          try { await cloudPayments.settle(store, schoolId, payload.data.reference); } catch (_) {}
+        }
+        return undefined;
       }
 
       // ── School-key endpoints (desktop host + portal backend) ──
@@ -536,6 +703,33 @@ function createServer(store) {
         if (p === '/api/v1/admin/snapshots' && req.method === 'GET') {
           const snaps = await store.listSnapshots(school.school_id, q.type || null);
           return json(res, 200, { ok: true, snapshots: snaps });
+        }
+
+        // The school's gateway, pushed by its own desktop when the school
+        // switches internet payments on. Write only: there is no route that
+        // reads `secret` back, and there must never be one. A school changing
+        // its key re-enters it on the desktop, which is where it came from.
+        if (p === '/api/v1/admin/payment-config' && req.method === 'POST') {
+          const body = await readBody(req);
+          if (typeof store.setPaymentConfig !== 'function') {
+            return json(res, 501, { ok: false, error: 'This service does not hold gateway configuration.' });
+          }
+          const gateway = String(body.gateway || 'none');
+          if (gateway !== 'none' && !String(body.secret || '')) {
+            return json(res, 400, { ok: false, error: 'A gateway needs its secret key.' });
+          }
+          await store.setPaymentConfig(school.school_id, gateway === 'none' ? null : {
+            gateway,
+            secret: String(body.secret),
+            public_key: String(body.public_key || ''),
+            base_url: String(body.base_url || ''),
+            currency: String(body.currency || 'GHS'),
+            callback_url: String(body.callback_url || ''),
+            min_amount: Number(body.min_amount) || 1,
+            max_amount: Number(body.max_amount) || 10000,
+            enabled: body.enabled !== false,
+          });
+          return json(res, 200, { ok: true, gateway, configured: gateway !== 'none' });
         }
 
         if (p === '/api/v1/admin/enqueue-change' && req.method === 'POST') {

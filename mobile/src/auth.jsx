@@ -1,9 +1,13 @@
 // Auth + host context. Persists the connection (host URL + mode + school) and
 // bearer token, and exposes the signed-in profile (role: parent | staff).
 //
-// Two connection modes:
-//   • host  — a school desktop over LAN/tunnel (full features).
-//   • cloud — the hosted portal over the internet (parent-only, read + notices).
+// Three connection modes:
+//   • host   — a school desktop over LAN/tunnel (everything, works with the
+//              internet down).
+//   • online — the ONLINE SCHOOL over the internet: the whole school in
+//              Postgres, every portal, from anywhere.
+//   • cloud  — the thin hosted portal: the projection the desktop pushes up,
+//              and the writes that can safely be queued for it.
 //
 // If nothing is saved yet the connection is discovered rather than asked for:
 // a web build is usually served by the very thing it talks to, and a phone
@@ -20,7 +24,7 @@ export function useAuth() { return useContext(AuthCtx); }
 export function AuthProvider({ children }) {
   const [ready, setReady] = useState(false);
   const [host, setHost] = useState(null);
-  const [mode, setMode] = useState('host');      // 'host' | 'cloud'
+  const [mode, setMode] = useState('host');      // 'host' | 'online' | 'cloud'
   const [schoolId, setSchoolId] = useState(null);
   const [token, setToken] = useState(null);
   const [profile, setProfile] = useState(null);  // { role, ... } from /me
@@ -45,18 +49,18 @@ export function AuthProvider({ children }) {
           if (found && found.mode === 'host') {
             h = found.baseUrl; m = 'host'; sid = null;
             await persistConnection(h, m, sid);
-          } else if (found && found.mode === 'cloud') {
+          } else if (found && (found.mode === 'cloud' || found.mode === 'online')) {
             const pinned = DEFAULT_SCHOOL_ID
               ? found.schools.find(s => String(s.school_id) === DEFAULT_SCHOOL_ID)
               : null;
             const only = pinned || (found.schools.length === 1 ? found.schools[0] : null);
             if (only) {
-              h = found.baseUrl; m = 'cloud'; sid = String(only.school_id);
+              h = found.baseUrl; m = found.mode; sid = String(only.school_id);
               await persistConnection(h, m, sid);
             } else {
               // Keep the address for the Connect screen's picker, but do not
               // treat it as connected — no school has been chosen yet.
-              setDetectedSchools({ baseUrl: found.baseUrl, schools: found.schools });
+              setDetectedSchools({ baseUrl: found.baseUrl, schools: found.schools, mode: found.mode });
             }
           }
         }
@@ -102,12 +106,15 @@ export function AuthProvider({ children }) {
     setHost(url); setMode('host'); setSchoolId(null); setDetectedSchools(null);
     await persistConnection(url, 'host', null);
   }
-  // Connect to the hosted portal over the internet for a chosen school.
-  async function saveCloud(url, sid) {
-    setConnection({ baseUrl: url, mode: 'cloud', schoolId: sid });
+  // Connect over the internet for a chosen school. `mode` is what discovery
+  // found: `online` when the service holds the whole school, `cloud` when it
+  // holds the projection.
+  async function saveCloud(url, sid, m = 'cloud') {
+    const chosen = m === 'online' ? 'online' : 'cloud';
+    setConnection({ baseUrl: url, mode: chosen, schoolId: sid });
     await store.del('role');
-    setHost(url); setMode('cloud'); setSchoolId(sid); setDetectedSchools(null);
-    await persistConnection(url, 'cloud', sid);
+    setHost(url); setMode(chosen); setSchoolId(sid); setDetectedSchools(null);
+    await persistConnection(url, chosen, sid);
   }
   // Drop the saved connection and start over at the Connect screen.
   async function forgetConnection() {
@@ -135,6 +142,9 @@ export function AuthProvider({ children }) {
     <AuthCtx.Provider value={{
       ready, host, mode, schoolId, token, profile, detectedSchools,
       saveHost, saveCloud, forgetConnection, signIn, signOut,
+      // `online` is the mode a screen asks about when it wants to know whether
+      // the whole school is reachable, rather than a projection of it.
+      isOnline: mode === 'online',
     }}>
       {children}
     </AuthCtx.Provider>

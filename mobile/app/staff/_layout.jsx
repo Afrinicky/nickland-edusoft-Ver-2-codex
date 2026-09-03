@@ -15,16 +15,11 @@ import { Redirect, useFocusEffect } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { Loading } from '../../src/ui';
 import { AppShell } from '../../src/shell';
-import { STAFF_NAV, STAFF_PRIMARY, STAFF_QUICK } from '../../src/nav';
+import { PORTAL_NAV } from '../../src/nav';
+import { hasPortal, homeHref } from '../../src/portals';
 import { api } from '../../src/api';
 
-const NAV = {
-  title: 'Staff', items: STAFF_NAV, primary: STAFF_PRIMARY, quick: STAFF_QUICK,
-  accountHref: '/staff/account',
-  actionIcon: 'plus',
-  actionLabel: 'What do you need to do?',
-  actionHint: 'The jobs of a school day, one tap from anywhere in the app.',
-};
+const NAV = { ...PORTAL_NAV.teacher, portal: 'teacher' };
 
 export default function StaffLayout() {
   const { ready, token, profile, mode } = useAuth();
@@ -50,6 +45,11 @@ export default function StaffLayout() {
   if (!ready) return <Loading label="Starting…" />;
   if (!token || !profile) return <Redirect href="/" />;
   if (profile.role === 'parent') return <Redirect href="/parent" />;
+  // An accountant does not hold the teaching portal, and typing its address
+  // should put them back in the office rather than in a register they cannot
+  // mark. The server refuses either way; this is what makes the app honest
+  // about it.
+  if (!hasPortal(profile, 'teacher')) return <Redirect href={homeHref(profile)} />;
 
   return <AppShell nav={NAV} school={profile?.school?.name} pending={pending} />;
 }

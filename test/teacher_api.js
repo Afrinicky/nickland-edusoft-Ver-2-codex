@@ -508,18 +508,45 @@ function req(base, method, p, { token, body } = {}) {
   r = await req(base, 'GET', `/api/v1/parent/children/${p1}/fees`, { token });
   ck('and a member of staff cannot read the parent routes at all', r.status === 403);
 
-  // ── no money moves through this app ──
-  // The card checkout, the "tell the school what you paid" form and the
-  // gateway webhook are gone, routes and all. A school takes payment in
-  // person; the app shows the figure and says who to talk to.
-  for (const path of ['/api/v1/parent/children/1/pay', '/api/v1/parent/children/1/pay/online']) {
-    r = await req(base, 'POST', path, { token: adminToken, body: { amount: 10 } });
-    ck(`${path} no longer exists`, r.status === 404);
-  }
-  r = await req(base, 'POST', '/api/v1/webhooks/paystack', { body: {} });
-  ck('and there is no payment webhook to settle one', r.status === 404);
+  // ── money coming in from outside the school ──
+  // The checkout is back, and so is the webhook. What matters is not that they
+  // exist but what they refuse: a school that has not switched online payments
+  // on, another family's child, and above all a webhook body nobody signed.
   r = await req(base, 'GET', '/api/v1/info');
-  ck('the app tells a client plainly that it takes no online payment', r.json.online_payments === false);
+  ck('a school with no gateway configured says so plainly', r.json.online_payments === false);
+
+  r = await req(base, 'POST', `/api/v1/parent/children/${p1}/pay`, { token: parentToken, body: { amount: 10 } });
+  ck('and refuses a checkout rather than starting one it cannot finish', r.status === 400 && !r.json.ok);
+
+  r = await req(base, 'POST', `/api/v1/parent/children/${outside}/pay`, { token: parentToken, body: { amount: 10 } });
+  ck("another family's child cannot be paid for", r.status === 403);
+
+  r = await req(base, 'POST', `/api/v1/parent/children/${p1}/pay`, { token: adminToken, body: { amount: 10 } });
+  ck('and a member of staff cannot start a parent checkout at all', r.status === 403);
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/payment-options`, { token: parentToken });
+  ck('a parent is told what the balance is and how the school takes money',
+    r.json.ok && r.json.balance === 260 && r.json.online.available === false && r.json.offline.declare === true);
+
+  // A declaration is a message about a payment, not a payment. It must leave
+  // the ledger untouched until somebody in the office confirms it.
+  const beforeDeclare = db.prepare('SELECT COALESCE(SUM(amount),0) t FROM payments WHERE student_id = ?').get(p1).t;
+  r = await req(base, 'POST', `/api/v1/parent/children/${p1}/declare-payment`,
+    { token: parentToken, body: { amount: 100, channel: 'bank', reference: 'DEP-771' } });
+  ck('a parent can declare a payment made at the bank', r.json.ok && r.json.intent_id > 0);
+  ck('...and it is filed as pending, not posted',
+    db.prepare("SELECT status FROM payment_intents WHERE id = ?").get(r.json.intent_id).status === 'pending');
+  ck('...and moves no money until the office confirms it',
+    db.prepare('SELECT COALESCE(SUM(amount),0) t FROM payments WHERE student_id = ?').get(p1).t === beforeDeclare);
+  r = await req(base, 'POST', `/api/v1/parent/children/${p1}/declare-payment`,
+    { token: parentToken, body: { amount: 100, channel: 'bank' } });
+  ck('a declaration without a reference is refused — the office must be able to find it',
+    r.status === 400);
+
+  // The webhook. With no gateway configured there is nothing for it to answer
+  // for, and it says 404 rather than admitting which gateways it knows about.
+  r = await req(base, 'POST', '/api/v1/payments/webhook/paystack', { body: { event: 'charge.success' } });
+  ck('an unsigned webhook is never treated as a payment', r.status !== 200);
 
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);

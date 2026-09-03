@@ -57,6 +57,35 @@ function createPgStore(connectionString) {
       return rows;
     },
 
+    // ── Gateway configuration (write-mostly) ──
+    // Its own table rather than a snapshot row: snapshots are what the staff
+    // and parent endpoints read from, and a secret kept there is one
+    // forgotten filter away from being served to somebody.
+    async setPaymentConfig(school_id, cfg) {
+      if (!cfg || cfg.gateway === 'none') {
+        await pool.query('DELETE FROM school_payments WHERE school_id = $1', [school_id]);
+        return true;
+      }
+      await pool.query(`
+        INSERT INTO school_payments (school_id, gateway, secret, public_key, base_url, currency,
+          callback_url, min_amount, max_amount, enabled, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+        ON CONFLICT (school_id) DO UPDATE SET
+          gateway = EXCLUDED.gateway, secret = EXCLUDED.secret, public_key = EXCLUDED.public_key,
+          base_url = EXCLUDED.base_url, currency = EXCLUDED.currency,
+          callback_url = EXCLUDED.callback_url, min_amount = EXCLUDED.min_amount,
+          max_amount = EXCLUDED.max_amount, enabled = EXCLUDED.enabled, updated_at = now()
+      `, [school_id, cfg.gateway, cfg.secret || '', cfg.public_key || '', cfg.base_url || '',
+          cfg.currency || 'GHS', cfg.callback_url || '',
+          cfg.min_amount || 1, cfg.max_amount || 10000, cfg.enabled !== false]);
+      return true;
+    },
+
+    async getPaymentConfig(school_id) {
+      const { rows } = await pool.query('SELECT * FROM school_payments WHERE school_id = $1', [school_id]);
+      return rows[0] || null;
+    },
+
     async enqueueChange(school_id, ch) {
       const { rows } = await pool.query(
         'INSERT INTO cloud_changes (school_id, type, payload) VALUES ($1,$2,$3) RETURNING id',
