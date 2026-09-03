@@ -101,7 +101,22 @@ def create_app(store=None) -> FastAPI:
     # a `school`; this returns the tenant list.
     @app.get("/api/v1/info")
     def info():
-        return {"ok": True, "mode": "cloud", "portal": True, "staff": True, "schools": S().list_schools()}
+        """One question — "what are you?" — so a client never has to be told.
+
+        `online` says this service holds whole schools in Postgres, not only
+        the thin read model, and therefore that the finance, administration and
+        system portals can be reached from here.
+        """
+        online, schools = False, []
+        try:
+            from .school import db as school_db
+            schools = school_db.provisioned()
+            online = bool(schools)
+        except Exception:
+            online, schools = False, []
+        return {"ok": True, "mode": "online" if online else "cloud",
+                "portal": True, "staff": True, "online": online,
+                "schools": schools or S().list_schools()}
 
     @app.get("/api/v1/portal/schools")
     def schools():

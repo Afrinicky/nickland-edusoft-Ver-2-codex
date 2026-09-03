@@ -46,6 +46,10 @@ export default function Connect() {
   // Cloud state
   const [cloudUrl, setCloudUrl] = useState(detectedSchools ? detectedSchools.baseUrl : 'https://');
   const [schools, setSchools] = useState(detectedSchools ? detectedSchools.schools : null);
+  // Which kind of service answered: `online` holds the whole school, `cloud`
+  // holds the projection the desktop pushes up. The address is the same either
+  // way, so this is asked rather than assumed.
+  const [remoteMode, setRemoteMode] = useState(detectedSchools ? (detectedSchools.mode || 'cloud') : 'cloud');
   const [picked, setPicked] = useState(null);
 
   const [busy, setBusy] = useState(false);
@@ -61,6 +65,7 @@ export default function Connect() {
       setTab('cloud');
       setCloudUrl(detectedSchools.baseUrl);
       setSchools(detectedSchools.schools);
+      setRemoteMode(detectedSchools.mode || 'cloud');
     }
   }, [detectedSchools]);
 
@@ -89,9 +94,17 @@ export default function Connect() {
     const clean = cloudUrl.trim().replace(/\/+$/, '');
     setConnection({ baseUrl: clean, mode: 'cloud' });
     try {
-      const r = await api.schools();
-      const list = r.schools || [];
-      if (!list.length) setError('No schools are available at that portal yet.');
+      // `/info` says what the service is. A service holding whole schools is
+      // reached differently from one holding a projection, and the app should
+      // not have to be told which it typed the address of.
+      let list = [];
+      try {
+        const info = await api.info();
+        setRemoteMode(info.online ? 'online' : 'cloud');
+        list = info.schools || [];
+      } catch (_) { /* older portals have no public /info; fall through */ }
+      if (!list.length) list = (await api.schools()).schools || [];
+      if (!list.length) setError('No schools are available at that address yet.');
       setSchools(list);
     } catch (e) {
       setError(e.message || 'Could not reach that portal.');
@@ -100,7 +113,9 @@ export default function Connect() {
 
   async function continueCloud() {
     const clean = cloudUrl.trim().replace(/\/+$/, '');
-    await saveCloud(clean, picked.school_id);
+    // `detectedSchools.mode` is what discovery found: `online` when the
+    // service holds the whole school, `cloud` when it holds the projection.
+    await saveCloud(clean, picked.school_id, remoteMode);
     router.replace('/login');
   }
 

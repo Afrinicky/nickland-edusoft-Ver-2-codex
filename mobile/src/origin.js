@@ -4,9 +4,13 @@
 //   • Served by a school desktop (http://192.168.1.20:4747) — the page's own
 //     origin answers /api/v1/info. Host mode: teachers and parents, full
 //     features, works with the internet down.
-//   • Served by the portal itself — the origin answers /api/v1/portal/schools,
+//   • Served by the ONLINE SCHOOL — /api/v1/info says `online: true`, meaning
+//     the service holds whole schools in Postgres rather than a projection of
+//     one. Online mode: everybody, everything, from anywhere.
+//   • Served by the thin portal — the origin answers /api/v1/portal/schools,
 //     or does after a same-origin /api rewrite (how the Vercel build reaches
-//     the API on Render). Cloud mode: parents, read-only.
+//     the API on Render). Cloud mode: the projection, and the writes that can
+//     safely be queued.
 //   • The phone app, or a web build with no API on its own origin — fall back
 //     to EXPO_PUBLIC_PORTAL_URL, baked in at build time.
 //
@@ -50,6 +54,10 @@ async function probe(baseUrl, path, ms = 6000) {
 async function identify(baseUrl) {
   const info = await probe(baseUrl, '/info');
   if (info && !info.portal && info.school) return { baseUrl, mode: 'host', school: info.school };
+  // A service that holds whole schools says so. Checked before the thin-cloud
+  // branch, because the same deployment answers both and the fuller answer is
+  // the one to take.
+  if (info && info.online) return { baseUrl, mode: 'online', schools: info.schools || [] };
   if (info && info.portal) return { baseUrl, mode: 'cloud', schools: info.schools || [] };
 
   const portal = await probe(baseUrl, '/portal/schools');
@@ -57,7 +65,11 @@ async function identify(baseUrl) {
   return null;
 }
 
-// Resolves to { baseUrl, mode:'host', school } | { baseUrl, mode:'cloud', schools } | null.
+// Resolves to one of:
+//   { baseUrl, mode: 'host',   school  }
+//   { baseUrl, mode: 'online', schools }
+//   { baseUrl, mode: 'cloud',  schools }
+//   null
 export async function discoverConnection() {
   const origin = webOrigin();
   if (origin) {

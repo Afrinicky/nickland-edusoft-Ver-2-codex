@@ -142,6 +142,16 @@ async def _json(request: Request):
 
 # ══ sign in ═════════════════════════════════════════════════════════════════
 
+@router.get("/schools")
+async def schools():
+    """Which schools this service holds. Public, and it has to be: a parent
+    picks their school before they can sign in."""
+    try:
+        return {"ok": True, "online": True, "schools": sdb.provisioned()}
+    except Exception:
+        return {"ok": True, "online": True, "schools": []}
+
+
 @router.post("/signin")
 async def signin(request: Request):
     body = await _json(request)

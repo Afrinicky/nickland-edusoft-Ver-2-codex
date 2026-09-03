@@ -255,6 +255,36 @@ def provision(school_id, seed=True):
     return name
 
 
+def provisioned():
+    """Every school this service holds, with the name each calls itself.
+
+    The connect screen needs it: a parent has to pick their school before they
+    can sign in, and asking them to type an identifier nobody gave them is not
+    a thing to ship. It lists ids and names and nothing else — the same shape
+    the thin cloud has always answered with.
+    """
+    out = []
+    with pool().connection() as conn:
+        rows = conn.execute(
+            """SELECT schema_name FROM information_schema.schemata
+                WHERE schema_name LIKE 'school\\_%' ESCAPE '\\'
+                ORDER BY schema_name""").fetchall()
+        for row in rows:
+            name = row["schema_name"]
+            school_id = name[len("school_"):]
+            try:
+                conn.execute(f'SET search_path TO "{name}"')
+                found = conn.execute(
+                    "SELECT value FROM settings WHERE key = 'school_name'").fetchone()
+                out.append({"school_id": school_id,
+                            "name": (found or {}).get("value") or school_id})
+            except Exception:
+                # A schema that is not a school, or one half-provisioned. Skip
+                # it rather than failing the whole list.
+                continue
+    return out
+
+
 def drop(school_id):
     """Remove a school entirely. Used by tests and by an operator retiring a
     tenant; there is no route that reaches it."""

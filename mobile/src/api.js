@@ -257,6 +257,31 @@ const staffPath = (path) => (MODE === 'cloud' ? `/staff${path}` : path);
 export const api = {
   // Public
   info: () => request('/info'),
+
+  // ── One sign-in box, whichever surface this is ────────────────────────────
+  // Nobody at a school gate answers "are you a parent or a member of staff?".
+  // The credential decides: a staff username is tried first, then a parent's
+  // phone or email, and the reply says which surface the account belongs to.
+  // A match ends it, so an account is never authenticated twice against two
+  // different passwords.
+  //
+  // In `online` mode those are two different services, so the app does the
+  // ordering the other two modes do on the server.
+  async onlineSignIn(schoolId, identifier, password) {
+    try {
+      const staff = await school.signIn(schoolId, identifier, password);
+      if (staff && staff.ok) return { ...staff, role: 'staff' };
+    } catch (e) {
+      // 401 means "not a staff account with that password" — try the parents.
+      // Anything else is a real failure and should not be masked by a second
+      // attempt against a different table.
+      if (e.status && e.status !== 401) throw e;
+    }
+    const parent = await schoolRequest('/parent/signin', {
+      method: 'POST', body: { school_id: schoolId, identifier, password },
+    });
+    return { ...parent, role: 'parent' };
+  },
   // The school's crest, name and contact details. Public: the sign-in screen
   // should show the parent their own school before they have typed anything.
   branding: () => request(MODE === 'cloud' ? `/portal/branding?school_id=${encodeURIComponent(SCHOOL_ID || '')}` : '/branding'),
@@ -279,6 +304,9 @@ export const api = {
   // parent — which is exactly what the endpoint does server-side.
   signIn: async (identifier, password, device) => {
     const id = String(identifier || '').trim();
+    // The online school is two services behind one box; `onlineSignIn` does
+    // the ordering the other two modes do on the server.
+    if (MODE === 'online') return api.onlineSignIn(SCHOOL_ID, id, password);
     try {
       const r = MODE === 'cloud'
         ? await request('/signin', { method: 'POST', body: { school_id: SCHOOL_ID, identifier: id, password } })
@@ -351,18 +379,66 @@ export const api = {
 
   // Authed
   me: (token) => {
+    if (MODE === 'online') {
+      return ROLE === 'parent'
+        ? schoolRequest('/parent/me', { token })
+            .then(r => ({ ...r, role: 'parent', mode: 'online' }))
+        : school.me(token).then(r => ({ ...r, mode: 'online' }));
+    }
     if (MODE !== 'cloud') return request('/me', { token });
     if (ROLE === 'staff') return request('/staff/me', { token });
     return request('/portal/me', { token })
       .then(r => ({ ok: true, role: 'parent', parent: r.parent, school: r.school, mode: 'cloud' }));
   },
-  logout: (token) => MODE === 'cloud' ? Promise.resolve({ ok: true }) : request('/auth/logout', { method: 'POST', token }),
+  logout: (token) => {
+    if (MODE === 'online') {
+      return schoolRequest(ROLE === 'parent' ? '/parent/signout' : '/signout',
+        { method: 'POST', token }).catch(() => ({ ok: true }));
+    }
+    return MODE === 'cloud' ? Promise.resolve({ ok: true })
+                            : request('/auth/logout', { method: 'POST', token });
+  },
 
-  // Parent
+  // ── Parent ────────────────────────────────────────────────────────────────
+  // Three surfaces again. `online` reads the school's own database, so a
+  // parent sees the same figures the office does rather than a projection of
+  // them — including a bill that changed five minutes ago.
   children: (token) =>
-    MODE === 'cloud' ? cloudChildren(token).then(children => ({ ok: true, children })) : request('/parent/children', { token }),
+    MODE === 'online' ? schoolRequest('/parent/children', { token })
+    : MODE === 'cloud' ? cloudChildren(token).then(children => ({ ok: true, children }))
+    : request('/parent/children', { token }),
   child: (token, id) =>
-    MODE === 'cloud' ? cloudChild(token, id) : request(`/parent/children/${id}`, { token }),
+    MODE === 'online' ? schoolRequest(`/parent/children/${id}`, { token }).then(r => ({
+      ok: true, child: { ...r.child, fees: r.bill || { billed: 0, paid: 0, balance: 0 },
+                         term: r.term },
+      attendance: (r.attendance || []).reduce((acc, d) => ({
+        present: acc.present + (d.status === 'present' ? 1 : 0),
+        absent: acc.absent + (d.status === 'absent' ? 1 : 0),
+        total: acc.total + 1,
+      }), { present: 0, absent: 0, total: 0 }),
+      payments: r.payments || [], items: r.items || [], results: r.results || [],
+      conduct: r.conduct || [], homework: r.homework || [],
+    }))
+    : MODE === 'cloud' ? cloudChild(token, id)
+    : request(`/parent/children/${id}`, { token }),
+
+  // Settling a bill. The online school takes payment; the other two say who to
+  // talk to, which is what a school with no gateway has always done.
+  paymentOptions: (token, id) =>
+    MODE === 'online' ? schoolRequest(`/parent/children/${id}/payment-options`, { token })
+                      : request(`/parent/children/${id}/payment-options`, { token }),
+  startPayment: (token, id, amount) =>
+    MODE === 'online' ? schoolRequest(`/parent/children/${id}/pay`, { method: 'POST', token, body: { amount } })
+    : MODE === 'cloud' ? request('/portal/pay', { method: 'POST', token, body: { student_id: id, amount } })
+    : request(`/parent/children/${id}/pay`, { method: 'POST', token, body: { amount } }),
+  paymentStatus: (token, reference) =>
+    MODE === 'online' ? schoolRequest(`/parent/payments/${encodeURIComponent(reference)}`, { token })
+    : MODE === 'cloud' ? request(`/portal/payments/${encodeURIComponent(reference)}`, { token })
+    : request(`/parent/payments/${encodeURIComponent(reference)}`, { token }),
+  declarePayment: (token, id, body) =>
+    MODE === 'online' ? schoolRequest(`/parent/children/${id}/declare-payment`, { method: 'POST', token, body })
+    : MODE === 'cloud' ? request('/portal/declare-payment', { method: 'POST', token, body: { student_id: id, ...body } })
+    : request(`/parent/children/${id}/declare-payment`, { method: 'POST', token, body }),
   childReport: (token, id, termId) =>
     MODE === 'cloud'
       ? cloudChildReport(token, id)
