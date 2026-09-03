@@ -29,8 +29,9 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
 from . import portals
-from .school import (academics, admin, canteen, db as sdb, fees, finance,
-                     payroll, security, session, staff, students)
+from .school import (academics, admin, canteen, communications, db as sdb, fees,
+                     finance, homework, payroll, security, session, staff,
+                     stores, students, timetable)
 
 router = APIRouter(prefix="/api/v1/school")
 
@@ -833,3 +834,215 @@ async def system_save_settings(request: Request, authorization: str = Header(Non
         return d.response
     body = await _json(request)
     return _send(admin.save_settings(db, actor, body.get("settings") or body))
+
+
+# ══ the timetable ═══════════════════════════════════════════════════════════
+
+@router.get("/timetable/periods")
+@guarded(module="academics")
+async def timetable_periods(db, actor):
+    return {"ok": True, "periods": timetable.periods(db)}
+
+
+@router.post("/timetable/periods")
+@guarded(portal="admin", module="academics", action="edit")
+async def save_period(db, actor, request: Request):
+    return timetable.save_period(db, actor, await _json(request))
+
+
+@router.get("/timetable/class")
+@guarded(module="academics")
+async def timetable_class(db, actor, classId: int):
+    return timetable.class_week(db, actor, classId)
+
+
+@router.post("/timetable/class")
+@guarded(module="academics", action="edit")
+async def save_timetable(db, actor, request: Request):
+    body = await _json(request)
+    return timetable.save_class_week(db, actor, body.get("classId"), body.get("entries"))
+
+
+@router.get("/timetable/mine")
+async def timetable_mine(authorization: str = Header(None)):
+    try:
+        db, actor = require(authorization)
+    except Denied as d:
+        return d.response
+    return _send(timetable.mine(db, actor))
+
+
+# ══ homework ════════════════════════════════════════════════════════════════
+
+@router.get("/homework")
+@guarded(module="academics")
+async def homework_list(db, actor, classId: int, all: bool = False):
+    return homework.for_class(db, actor, classId, all)
+
+
+@router.post("/homework")
+@guarded(module="academics", action="edit")
+async def set_homework(db, actor, request: Request):
+    return homework.set_homework(db, actor, await _json(request))
+
+
+@router.get("/homework/{homework_id}")
+@guarded(module="academics")
+async def homework_sheet(db, actor, homework_id: int):
+    return homework.sheet(db, actor, homework_id)
+
+
+@router.post("/homework/{homework_id}/marks")
+@guarded(module="academics", action="edit")
+async def mark_homework(db, actor, homework_id: int, request: Request):
+    body = await _json(request)
+    return homework.mark(db, actor, homework_id, body.get("entries"))
+
+
+# ══ talking to parents ══════════════════════════════════════════════════════
+
+@router.get("/messages")
+@guarded(module="notifications")
+async def messages(db, actor, unread: bool = False):
+    return communications.threads(db, actor, unread)
+
+
+@router.get("/messages/{thread_id}")
+@guarded(module="notifications")
+async def message_thread(db, actor, thread_id: str):
+    return communications.thread(db, actor, thread_id)
+
+
+@router.post("/messages")
+@guarded(module="notifications", action="create")
+async def send_message(db, actor, request: Request):
+    body = await _json(request)
+    return communications.reply(db, actor, body.get("threadId") or body.get("thread_id"),
+                                body.get("body"), body.get("studentId") or body.get("student_id"),
+                                body.get("parentId") or body.get("parent_id"), body.get("subject"))
+
+
+@router.get("/announcements")
+@guarded(module="notifications")
+async def announcements(db, actor, all: bool = False):
+    return communications.announcements(db, actor, not all)
+
+
+@router.post("/announcements")
+@guarded(module="notifications", action="edit")
+async def post_announcement(db, actor, request: Request):
+    return communications.post_announcement(db, actor, await _json(request))
+
+
+@router.post("/announcements/{announcement_id}/withdraw")
+@guarded(module="notifications", action="edit")
+async def withdraw_announcement(db, actor, announcement_id: int):
+    return communications.withdraw_announcement(db, actor, announcement_id)
+
+
+@router.get("/notifications")
+@guarded(module="notifications")
+async def notification_log(db, actor, limit: int = 200):
+    return communications.notification_log(db, actor, limit)
+
+
+@router.post("/notifications")
+@guarded(module="notifications", action="create")
+async def queue_notifications(db, actor, request: Request):
+    return communications.queue_message(db, actor, await _json(request))
+
+
+# ══ inventory, transport and books ══════════════════════════════════════════
+
+@router.get("/inventory")
+@guarded(portal="finance", module="finance")
+async def inventory(db, actor, category: str = None, lowStock: bool = False):
+    return stores.items(db, actor, category, lowStock)
+
+
+@router.post("/inventory")
+@guarded(portal="finance", module="finance", action="edit")
+async def save_inventory_item(db, actor, request: Request):
+    return stores.save_item(db, actor, await _json(request))
+
+
+@router.post("/inventory/movement")
+@guarded(portal="finance", module="finance", action="create")
+async def move_stock(db, actor, request: Request):
+    return stores.move_stock(db, actor, await _json(request))
+
+
+@router.get("/inventory/movements")
+@guarded(portal="finance", module="finance")
+async def stock_movements(db, actor, itemId: int = None, limit: int = 200):
+    return stores.movements(db, actor, itemId, limit)
+
+
+@router.get("/transport")
+@guarded(module="finance")
+async def transport_routes(db, actor):
+    return stores.routes(db, actor)
+
+
+@router.get("/transport/{route_id}")
+@guarded(module="finance")
+async def transport_route(db, actor, route_id: int):
+    return stores.route(db, actor, route_id)
+
+
+@router.post("/transport")
+@guarded(portal="finance", module="finance", action="edit")
+async def save_transport_route(db, actor, request: Request):
+    return stores.save_route(db, actor, await _json(request))
+
+
+@router.post("/transport/riders")
+@guarded(portal="finance", module="finance", action="edit")
+async def assign_rider(db, actor, request: Request):
+    body = await _json(request)
+    return stores.assign_rider(db, actor, body.get("studentId") or body.get("student_id"),
+                               body.get("routeId") or body.get("route_id"),
+                               body.get("stopId"), body.get("direction"),
+                               body.get("feeOverride"))
+
+
+@router.post("/transport/payment")
+@guarded(portal="finance", module="fees", action="create")
+async def transport_payment(db, actor, request: Request):
+    body = await _json(request)
+    return stores.transport_payment(db, actor, body.get("studentId") or body.get("student_id"),
+                                    body.get("amount"), body.get("routeId"),
+                                    body.get("method"), body.get("notes"))
+
+
+@router.get("/books/{student_id}")
+@guarded(portal="finance", module="fees")
+async def books_account(db, actor, student_id: int, yearId: int = None):
+    return stores.books_account(db, actor, student_id, yearId)
+
+
+@router.post("/books/{student_id}")
+@guarded(portal="finance", module="fees", action="edit")
+async def save_books(db, actor, student_id: int, request: Request):
+    body = await _json(request)
+    return stores.save_books(db, actor, student_id, body.get("items"), body.get("yearId"))
+
+
+@router.post("/books/{student_id}/payment")
+@guarded(portal="finance", module="fees", action="create")
+async def books_payment(db, actor, student_id: int, request: Request):
+    body = await _json(request)
+    return stores.books_payment(db, actor, student_id, body.get("amount"),
+                                body.get("method"), body.get("reference"), body.get("notes"))
+
+
+@router.get("/discounts")
+@guarded(portal="finance", module="fees")
+async def discounts(db, actor, studentId: int = None):
+    return stores.discounts(db, actor, studentId)
+
+
+@router.post("/discounts")
+@guarded(portal="finance", module="fees", action="edit")
+async def grant_discount(db, actor, request: Request):
+    return stores.grant_discount(db, actor, await _json(request))

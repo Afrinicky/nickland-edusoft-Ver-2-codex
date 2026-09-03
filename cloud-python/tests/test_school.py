@@ -420,6 +420,94 @@ def main():
     ck("and so is every failed sign-in",
        db.value("SELECT count(*) FROM audit_log WHERE action = 'login_failed'") >= 1)
 
+    # ── the rest of the school ──────────────────────────────────────────────
+    # Timetable, homework, notices, stock, transport, books and discounts —
+    # the modules a school uses that are not marks or money, checked for the
+    # same two things: that the screen has something behind it, and that the
+    # wrong account cannot reach it.
+
+    r = post("adjei", "/timetable/periods", {"label": "Period 1", "start_time": "08:00",
+                                             "end_time": "08:40", "display_order": 1})
+    ck("the Super Admin sets up a period", r.json().get("ok"))
+    period_id = r.json()["id"]
+    r = post("owusu", "/timetable/class", {"classId": b5, "entries": [
+        {"day_of_week": 1, "period_id": period_id, "subject_id": maths,
+         "teacher_id": staff_ids["OWUSU"]}]})
+    ck("the class teacher lays out their week", r.json().get("entries") == 1)
+    r = get("owusu", "/timetable/mine")
+    ck("...and it appears on their own timetable",
+       r.json()["entries"].get("1", {}).get(str(period_id), {}).get("subject_name") == "Mathematics")
+    r = post("owusu", "/timetable/periods", {"label": "Sneaky", "display_order": 9})
+    ck("but the periods themselves belong to the office", r.status_code == 403)
+
+    r = post("owusu", "/homework", {"classId": b5, "subjectId": maths, "title": "Fractions",
+                                    "dueDate": "2026-05-20", "maxMarks": 10})
+    ck("a teacher sets homework", r.json().get("ok"))
+    homework_id = r.json()["id"]
+    r = post("owusu", f"/homework/{homework_id}/marks",
+             {"entries": [{"student_id": pupils["ANSU"], "status": "submitted", "marks": 8}]})
+    ck("...marks it", r.json().get("marked") == 1)
+    ck("...and the mark counts towards the class score rather than sitting in a corner",
+       r.json().get("counted_towards_class_score") is True)
+    # The class score is recomputed across EVERY column, not adjusted: 16 out
+    # of 20 on the class test plus 8 out of 10 for the homework is 24 out of
+    # 30, which is the same 32 of the 40 weight the class test alone was worth.
+    # The number is unchanged and the working is not — two columns now stand
+    # behind it, which is what the check is really for.
+    ck("...and the class score is recomputed across every column",
+       db.value("SELECT count(*) FROM assessment_columns WHERE subject_id = %s", (maths,)) == 2
+       and db.value("SELECT class_score FROM scores WHERE student_id = %s AND subject_id = %s",
+                    (pupils["ANSU"], maths)) == 32)
+
+    r = post("boateng", "/announcements", {"title": "Vacation", "body": "School closes on the 20th."})
+    ck("the head teacher posts a notice", r.json().get("ok"))
+    r = post("owusu", "/announcements", {"title": "Mine", "body": "..."})
+    ck("...and a class teacher without notifications cannot", r.status_code == 403)
+
+    r = post("asante", "/inventory", {"name": "Exercise books", "unit": "box",
+                                      "unit_cost": 60, "reorder_level": 2})
+    ck("the bursar adds a stock item", r.json().get("ok"))
+    item_id = r.json()["id"]
+    r = post("asante", "/inventory/movement", {"item_id": item_id, "type": "in", "quantity": 5})
+    ck("...takes five boxes in", r.json().get("quantity_on_hand") == 5)
+    r = post("asante", "/inventory/movement", {"item_id": item_id, "type": "out", "quantity": 9})
+    ck("...and cannot issue nine of them", r.status_code == 400)
+    r = get("owusu", "/inventory")
+    ck("a teacher cannot see the store room at all", r.status_code == 403)
+
+    r = post("asante", "/transport", {"name": "Adenta run", "fee_per_term": 300,
+                                      "driver_name": "Mr Tetteh", "capacity": 18})
+    ck("the bursar sets up a transport route", r.json().get("ok"))
+    route_id = r.json()["id"]
+    r = post("asante", "/transport/riders", {"studentId": pupils["ANSU"], "routeId": route_id})
+    ck("...and puts a pupil on it", r.json().get("ok"))
+    r = post("asante", "/transport/payment", {"studentId": pupils["ANSU"], "amount": 300,
+                                              "routeId": route_id})
+    ck("...and the fare is receipted into the books",
+       r.json()["receipt_number"].startswith("TR/")
+       and db.value("SELECT count(*) FROM income_records WHERE category = 'transport'") == 1)
+
+    r = post("asante", f"/books/{pupils['ANSU']}",
+             {"items": [{"title": "Mathematics workbook", "amount": 45},
+                        {"title": "Reader", "amount": 30}]})
+    ck("a pupil's books are itemised", r.json().get("total") == 75)
+    r = post("asante", f"/books/{pupils['ANSU']}/payment", {"amount": 45})
+    ck("...and a payment against them is receipted", r.json()["receipt_number"].startswith("BK/"))
+    ck("...and leaves the right balance",
+       db.value("SELECT balance FROM student_books WHERE student_id = %s", (pupils["ANSU"],)) == 30)
+
+    r = post("asante", "/discounts", {"studentId": pupils["BOATENG"], "discount_type": "percent",
+                                      "discount_value": 50, "reason": "Staff child"})
+    ck("even a bursar with full fees cannot grant a discount", r.status_code == 403)
+    r = post("amoah", "/discounts", {"studentId": pupils["BOATENG"], "discount_type": "percent",
+                                     "discount_value": 50, "reason": "Staff child"})
+    ck("the proprietor can — it is money the school decides not to collect",
+       r.json().get("ok"))
+    post("asante", "/fees/bills", {"studentId": pupils["BOATENG"]})
+    ck("...and it shows up when the bill is raised again",
+       db.value("SELECT discount_amount FROM student_bills WHERE student_id = %s AND term_id = %s",
+                (pupils["BOATENG"], term)) == 225)
+
     # ── a token from one school is not a token for another ──────────────────
     other = "t" + uuid.uuid4().hex[:10]
     sdb.provision(other)
