@@ -186,7 +186,7 @@ def submit_decision(store, sid, rec, kind, body):
             "notes": str(body.get("notes") or "")[:500],
             # The desktop re-checks this account's live permissions before it
             # applies anything; the id travels so it knows whose decision it was.
-            "decided_by_user_id": rec.get("user_id"),
+            "user_id": rec.get("user_id"),
             "decided_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         },
     })

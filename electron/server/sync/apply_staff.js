@@ -471,6 +471,141 @@ function applyPasswordResetRequest(db, payload) {
   return true;
 }
 
+// ── decisions taken off-LAN ─────────────────────────────────────────────────
+// A head teacher approving leave on the bus, or signing off a lesson note.
+// Neither moves money, which is why they are the only two decisions the cloud
+// is allowed to queue at all. Idempotent by state rather than by ledger: a
+// request that is no longer pending is left exactly as the desktop has it,
+// so a redelivered change cannot overturn a decision made since.
+function applyLeaveDecision(db, payload) {
+  const user = actor(db, payload);
+  if (!user) return false;
+  if (!allowed(db, user.id, 'staff', 'edit')) return false;
+  const id = parseInt(payload.id, 10);
+  const decision = String(payload.decision || '');
+  if (!id || !['approved', 'rejected'].includes(decision)) return false;
+  try {
+    const lr = db.prepare('SELECT id, status, staff_id FROM leave_requests WHERE id = ?').get(id);
+    if (!lr) return false;
+    if (lr.status !== 'pending') return true;            // already settled here
+    db.prepare(`
+      UPDATE leave_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime('now'),
+        reviewer_notes = ? WHERE id = ?
+    `).run(decision, user.id, String(payload.notes || '').slice(0, 500) || null, id);
+    try {
+      const owner = db.prepare('SELECT id FROM users WHERE staff_id = ?').get(lr.staff_id);
+      if (owner) require('./staff_projection').enqueueStaffProfile(db, owner.id);
+    } catch (_) {}
+    audit(db, user.id, 'leave_request', id, `leave_${decision}`, 'Decided in the app, off-LAN');
+  } catch (_) { return false; }
+  return true;
+}
+
+function applyLessonNoteDecision(db, payload) {
+  const user = actor(db, payload);
+  if (!user) return false;
+  if (!allowed(db, user.id, 'academics', 'edit')) return false;
+  const id = parseInt(payload.id, 10);
+  const decision = String(payload.decision || '');
+  if (!id || !['approved', 'rejected'].includes(decision)) return false;
+  try {
+    const note = db.prepare("SELECT id, COALESCE(status,'draft') status FROM lesson_notes WHERE id = ?").get(id);
+    if (!note) return false;
+    if (note.status !== 'submitted') return true;        // already settled here
+    db.prepare(`
+      UPDATE lesson_notes SET status = ?, reviewed_by = ?, reviewed_at = datetime('now'),
+        review_comments = ? WHERE id = ?
+    `).run(decision, user.id, String(payload.notes || '').slice(0, 500) || null, id);
+    audit(db, user.id, 'lesson_note', id, `lesson_note_${decision}`, 'Decided in the app, off-LAN');
+  } catch (_) { return false; }
+  return true;
+}
+
+// ── money that arrived while the school was closed ──────────────────────────
+// A fee paid through the gateway on the portal. The cloud confirmed it with
+// the gateway and could not record it — it has no receipt counter and no
+// ledger — so this is where it becomes a payment in the school's books, through
+// the same function the counter uses.
+//
+// There is no `user_id` here and there must not be: nobody in the school
+// authorised this, the gateway did. What stands in for authority is the
+// gateway reference, which is de-duplicated twice over — against the ledger of
+// applied changes, and against the payments table itself — so a redelivered
+// change, a re-verified charge and a second pull all resolve to one receipt.
+function applyGatewayPayment(db, payload) {
+  const reference = String(payload.gateway_reference || '').trim();
+  const studentId = parseInt(payload.student_id, 10);
+  const amount = Number(payload.amount);
+  if (!reference || !studentId || !(amount > 0)) return false;
+
+  const ref = `fee_payment:${reference}`;
+  if (alreadyApplied(db, ref)) return true;
+  try {
+    const dup = db.prepare('SELECT id FROM payments WHERE reference = ?').get(reference);
+    if (dup) { markApplied(db, ref); return true; }
+  } catch (_) { /* fall through to the write, which is itself guarded */ }
+
+  let result;
+  try {
+    result = require('../payments_service').recordFeePayment(db, {
+      student_id: studentId,
+      amount,
+      payment_date: String(payload.paid_at || '').slice(0, 10) || undefined,
+      payment_method: payload.gateway === 'paystack' ? 'Paystack' : 'Mobile Money',
+      reference,
+      received_by: null,                      // the gateway, not a person
+      notes: `Paid online through ${payload.gateway || 'the gateway'}`,
+      source: 'online_payment',
+    });
+  } catch (_) { return false; }
+  if (!result || !result.ok) return false;
+
+  markApplied(db, ref);
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+      VALUES ('payment', ?, 'online_payment_settled', NULL, ?, 'normal')
+    `).run(result.payment_id, `${reference} → receipt ${result.receipt_number}`);
+  } catch (_) {}
+  refresh(db, [studentId]);
+  return true;
+}
+
+// A payment a parent says they made at the bank. Not a payment: an intent,
+// which somebody in the office confirms against the school's own statement
+// before a penny is posted. De-duplicated on the reference the parent gave,
+// so declaring twice does not give the office the same slip twice.
+function applyDeclaredPayment(db, payload) {
+  const studentId = parseInt(payload.student_id, 10);
+  const amount = Number(payload.amount);
+  const reference = String(payload.reference || '').trim();
+  if (!studentId || !(amount > 0) || !reference) return false;
+  const ref = `payment_declared:${studentId}:${reference}`;
+  if (alreadyApplied(db, ref)) return true;
+  try {
+    const r = require('../payments_service').createIntent(db, {
+      student_id: studentId,
+      parent_id: payload.parent_id ? parseInt(payload.parent_id, 10) : null,
+      amount,
+      channel: payload.channel || 'bank',
+      reference,
+      notes: String(payload.notes || '').slice(0, 300) || 'Declared by the parent in the app',
+    });
+    if (!r || !r.ok) return false;
+  } catch (_) { return false; }
+  markApplied(db, ref);
+  return true;
+}
+
+function audit(db, userId, entityType, entityId, action, note, severity = 'normal') {
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(entityType, entityId, action, userId, String(note || '').slice(0, 500), severity);
+  } catch (_) {}
+}
+
 // A tiny table so a redelivered change that is NOT naturally idempotent — a
 // canteen collection, a homework assignment — is applied exactly once. Kept
 // here rather than in the main schema because it belongs to sync, and created
@@ -526,6 +661,10 @@ const HANDLERS = {
   announcement_create: applyAnnouncement,
   staff_password_change: applyPasswordChange,
   staff_password_reset_request: applyPasswordResetRequest,
+  leave_decision: applyLeaveDecision,
+  lesson_note_decision: applyLessonNoteDecision,
+  fee_payment: applyGatewayPayment,
+  payment_declared: applyDeclaredPayment,
 };
 
 function applyStaffChange(db, change) {

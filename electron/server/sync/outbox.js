@@ -376,6 +376,7 @@ function backfillAll(db, { receiptLimit = 200 } = {}) {
   try { if (enqueueSchoolProfile(db)) counts.school = 1; } catch (_) {}
 
   try { Object.assign(counts, require('./staff_projection').enqueueAllStaff(db)); } catch (_) {}
+  try { Object.assign(counts, require('./office_projection').enqueueOffice(db)); } catch (_) {}
 
   return { ok: true, counts, total: Object.values(counts).reduce((a, b) => a + b, 0) };
 }

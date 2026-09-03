@@ -188,7 +188,7 @@ async function submitDecision(store, school_id, rec, kind, body) {
       notes: String(body.notes || '').slice(0, 500),
       // The desktop re-checks this account's live permissions before it
       // applies anything; the id travels so it knows whose decision it was.
-      decided_by_user_id: rec.user_id,
+      user_id: rec.user_id,
       decided_at: new Date().toISOString(),
     },
   });

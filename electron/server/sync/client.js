@@ -165,6 +165,10 @@ async function syncOnce(db) {
     const sp = require('./staff_projection');
     sp.enqueueSchoolMetrics(db);
     sp.enqueueDebtors(db);
+    // The office summaries are the same shape of thing — two derived reads,
+    // collapsed onto one outbox row each — so they are rebuilt here rather
+    // than hooked onto every payment, admission and approval in the app.
+    require('./office_projection').enqueueOffice(db);
   } catch (_) {}
 
   const p = await push(db).catch(() => ({ ok: false }));
