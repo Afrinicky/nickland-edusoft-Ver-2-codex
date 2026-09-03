@@ -8,15 +8,10 @@ import { Redirect } from 'expo-router';
 import { useAuth } from '../../src/auth';
 import { Loading } from '../../src/ui';
 import { AppShell } from '../../src/shell';
-import { PARENT_NAV, PARENT_PRIMARY, PARENT_QUICK } from '../../src/nav';
+import { PORTAL_NAV } from '../../src/nav';
+import { homeHref } from '../../src/portals';
 
-const NAV = {
-  title: 'Parent', items: PARENT_NAV, primary: PARENT_PRIMARY, quick: PARENT_QUICK,
-  accountHref: '/parent/account',
-  actionIcon: 'chat',
-  actionLabel: 'Reach the school',
-  actionHint: 'A question, an absence, a bill — start here.',
-};
+const NAV = { ...PORTAL_NAV.parent, portal: 'parent' };
 
 export default function ParentLayout() {
   const { ready, token, profile } = useAuth();
@@ -29,7 +24,7 @@ export default function ParentLayout() {
   if (!ready) return <Loading label="Starting…" />;
   if (!token || !profile) return <Redirect href="/" />;
   // A member of staff who lands on a parent URL belongs in their own area.
-  if (profile.role !== 'parent') return <Redirect href="/staff" />;
+  if (profile.role !== 'parent') return <Redirect href={homeHref(profile)} />;
 
   return <AppShell nav={NAV} school={profile?.school?.name} />;
 }
