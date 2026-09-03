@@ -46,6 +46,7 @@ import { colors, palette, spacing, radius, type } from '../../../src/theme';
 const TABS = [
   { value: 'overview', label: 'Overview', icon: 'grid' },
   { value: 'academics', label: 'Academics', icon: 'award' },
+  { value: 'conduct', label: 'Conduct', icon: 'shield' },
   { value: 'reports', label: 'Reports', icon: 'trend' },
   { value: 'attendance', label: 'Register', icon: 'check' },
   { value: 'fees', label: 'Fees', icon: 'wallet' },
@@ -71,6 +72,7 @@ export default function ChildDetail() {
   const [homework, setHomework] = useState([]);
   const [timetable, setTimetable] = useState(null);
   const [transport, setTransport] = useState(null);
+  const [conduct, setConduct] = useState(null);
   const [profileSheet, setProfileSheet] = useState(null);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -84,7 +86,7 @@ export default function ChildDetail() {
     setError(null);
     const settle = (p, fallback) => p.then(r => r).catch(() => fallback);
     try {
-      const [d, rep, rl, f, ct, att, hw, tt, tp, prof] = await Promise.all([
+      const [d, rep, rl, f, ct, att, hw, tt, tp, prof, cond] = await Promise.all([
         api.child(token, id),
         settle(api.childReport(token, id), null),
         settle(api.childReports(token, id), { terms: [] }),
@@ -95,11 +97,15 @@ export default function ChildDetail() {
         settle(api.childTimetable(token, id), null),
         settle(api.childTransport(token, id), { transport: null }),
         settle(api.childProfile(token, id), null),
+        // Commendations and incidents the school has recorded. A parent has
+        // never been able to see either without being sent for.
+        settle(api.childConduct(token, id), { events: [] }),
       ]);
       setData(d); setReport(rep); setTerms(rl.terms || []);
       setFees(f); setCanteen(ct); setRegister(att);
       setHomework(hw.homework || []); setTimetable(tt); setTransport(tp.transport);
       setProfileSheet(prof && prof.student ? prof.student : null);
+      setConduct(cond.events || []);
       setReportTermId(rep?.term?.id ?? null);
     } catch (e) { setError(e.message); if (!data) setData({ child: null }); }
   }, [token, id]);
@@ -202,6 +208,8 @@ export default function ChildDetail() {
       )}
 
       {tab === 'academics' && <Academics report={report} onPrint={printReport} />}
+
+      {tab === 'conduct' && <Conduct events={conduct} summary={report?.summary} cloud={mode === 'cloud'} />}
 
       {tab === 'reports' && (
         <Reports
@@ -816,4 +824,60 @@ function shortTerm(label) {
   const year = s.match(/(\d{4})\s*[/-]\s*(\d{2,4})/);
   const head = m ? m[0].replace(/term\s*/i, 'T').replace(/first/i, 'T1').replace(/second/i, 'T2').replace(/third/i, 'T3') : s.slice(0, 6);
   return year ? `${head} ${year[1].slice(2)}` : head;
+}
+
+
+// ── conduct ─────────────────────────────────────────────────────────────────
+// The end-of-term picture (what the class teacher wrote on the report card)
+// and the running log (what happened, and when). A parent had access to
+// neither: the remarks were buried under a list of scores and the log lived on
+// the school's own computer.
+const CONDUCT_KIND = {
+  achievement: { label: 'Commendation', icon: 'award', tone: 'success' },
+  misconduct: { label: 'Incident', icon: 'alert', tone: 'danger' },
+  health: { label: 'Health', icon: 'shield', tone: 'info' },
+  note: { label: 'Note', icon: 'note', tone: 'primary' },
+};
+
+function Conduct({ events, summary, cloud }) {
+  const list = events || [];
+  const good = list.filter(e => e.event_type === 'achievement').length;
+  const bad = list.filter(e => e.event_type === 'misconduct').length;
+
+  return (
+    <>
+      <Remarks summary={summary} />
+
+      {list.length ? (
+        <Grid min={150}>
+          <StatCard label="Commendations" value={good} tone="success" icon="award" />
+          <StatCard label="Incidents" value={bad} tone={bad ? 'warning' : 'success'} icon="alert" />
+          <StatCard label="Entries" value={list.length} icon="note" />
+        </Grid>
+      ) : null}
+
+      <Section title="What the school has recorded" icon="shield" subtitle="Most recent first.">
+        {list.length === 0 ? (
+          <EmptyState
+            icon="shield" title="Nothing recorded"
+            message={cloud
+              ? "Conduct entries are kept on the school's own computer. On the school's network you can see them here."
+              : 'Nothing has been written about conduct this term — which for most children is exactly as it should be.'}
+          />
+        ) : list.map(e => {
+          const k = CONDUCT_KIND[e.event_type] || CONDUCT_KIND.note;
+          return (
+            <ListRow
+              key={e.id}
+              icon={k.icon} iconTone={k.tone}
+              title={e.title}
+              subtitle={[e.date, e.recorded_by_name].filter(Boolean).join(' · ')}
+              badge={<Badge tone={k.tone} label={k.label} />}
+              meta={e.description ? <Body numberOfLines={4}>{e.description}</Body> : null}
+            />
+          );
+        })}
+      </Section>
+    </>
+  );
 }

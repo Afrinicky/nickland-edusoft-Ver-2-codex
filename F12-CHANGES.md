@@ -67,6 +67,7 @@ records it.
 | Fees | One balance | The bill line by line, what was carried forward, the discount, the books, and a term-by-term history |
 | **Payment history** | 20 rows, unlabelled | Every receipt the school has issued, with term and method |
 | Canteen | One figure | Days paid, days owed, days excused, and every collection recorded |
+| **Conduct log** | — | Commendations and incidents the school records, with who wrote each and when |
 | **Bills and notices** | Notices were the SMS log only | School notices and messages, merged and sorted |
 | **Printing** | — | Report card, statement of account and pupil profile |
 | Paying | A card form | A message to the school with the figures already in it |
@@ -89,6 +90,12 @@ records it.
 * **Printing** — a pupil's report card and profile sheet from the pupil's
   record, a report card from the broadsheet, and past terms in the report sheet
   so a remark can be written knowing whether this is a fall or a recovery.
+* **A conduct log** — commendations, incidents, notes and health entries against
+  a pupil, written by the teacher answerable for the class. The desktop has kept
+  this in `student_events` since the first release and neither app could read
+  it, so recording that a child had been fighting, or had won the spelling bee,
+  meant sitting at the office computer — and a parent saw neither. The parent
+  now sees the same list, both kinds together.
 * Photographs on the class roll, on a pupil's record, in the daily collection.
 
 ## The school's own identity
@@ -123,9 +130,10 @@ every "settle this balance" prompt leads.
 
 ## Tests
 
-`test/teacher_api.js` grew from 60 to 108 checks against the real server and a
+`test/teacher_api.js` grew from 60 to 115 checks against the real server and a
 real database, covering the daily collection (including the double-tap and the
 other-class refusals), the branding route, the class contact book, the parent
-portal's new endpoints and their scoping, and that every payment route is gone.
+portal's new endpoints and their scoping, the conduct log written by a teacher
+and read by a parent, and that every payment route is gone.
 
-    npm test        # 625 checks, all green
+    npm test        # 632 checks, all green

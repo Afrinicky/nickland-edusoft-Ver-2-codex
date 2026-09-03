@@ -680,6 +680,30 @@ function createApiServer(db, opts = {}) {
     });
   });
 
+  // ── Conduct: what the school has recorded about this child ──
+  // Commendations and incidents both. A parent seeing only the good ones would
+  // be a record worth nothing; a parent seeing only the bad ones is what makes
+  // a portal something families dread opening. Health notes are included
+  // because a parent is entitled to know what the school wrote down about
+  // their child's wellbeing.
+  add('GET', `${API}/parent/children/:id/conduct`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
+    const sid = parseInt(params.id, 10);
+    if (!ctx.student_ids.includes(sid)) return json(res, 403, { ok: false, error: 'Not your child.' });
+    let events = [];
+    try {
+      events = db.prepare(`
+        SELECT se.id, se.event_type, se.title, se.description, se.date,
+               u.full_name AS recorded_by_name
+        FROM student_events se
+        LEFT JOIN users u ON u.id = se.recorded_by
+        WHERE se.student_id = ?
+        ORDER BY date(se.date) DESC, se.id DESC LIMIT 60
+      `).all(sid);
+    } catch (_) {}
+    return json(res, 200, { ok: true, events });
+  });
+
   // ── The child's own record, for printing ──
   // The same details the school holds, so a parent can print a profile sheet
   // for a hospital form or a scholarship application without a trip to the

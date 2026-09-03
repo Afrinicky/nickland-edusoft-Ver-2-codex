@@ -476,6 +476,19 @@ export const api = {
   canteenCollect: (token, { student_id, amount, payment_method, notes }) =>
     request(staffPath('/canteen/collect'), { method: 'POST', token, body: { student_id, amount, payment_method, notes } }),
 
+  // ── Conduct: commendations and incidents ──
+  // The desktop has kept this per pupil since the first release and neither
+  // app could read it. A teacher records it; a parent sees the same list.
+  studentEvents: (token, id) => request(staffPath(`/students/${id}/events`), { token }),
+  addStudentEvent: (token, id, { eventType, title, description, date }) =>
+    MODE === 'cloud'
+      ? hostOnly('Recording conduct')()
+      : request(`/students/${id}/events`, { method: 'POST', token, body: { eventType, title, description, date } }),
+  childConduct: (token, id) =>
+    MODE === 'cloud'
+      ? Promise.resolve({ ok: true, events: [], partial: true })
+      : request(`/parent/children/${id}/conduct`, { token }),
+
   // ── Staff — the class's contact book ──
   // Every guardian in one class in one request, so a teacher can ring or
   // message a parent from the roll rather than opening records one at a time.

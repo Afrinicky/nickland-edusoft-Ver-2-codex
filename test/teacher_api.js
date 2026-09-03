@@ -367,6 +367,26 @@ function req(base, method, p, { token, body } = {}) {
   });
   ck('excusing a pupil takes the same permission the desktop takes', r.status === 403);
 
+  // ── conduct: commendations and incidents ──
+  // The desktop has kept this log per pupil since the first release and
+  // neither app could read it, let alone write to it.
+  r = await req(base, 'POST', `/api/v1/students/${p1}/events`, {
+    token, body: { eventType: 'achievement', title: 'Won the spelling bee', description: 'Beat the whole of Basic 6.' },
+  });
+  ck('a class teacher can record a commendation', r.json.ok && r.json.id);
+  r = await req(base, 'GET', `/api/v1/students/${p1}/events`, { token });
+  ck('and read it back', r.json.ok && (r.json.events || []).length === 1);
+  ck('with who wrote it', r.json.events[0].recorded_by_name === 'Mr Owusu');
+  ck('and the app is told it may write here', r.json.can_write === true);
+
+  r = await req(base, 'POST', `/api/v1/students/${p1}/events`, { token, body: { title: '' } });
+  ck('an entry with no title is refused', r.status === 400);
+
+  r = await req(base, 'POST', `/api/v1/students/${outside}/events`, {
+    token, body: { eventType: 'misconduct', title: 'x' },
+  });
+  ck("a pupil in another class is not theirs to write about", r.status === 404);
+
   // ── the school's own identity ──
   // The crest and the contact numbers the app draws. Public on purpose: the
   // sign-in screen shows a parent their own school before they type anything.
@@ -468,6 +488,10 @@ function req(base, method, p, { token, body } = {}) {
 
   r = await req(base, 'GET', `/api/v1/parent/children/${p1}/profile`, { token: parentToken });
   ck('and the pupil profile is printable', r.json.ok && !!r.json.student.name);
+
+  r = await req(base, 'GET', `/api/v1/parent/children/${p1}/conduct`, { token: parentToken });
+  ck('a parent sees the same conduct log the teacher wrote',
+    r.json.ok && (r.json.events || []).some(e => e.title === 'Won the spelling bee'));
 
   r = await req(base, 'GET', `/api/v1/parent/children/${p1}/settle`, { token: parentToken });
   ck('settling a balance moves no money', r.json.ok && !('authorization_url' in r.json));

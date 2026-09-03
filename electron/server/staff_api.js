@@ -958,6 +958,59 @@ function registerStaffRoutes({ add, db, json, can, API, getSetting, media, stude
     });
   });
 
+  // ── Conduct: commendations and incidents ──────────────────────────────────
+  // The desktop has kept a behaviour and achievement log per pupil since the
+  // first release (`students:list-events`). Neither app could read it, let
+  // alone write to it, so a teacher who wanted to record that a child had been
+  // fighting — or had won the spelling bee — had to be sitting at the office
+  // computer, and a parent never saw either.
+  //
+  // It is deliberately the class teacher's to write. A commendation from
+  // anybody is fine; an incident written by a teacher with no answerability for
+  // the class is how a record becomes an argument.
+  add('GET', `${API}/students/:id/events`, async (ctx, req, res, params) => {
+    if (!isStaff(ctx) || !can(ctx, 'students', 'view')) return deny(res);
+    const sid = parseInt(params.id, 10);
+    if (!scopeLib.canAccessStudent(db, scopeOf(ctx), sid)) return missing(res, 'Student not found.');
+    let events = [];
+    try {
+      events = db.prepare(`
+        SELECT se.id, se.event_type, se.title, se.description, se.date,
+               u.full_name AS recorded_by_name
+        FROM student_events se
+        LEFT JOIN users u ON u.id = se.recorded_by
+        WHERE se.student_id = ?
+        ORDER BY date(se.date) DESC, se.id DESC LIMIT 60
+      `).all(sid);
+    } catch (_) {}
+    const classId = scopeLib.classOfStudent(db, sid);
+    return json(res, 200, {
+      ok: true, events,
+      can_write: !!(can(ctx, 'students', 'edit') && classId && scopeLib.isClassTeacherOf(scopeOf(ctx), classId)),
+    });
+  });
+
+  add('POST', `${API}/students/:id/events`, async (ctx, req, res, params, body) => {
+    if (!isStaff(ctx) || !can(ctx, 'students', 'edit')) return deny(res);
+    const sid = parseInt(params.id, 10);
+    if (!scopeLib.canAccessStudent(db, scopeOf(ctx), sid)) return missing(res, 'Student not found.');
+    const classId = scopeLib.classOfStudent(db, sid);
+    if (!classId || !scopeLib.isClassTeacherOf(scopeOf(ctx), classId)) {
+      return deny(res, 'Only the teacher answerable for the class records conduct for its pupils.');
+    }
+    const KINDS = ['achievement', 'misconduct', 'note', 'health'];
+    const kind = KINDS.includes(body.eventType) ? body.eventType : 'note';
+    const title = String(body.title || '').trim();
+    if (!title) return bad(res, 'Give the entry a title.');
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || '')) ? body.date : todayISO();
+    const r = db.prepare(`
+      INSERT INTO student_events (student_id, event_type, title, description, date, recorded_by)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(sid, kind, title.slice(0, 200), String(body.description || '').slice(0, 2000) || null, date, ctx.user.id);
+    reproject(p => p.enqueueRostersForStudents(db, [sid]));
+    return json(res, 200, { ok: true, id: r.lastInsertRowid });
+  });
+
   // ── The class's contact book ──────────────────────────────────────────────
   // A teacher who needs to reach a parent had to open a pupil's record, one at
   // a time, and copy a number by hand. This is the whole class in one request:

@@ -51,6 +51,7 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | GET | `/parent/children/:id/fees` | parent | The bill line by line, the carry-forward, the discount, the books, every receipt ever issued, and a term-by-term history. `?termId=` for a past term. |
 | GET | `/parent/children/:id/canteen` | parent | Days paid, owed and excused, day by day, plus every collection recorded. |
 | GET | `/parent/children/:id/attendance` | parent | The term's register, day by day, with totals. |
+| GET | `/parent/children/:id/conduct` | parent | The conduct log the school keeps — commendations and incidents both. |
 | GET | `/parent/children/:id/profile` | parent | The child's record, laid out for printing. |
 | GET | `/parent/children/:id/settle` | parent | **Settles nothing.** The amounts owed and the school's contact details, so the app can open WhatsApp with the child, class, term and figures already written into the message. |
 | GET | `/parent/notifications` | parent | The school's notices and the messages sent to the parent's contacts, merged and sorted. |
@@ -174,6 +175,8 @@ records it.
 | POST | `/canteen/quick-pay` | staff (`canteen.create`, class teacher) | `{ classId, date, studentIds[], paymentMethod }` — the desktop's own `markBulkPaid`, so the ledger entry, term attribution and daily rate are identical either way. A day already settled is skipped, so a second tap cannot charge the same child twice. |
 | POST | `/canteen/exempt` | staff (`canteen.edit`, class teacher) | `{ classId, date, studentIds[], reason }` — excuse the absent. A day already paid for is left as it is rather than stranding a payment row. |
 | GET | `/classes/:id/contacts` | staff (`notifications.view`) | The whole class's guardian contacts and any registered parent accounts, in one request, so a teacher can ring or message from the roll. |
+| GET | `/students/:id/events` | staff (`students.view`) | The pupil's conduct log — commendations, incidents, notes and health entries — plus `can_write`. |
+| POST | `/students/:id/events` | staff (`students.edit`, class teacher) | `{ eventType, title, description?, date? }`. Writes to the same `student_events` table the desktop has used since the first release; the pupil's parent sees the entry immediately. |
 | GET | `/timetable/mine` | staff | The signed-in teacher's own week, grouped by weekday, plus `today`. |
 | GET | `/timetable/class/:id` | staff (`academics`/`students` view) | A class's timetable grid (periods + entries). |
 | GET | `/homework?classId=` | staff (`academics.view`) | Homework for a class (`&all=1` for full history). |
