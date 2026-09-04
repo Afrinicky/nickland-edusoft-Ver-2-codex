@@ -7,7 +7,7 @@
 //   • Factory reset back to first-time setup (with an automatic safety backup first)
 //
 // All destructive actions are restricted to full-access roles (Proprietor /
-// Administrator) through the existing backend permission layer, and run only
+// Super Admin) through the existing backend permission layer, and run only
 // in the main (Node) process — never in the renderer.
 
 const fs = require('fs');
@@ -314,11 +314,11 @@ function repairUploadPathsOnStartup(db, userDataPath) {
 }
 
 module.exports = function registerBackupHandlers(ipcMain, db, app, userDataPath) {
-  // Only full-access roles (Proprietor / Administrator) may use these tools.
+  // Only full-access roles (Proprietor / Super Admin) may use these tools.
   // checkPermission grants settings:edit/delete only to those designations.
   const denied = (action) => ({
     ok: false,
-    error: `Access denied. Only an Administrator or Proprietor can ${action}.`,
+    error: `Access denied. Only the Super Admin or the Proprietor can ${action}.`,
   });
 
   const defaultLabel = (type) => ({

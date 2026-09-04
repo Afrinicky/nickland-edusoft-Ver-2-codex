@@ -269,6 +269,14 @@ def statutory_schedule(db, actor, kind, month=None, year=None):
     for r in rows:
         r["staff_name"] = f"{r.get('surname') or ''} {r.get('first_name') or ''}".strip()
         r["ssnit_total"] = round2((r["ssnit_worker"] or 0) + (r["ssnit_employer"] or 0))
+        # The same plain names the school's own server answers with, so one
+        # screen reads either without knowing which it is talking to.
+        r["basic"] = r["gross"] = round2(r["gross_salary"] or 0)
+        r["employee"] = round2(r["ssnit_worker"] or 0)
+        r["employer"] = round2(r["ssnit_employer"] or 0)
+        r["total"] = r["ssnit_total"]
+        r["taxable"] = round2((r["gross_salary"] or 0) - (r["ssnit_worker"] or 0))
+        r["amount"] = round2(r["paye_tax"] or 0)
     key = "ssnit_total" if kind == "ssnit" else "paye_tax"
     return {"ok": True, "kind": kind, "month": month, "year": year, "rows": rows,
             "total": round2(sum(r[key] or 0 for r in rows)),

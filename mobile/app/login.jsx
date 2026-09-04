@@ -21,7 +21,7 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '../src/auth';
-import { homeHref } from '../src/portals';
+import { landingHref } from '../src/modules';
 import { api, setRole } from '../src/api';
 import {
   Card, Title, Muted, Field, Button, IconButton, ErrorNote, InfoNote, Crest,
@@ -81,13 +81,15 @@ export default function Login() {
       // An account on a password somebody else chose stops here, exactly as
       // the desktop does. Letting it through would leave a temporary password
       // working forever on the one device nobody supervises.
-      // Where this account belongs: the most capable portal it holds, so a
-      // bursar opens on the office and a head teacher on the school rather
-      // than on a register neither of them takes.
+      //
+      // Everybody else lands in the same place — the school, with the modules
+      // they hold on it. There is no longer a most-capable-portal to choose
+      // between: a bursar and a head teacher open the same home and see
+      // different things on it, exactly as they do on the desktop.
       router.replace(
         me.role === 'parent' ? '/parent'
-          : me.must_change_password ? '/staff/account?changePassword=1'
-          : homeHref(me));
+          : me.must_change_password ? '/app/account?changePassword=1'
+          : landingHref(me));
     } catch (e) {
       setError(e.message || 'Sign in failed.');
     } finally { setBusy(false); }

@@ -3,11 +3,15 @@
 //
 // Permissions model:
 //   - A teacher can view/create/edit only their own records (resolved via users.staff_id)
-//   - Head Teacher / Administrator / Proprietor can view & review all
+//   - Head Teacher / Super Admin / Proprietor can view & review all
 //   - The 'mine' boolean on list handlers limits to current user's own records
 
 module.exports = function registerStaffActivitiesHandlers(ipcMain, db) {
   const security = require('./_security');
+  // One list of who supervises, shared with the rest of the system, so the
+  // designation being renamed cannot quietly stop a head teacher signing off a
+  // lesson note. It accepts the old name as well as the new one.
+  const { isSupervisor } = require('./_portals');
 
   // Helper: resolve the staff_id for the current logged-in user
   function currentStaffId() {
@@ -25,7 +29,7 @@ module.exports = function registerStaffActivitiesHandlers(ipcMain, db) {
       SELECT d.name AS designation FROM users u
       LEFT JOIN designations d ON d.id = u.designation_id WHERE u.id = ?
     `).get(uid);
-    return ['Administrator', 'Proprietor', 'Head Teacher'].includes(row?.designation);
+    return isSupervisor(row?.designation);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -114,7 +118,7 @@ module.exports = function registerStaffActivitiesHandlers(ipcMain, db) {
       ? (data.staff_id || mySid)
       : (supervisor && data.staff_id ? data.staff_id : mySid);
     if (!staffId) {
-      return { ok: false, error: 'You must be linked to a staff record to create lesson notes. Ask an Administrator.' };
+      return { ok: false, error: 'You must be linked to a staff record to create lesson notes. Ask the school office.' };
     }
 
     if (data.id) {
@@ -177,7 +181,7 @@ module.exports = function registerStaffActivitiesHandlers(ipcMain, db) {
   // Head teacher reviews a lesson note (acknowledges + adds comments)
   ipcMain.handle('lesson-notes:review', (_e, { id, status, comments }) => {
     if (!isStaffSupervisor()) {
-      return { ok: false, error: 'Only a Head Teacher / Administrator / Proprietor can review lesson notes.' };
+      return { ok: false, error: 'Only a Head Teacher, the Super Admin or the Proprietor can review lesson notes.' };
     }
     const uid = security.getCurrentUserId();
     db.prepare(`
@@ -283,7 +287,7 @@ module.exports = function registerStaffActivitiesHandlers(ipcMain, db) {
   // Supervisor acknowledges an activity
   ipcMain.handle('staff-activities:acknowledge', (_e, id) => {
     if (!isStaffSupervisor()) {
-      return { ok: false, error: 'Only a Head Teacher / Administrator / Proprietor can acknowledge activities.' };
+      return { ok: false, error: 'Only a Head Teacher, the Super Admin or the Proprietor can acknowledge activities.' };
     }
     const uid = security.getCurrentUserId();
     db.prepare(`

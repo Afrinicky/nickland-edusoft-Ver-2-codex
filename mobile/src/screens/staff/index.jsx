@@ -1,4 +1,4 @@
-// The teacher's day, before anything else.
+// My day — the phone's home, before anything else.
 // Copyright © 2026 Nickland Sales. All rights reserved.
 //
 // Ordered by what a teacher actually opens the app for at ten past seven in the
@@ -27,7 +27,7 @@ import {
 import { ContactSchool } from '../../actions';
 import { Appear, AppearList, Press, useCountUp } from '../../motion';
 import { Icon } from '../../icons';
-import { visibleNav, STAFF_NAV } from '../../nav';
+import { can } from '../../guard';
 import { useLayout } from '../../responsive';
 import { colors, palette, gradients, spacing, radius, shadow, type } from '../../theme';
 import { Gradient } from '../../ui';
@@ -41,7 +41,7 @@ function greeting() {
   return 'Good evening';
 }
 
-export default function Dashboard() {
+export default function MyDay({ grid = null }) {
   const { token, profile, mode } = useAuth();
   const router = useRouter();
   const layout = useLayout();
@@ -79,7 +79,6 @@ export default function Dashboard() {
     finally { setClocking(false); }
   }
 
-  const nav = useMemo(() => visibleNav(STAFF_NAV, profile), [profile]);
 
   // ── what today still needs ──
   // Derived rather than fetched: every fact here is already on the screen.
@@ -87,7 +86,10 @@ export default function Dashboard() {
   const lessons = (today?.periods || []).filter(p => !p.is_break);
   const clockedIn = hr?.today?.attendance?.clock_in;
   const clockedOut = hr?.today?.attendance?.clock_out;
-  const has = (key) => nav.some(i => i.key === key);
+  // What this account may actually do, asked of the permission map itself.
+  // The day's list is not a menu — a job offered to somebody who would be
+  // refused it is the failure the whole product is written against.
+  const has = (module, action = 'view') => can(profile, module, action);
 
   const jobs = useMemo(() => {
     const out = [];
@@ -99,28 +101,28 @@ export default function Dashboard() {
         onPress: clockedIn || clockedOut ? null : () => punch('in'),
       });
     }
-    if (has('attendance')) {
+    if (has('students', 'edit') || has('academics', 'edit')) {
       out.push({
         key: 'attendance', icon: 'check', label: "Take today's register",
         state: 'todo', note: lessons.length ? `${lessons.length} lesson${lessons.length === 1 ? '' : 's'} today` : 'Whichever class is yours',
         href: '/app/students?tab=register',
       });
     }
-    if (has('canteen')) {
+    if (has('canteen', 'create')) {
       out.push({
         key: 'canteen', icon: 'bowl', label: 'Canteen collection',
         state: 'todo', note: 'Quick pay — a class in one pass',
         href: '/app/canteen?tab=quickpay',
       });
     }
-    if (has('notes')) {
+    if (has('academics', 'view')) {
       out.push({
         key: 'notes', icon: 'note', label: 'Lesson note',
         state: 'todo', note: "Write today's and submit it",
         href: '/app/staff?tab=lessonnotes',
       });
     }
-    if (has('scores')) {
+    if (has('academics', 'edit')) {
       out.push({
         key: 'scores', icon: 'chart', label: 'Enter exam marks',
         state: 'todo', note: 'A class and a subject at a time',
@@ -128,7 +130,7 @@ export default function Dashboard() {
       });
     }
     return out;
-  }, [hr, clockedIn, clockedOut, lessons.length, nav]);
+  }, [hr, clockedIn, clockedOut, lessons.length, profile]);
 
   const doneCount = jobs.filter(j => j.state === 'done').length;
   const pct = jobs.length ? Math.round((doneCount / jobs.length) * 100) : 0;
@@ -282,6 +284,11 @@ export default function Dashboard() {
           ))}
         </Section>
       )}
+
+      {/* Everything this account can open. On a phone the day comes first and
+          the grid second: a teacher at ten past seven wants the register, not
+          a menu. The desktop reverses it, and draws the grid alone. */}
+      {grid}
 
       {/* The school itself, and a way to reach the office. */}
       <Card>

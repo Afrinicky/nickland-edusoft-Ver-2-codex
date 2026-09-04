@@ -64,3 +64,38 @@ The seeds match how a Ghanaian school is actually staffed:
   (levels, modules, mappings) in `electron/ipc/_access.js`; the UI in
   `src/renderer/src/pages/Settings/AccessControl.jsx` with the reusable
   `LevelPills` control.
+
+## What it looks like in the browser and on the phone
+
+The same ladder decides what the app draws. There is no separate app-side
+setting and no "teaching / finance / admin" choice to make: the system reads
+the account's permission map and hands it the modules it holds, in the
+installed application's own order.
+
+| Level on a module | What appears |
+|---|---|
+| **No access** | The module is not in the sidebar, not on Home, not in the drawer, and not in the bottom bar. It is not greyed out — it is not there |
+| **View** | The module opens, on the tabs that only read. Students opens on its dashboard and roll; the Students Sheet is absent |
+| **Contribute** | The tabs that add appear: Admissions, Quick Pay, taking a payment |
+| **Manage** | The tabs that correct appear: the Students Sheet, Fee Templates, the timetable editor |
+| **Full** | Adds what deletes, where a screen offers it |
+
+Three things do not follow the ladder:
+
+* **My work** and **Account** belong to every account, down to a security man
+  granted nothing at all. A payslip, a clock-in and a password are a person's
+  own.
+* **The audit trail** is the Super Admin's, whatever anybody's `settings` level
+  says.
+* **Discounts, reversals and voids** need elevation (Proprietor or Super
+  Admin) over and above `fees`. A bursar with Fees at Full may take money and
+  may not forgive it.
+
+The app is not the enforcement — the server checks every request against the
+same resolved permissions, and refuses whatever the app happened to draw. What
+the app is responsible for is the other half of the rule: **what you cannot do,
+you cannot see.** A menu item leading to "access denied" advertises a part of
+the school's system to somebody who has been told they may not have it.
+
+The front end's half is tested in `test/app_modules.mjs` and the server's in
+`test/office_api.js`, `test/access.js` and `test/portals.js`.

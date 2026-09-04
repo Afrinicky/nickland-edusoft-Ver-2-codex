@@ -24,6 +24,9 @@
 
 const { postToOutbox, syncEnabled } = require('./outbox');
 const { getSetting } = require('../../utils/idgen');
+// Who is unrestricted, and who supervises — one list for the whole system, so
+// the designation being renamed cannot silently narrow a head teacher's scope.
+const { isElevated, isSupervisor } = require('../../ipc/_portals');
 
 // How much attendance history a teacher can see and correct from off-LAN. Two
 // school weeks: enough to fix last week's register, small enough that a class
@@ -48,7 +51,7 @@ function fullName(s) {
 // The teaching scope, flattened for the cloud: plain arrays, because a Set
 // does not survive JSON and the cloud has no database to resolve ids against.
 function teachingScope(db, u) {
-  const unrestricted = ['Proprietor', 'Administrator', 'Head Teacher'].includes(u.designation);
+  const unrestricted = isSupervisor(u.designation);
   const scope = {
     unrestricted,
     whole_classes: [], class_subjects: {}, any_class_subjects: [], class_teacher_of: [],
@@ -87,7 +90,7 @@ function enqueueStaffAuth(db, userId) {
 
     let permissions = {};
     try { permissions = require('../../ipc/auth').resolveEffectivePermissions(db, userId); } catch (_) {}
-    const isAdmin = ['Administrator', 'Proprietor'].includes(u.designation);
+    const isAdmin = isElevated(u.designation);
 
     return postToOutbox(db, {
       entity_type: 'staff_auth',

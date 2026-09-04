@@ -4,7 +4,7 @@
 // The controversial half of billing: raising in-term supplementary charges,
 // and withdrawing a bill that should never have gone out. Both change what a
 // parent is told they owe, so both are restricted to the Proprietor and the
-// Administrator, and both leave an audit trail with a stated reason.
+// Super Admin, and both leave an audit trail with a stated reason.
 
 const security = require('./_security');
 const billing = require('./_billing');
@@ -19,12 +19,12 @@ function requireElevated(db, action) {
       db.prepare(`
         INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
         VALUES ('student_bill', NULL, 'permission_denied', ?, ?, 'high')
-      `).run(userId, `Denied ${action}: only the Proprietor or Administrator may do this.`);
+      `).run(userId, `Denied ${action}: only the Proprietor or the Super Admin may do this.`);
     } catch (_) { /* auditing must not block the denial */ }
     return {
       ok: false,
       code: 'NOT_ELEVATED',
-      error: 'Only the Proprietor or the Administrator can change or withdraw a bill that has already been issued.',
+      error: 'Only the Proprietor or the Super Admin can change or withdraw a bill that has already been issued.',
     };
   }
   return null;
@@ -404,7 +404,7 @@ module.exports = function registerFeesBillingHandlers(ipcMain, db) {
     }
   });
 
-  // The Proprietor/Administrator review screen: every voided bill this term
+  // The Proprietor/Super Admin review screen: every voided bill this term
   // with who voided it and why.
   ipcMain.handle('fees:list-voided-bills', (_e, termId) => {
     return db.prepare(`

@@ -62,13 +62,37 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     catch (_) { return null; }
   };
 
+  // The gate on these routes is the MODULE, and only the module.
+  //
+  // It used to be the administration portal as well, and that was right while
+  // the app was four portals: a bursar had no administration screen, so a
+  // bursar had no business at an administration route. The app is modules now,
+  // exactly as the desktop has always been — a person holding Students at
+  // Manage is shown Students and the sheet inside it, whether or not they also
+  // hold the staff register — and a portal check here would refuse the very
+  // screen the module system just drew for them. A module a person may not use
+  // is still never drawn; that rule is unchanged and is enforced in the same
+  // permission map both sides read.
+  //
+  // Nothing is widened by this. `can()` is the same check the desktop makes on
+  // the same resolved permissions, and every route below still names the
+  // module and the action it needs.
   const adminGate = (ctx, res, module, action = 'view') => {
     if (!ctx || ctx.role !== 'staff') { deny(res, 'Staff only.'); return false; }
-    if (!portals.hasPortal(ctx, 'admin')) { deny(res); return false; }
-    if (module && !can(ctx, module, action)) {
-      deny(res, `Access denied. You do not have permission to ${action} ${module}.`);
-      return false;
+    if (module) {
+      if (!can(ctx, module, action)) {
+        deny(res, `Access denied. You do not have permission to ${action} ${module}.`);
+        return false;
+      }
+      return true;
     }
+    // The cross-module summary. It reports each part only to an account that
+    // holds that part (see `may` below), so the gate is simply: does this
+    // person hold any of it? Somebody granted nothing is told no, once, rather
+    // than handed a page of zeroes.
+    const any = ['students', 'staff', 'academics', 'fees', 'dashboard']
+      .some(m => can(ctx, m, 'view'));
+    if (!any) { deny(res); return false; }
     return true;
   };
 

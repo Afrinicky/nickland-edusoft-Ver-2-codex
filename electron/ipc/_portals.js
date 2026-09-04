@@ -82,6 +82,14 @@ const isSuperAdmin = (profile) => !!profile && (
 const ELEVATED_NAMES = ['Proprietor', SUPER_ADMIN, SUPER_ADMIN_LEGACY];
 const isElevated = (name) => name === 'Proprietor' || isSuperAdminName(name);
 
+// Those two, and the head teacher: the people who APPROVE things — a lesson
+// note, a leave request, a staff activity — as opposed to the people who are
+// held back nowhere. One list again, because a hard-coded
+// ['Administrator', 'Proprietor', 'Head Teacher'] somewhere is a head teacher
+// who cannot sign off a lesson note the day the designation is renamed.
+const SUPERVISOR_NAMES = [...ELEVATED_NAMES, 'Head Teacher'];
+const isSupervisor = (name) => isElevated(name) || name === 'Head Teacher';
+
 // Ranked lowest to highest. `rank` decides where an account lands when it
 // signs in: the most capable portal it holds, so a head teacher does not begin
 // every morning in a class teacher's screen.
@@ -216,7 +224,7 @@ function hasPortal(profile, key) {
 }
 
 module.exports = {
-  PORTALS, PORTAL_KEYS, SUPER_ADMIN, SUPER_ADMIN_LEGACY, ELEVATED_NAMES,
-  allows, isSuperAdmin, isSuperAdminName, isElevated,
+  PORTALS, PORTAL_KEYS, SUPER_ADMIN, SUPER_ADMIN_LEGACY, ELEVATED_NAMES, SUPERVISOR_NAMES,
+  allows, isSuperAdmin, isSuperAdminName, isElevated, isSupervisor,
   portalsFor, portalListFor, homePortal, hasPortal, portal,
 };

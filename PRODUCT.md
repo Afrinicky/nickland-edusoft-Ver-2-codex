@@ -23,28 +23,35 @@ gate. That forces the answer: a light theme with hard contrast. A dark UI in
 direct sun is a mirror. Dark appears only where it means something — the splash,
 the app's chrome, a profile header.
 
-## Five portals
+## Fourteen modules, and one of them is yours or it is not
 
-A portal is a view, never a right. What decides one is the permission map the
-system has always kept; what a portal adds is the other half of the rule below
-— a class teacher is not shown that a finance office exists inside their app.
+The desktop application has always been a list of modules down the left-hand
+side, and the browser and the phone are now the same list:
 
-- **Parent** — their child: marks, conduct, reports and trends, the register,
-  the itemised bill and receipts, canteen, homework, timetable, notices, and
-  settling the bill.
-- **Teaching** — the working day: register, class work, exam marks, broadsheet,
-  report cards, lesson notes, homework, the morning canteen collection, class
-  insight, their own record.
-- **Finance** — collections and receipts, arrears, bills, income and
-  expenditure, the statement, payroll, the store room, money taken online.
-- **Administration** — the head teacher, the management, the proprietor:
-  enrolment and pupil records, staff and leave, oversight, approvals, notices.
-- **System** — the Super Admin alone: accounts, access levels, the audit trail,
-  the school's settings.
+**Home · Dashboard · Students · Academics · Fees Management · Canteen ·
+Transport · Staff Management · Payroll · Finance · Purchasing & Inventory ·
+Notifications · Messages · Settings**
 
-The Proprietor is not the Super Admin. They own the school and stay elevated
-over its money, but the person who signs the cheques is not also the one who
-can quietly rewrite who may see that they were signed.
+An account is shown the ones it holds and is never told the others exist. A
+class teacher opens the app on Students, Academics and Canteen; a bursar on
+Fees, Finance, Payroll and the store room; neither is asked what kind of person
+they are, and neither is shown a switch between them. Everybody lands on the
+same Home — a grid of what they may open — and everybody keeps their own
+record: a payslip, a clock-in and a password belong to no module.
+
+Underneath, the system still knows the four kinds of access a school grants —
+teaching, money, running the school, the system itself. That grouping decides
+what an account holds. It is not a thing the person is shown, chooses, or has
+to understand.
+
+A parent is the exception, and always was: they are not a member of staff, and
+they have their own app inside this one — their child's marks, conduct,
+reports, register, the itemised bill and its receipts, and settling it.
+
+**The system itself — accounts, access levels, the audit trail — is the Super
+Admin's alone.** The Proprietor is not the Super Admin. They own the school and
+stay elevated over its money, but the person who signs the cheques is not also
+the one who can quietly rewrite who may see that they were signed.
 
 Full detail: **[`ARCHITECTURE-PORTALS.md`](ARCHITECTURE-PORTALS.md)**.
 
@@ -58,9 +65,10 @@ Full detail: **[`ARCHITECTURE-PORTALS.md`](ARCHITECTURE-PORTALS.md)**.
    gateway still shows its own WhatsApp number, which is how most of them take
    money anyway.
 2. **What you may not open, you do not see.** Permissions hide navigation —
-   the whole portal, not only the items in it — and the server checks every
-   request regardless of what the app chose to draw. Every refusal is written
-   to the school's own audit log.
+   the whole module, not only the items inside it — and the server checks every
+   request regardless of what the app chose to draw. There is no greyed-out
+   tile, no padlock and no "ask your administrator": a school's system is not a
+   shop. Every refusal is written to the school's own audit log.
 3. **Offline is the normal case.** The school's internet is not dependable. The
    desktop is the source of truth; nothing may depend on a CDN, a web font or a
    remote asset at runtime.

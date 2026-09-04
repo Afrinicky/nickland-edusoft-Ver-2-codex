@@ -151,7 +151,9 @@ function SideItem({ item, on, onPress }) {
       <View style={styles.sideIcon}>
         <Icon name={item.icon} size={19} color={on ? '#fff' : 'rgba(255,255,255,0.72)'} />
       </View>
-      <Text numberOfLines={1} style={[styles.sideLabel, on && styles.sideLabelOn]}>
+      {/* Two lines rather than an ellipsis: "Purchasing & Inven…" in a
+          navigation list is a module nobody can name out loud. */}
+      <Text numberOfLines={2} style={[styles.sideLabel, on && styles.sideLabelOn]}>
         {item.label}
       </Text>
     </Pressable>
@@ -442,7 +444,7 @@ const styles = StyleSheet.create({
   sideItemLit: { backgroundColor: 'rgba(255,255,255,0.10)' },
   sideItemOn: { backgroundColor: 'rgba(255,255,255,0.16)', borderLeftColor: colors.accent },
   sideIcon: { width: 22, alignItems: 'center' },
-  sideLabel: { ...type.small, color: 'rgba(255,255,255,0.72)', fontSize: 13, fontWeight: '600', flex: 1 },
+  sideLabel: { ...type.small, color: 'rgba(255,255,255,0.72)', fontSize: 13, fontWeight: '600', flex: 1, lineHeight: 17 },
   sideLabelOn: { color: '#fff', fontWeight: '700' },
 
   sideUser: {

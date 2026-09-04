@@ -20,6 +20,7 @@ const scopeLib = require('../ipc/_scope');
 const { registerStaffRoutes } = require('./staff_api');
 const { registerFinanceRoutes } = require('./finance_api');
 const { registerAdminRoutes } = require('./admin_api');
+const registerOfficeRoutes = require('./office_api');
 const { registerPaymentRoutes, onlinePaymentsEnabled } = require('./payments_api');
 const portals = require('../ipc/_portals');
 // Required at call-time (not destructured at load) to avoid a load-order
@@ -1500,6 +1501,10 @@ function createApiServer(db, opts = {}) {
   // so an account that cannot see a portal cannot reach it by typing a URL.
   registerFinanceRoutes({ add, db, json, can, API, getSetting, audit });
   registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, media, audit });
+  // Billing, discounts, books, the store room, the buses, payroll's schedules,
+  // the notification log, activities, budgets and the cashbook — everything the
+  // browser app needs on the school's own Wi-Fi that used to live behind IPC.
+  registerOfficeRoutes({ add, db, json, can, API, getSetting, audit });
 
   // Money moving in from outside the school: a parent's checkout, the
   // gateway's webhook, and the office's verification of a charge nobody heard
@@ -1558,6 +1563,10 @@ function createApiServer(db, opts = {}) {
     try {
       await route.handler(ctx, req, res, routeParams, body, ip, tokenId, parsed.query || {}, rawBody);
     } catch (e) {
+      // The browser is told nothing but "Server error" — a stack trace is a
+      // map of the building. The person holding the machine gets the fault in
+      // the log, where a school's support call is actually answered from.
+      console.error('[api] ' + req.method + ' ' + req.url + ' — ' + (e && e.message));
       json(res, 500, { ok: false, error: 'Server error' });
     }
   });

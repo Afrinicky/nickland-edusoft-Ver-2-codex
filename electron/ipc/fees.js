@@ -248,7 +248,7 @@ function registerFeesHandlers(ipcMain, db) {
     if (filters.owing) { sql += ' AND b.balance > 0'; }
     // Voided bills are hidden from every default listing. A parent must never
     // be shown, or chased for, a bill the school has withdrawn — only the
-    // Proprietor/Administrator review screen asks for them explicitly.
+    // Proprietor/Super Admin review screen asks for them explicitly.
     if (filters.status === 'voided') sql += " AND COALESCE(b.status, 'active') = 'voided'";
     else if (filters.status !== 'all') sql += " AND COALESCE(b.status, 'active') = 'active'";
     sql += ' ORDER BY s.surname, s.first_name';

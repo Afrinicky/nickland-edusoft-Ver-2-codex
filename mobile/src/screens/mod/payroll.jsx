@@ -196,7 +196,7 @@ export function StatutorySchedule({ kind }) {
              title={isSsnit ? 'SSNIT schedule' : 'PAYE schedule'}
              subtitle={isSsnit
                ? "Each person's contribution and the school's, against their SSNIT number."
-               : 'Taxable pay and the tax on it, against each TIN.'}>
+               : "Taxable pay and the tax on it, filed under the school's TIN."}>
         <View style={{ padding: spacing.lg }}>
           <DataTable
             keyExtractor={(r, i) => String(r.staff_id ?? r.id ?? i)}
@@ -216,7 +216,7 @@ export function StatutorySchedule({ kind }) {
             ] : [
               { key: 'name', label: 'Member of staff',
                 render: (r) => r.staff_name || r.name },
-              { key: 'tin', label: 'TIN', width: 180 },
+              { key: 'staff_number', label: 'Staff number', width: 180 },
               { key: 'gross', label: 'Gross', align: 'right', width: 130,
                 render: (r) => cedis(r.gross ?? r.gross_salary) },
               { key: 'taxable', label: 'Taxable', align: 'right', width: 130,

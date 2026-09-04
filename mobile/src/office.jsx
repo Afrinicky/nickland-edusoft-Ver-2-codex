@@ -1,14 +1,14 @@
-// Nickland Edusoft — the pieces the finance, administration and system
-// portals are built from.
+// Nickland Edusoft — the pieces the office screens are built from.
 // Copyright © 2026 Nickland Sales. All rights reserved.
 //
-// Three portals, one set of habits:
+// Fourteen modules, one set of habits:
 //
 //   • A screen asks for its data once and knows three states — loading, an
 //     error it can explain, and the thing itself. `useOffice` is that, so no
 //     screen invents a fourth.
-//   • A screen that an account may not open redirects to where they belong
-//     rather than showing "access denied". Telling somebody a screen exists
+//   • A screen an account may not open is never drawn in the first place, and
+//     a typed URL redirects to Home rather than showing "access denied" —
+//     see RequireModule in src/appshell.jsx. Telling somebody a screen exists
 //     and they may not have it is the thing the product is written against;
 //     the server refuses regardless of what the app drew.
 //   • Some work genuinely cannot be done from where you are — recording money
@@ -18,31 +18,10 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, RefreshControl } from 'react-native';
-import { Redirect } from 'expo-router';
 import { useAuth } from './auth';
-import { hasPortal, homeHref } from './portals';
-import { can, canAny } from './guard';
-import { Card, InfoNote, Loading, Muted, Screen, ErrorNote, Skeleton } from './ui';
+import { can } from './guard';
+import { Card, InfoNote, Muted, Screen, ErrorNote, Skeleton } from './ui';
 import { colors, spacing, type } from './theme';
-
-/**
- * Guard a portal's screens.
- *
- * `portal` is the area; `modules` is the permission the screen itself needs.
- * Both are checked, and both are checked again on the server — this only
- * decides what is drawn.
- */
-export function RequirePortal({ portal, modules, children }) {
-  const { ready, token, profile } = useAuth();
-  if (!ready) return <Loading label="Starting…" />;
-  if (!token || !profile) return <Redirect href="/" />;
-  if (!hasPortal(profile, portal)) return <Redirect href={homeHref(profile)} />;
-  if (modules) {
-    const pairs = Array.isArray(modules[0]) ? modules : [modules];
-    if (!canAny(profile, pairs)) return <Redirect href={`/${portal === 'teacher' ? 'staff' : portal}`} />;
-  }
-  return children;
-}
 
 /**
  * Fetch a screen's data, with the three states every screen has.

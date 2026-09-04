@@ -9,7 +9,7 @@ import { useAuth } from '../../src/auth';
 import { Loading } from '../../src/ui';
 import { AppShell } from '../../src/shell';
 import { PORTAL_NAV } from '../../src/nav';
-import { homeHref } from '../../src/portals';
+import { landingHref } from '../../src/modules';
 
 const NAV = { ...PORTAL_NAV.parent, portal: 'parent' };
 
@@ -24,7 +24,7 @@ export default function ParentLayout() {
   if (!ready) return <Loading label="Starting…" />;
   if (!token || !profile) return <Redirect href="/" />;
   // A member of staff who lands on a parent URL belongs in their own area.
-  if (profile.role !== 'parent') return <Redirect href={homeHref(profile)} />;
+  if (profile.role !== 'parent') return <Redirect href={landingHref(profile)} />;
 
   return <AppShell nav={NAV} school={profile?.school?.name} />;
 }

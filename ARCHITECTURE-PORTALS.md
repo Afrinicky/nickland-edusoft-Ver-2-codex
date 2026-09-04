@@ -1,4 +1,4 @@
-# Portals, access and the online school
+# Modules, access and the online school
 
 **Nickland Edusoft · Copyright © 2026 Nickland Sales**
 
@@ -17,11 +17,18 @@ same school without drifting apart.
                   one schema per school, the
                   whole of the offline schema
                                │
-        ┌──────────┬───────────┼───────────┬──────────┐
-        │          │           │           │          │
-     Parent     Teaching    Finance   Administration System
-     portal      portal      portal      portal      portal
-                               │
+                   ┌───────────┴───────────┐
+                   │                       │
+            The school's app          Parent's app
+     Home · Dashboard · Students ·   their own children
+     Academics · Fees · Canteen ·
+     Transport · Staff · Payroll ·
+     Finance · Inventory ·
+     Notifications · Messages ·
+     Settings
+        (each one shown only to an
+         account that holds it)
+                   │
                         Desktop host
                     SQLite, on one PC in
                     the school office
@@ -36,43 +43,65 @@ online schema is **generated from the offline one**, not written twice — see �
 
 ---
 
-## 2. Five portals
+## 2. Fourteen modules
 
-A portal is a **view**, never a right. Nothing about a portal grants anything.
-Every request is checked against the account's permissions whatever portal it
-came from, and a portal decides only what a person is *shown* — and therefore
-what they are told exists.
+The desktop application is a list of modules down the left-hand side, and the
+browser and the phone are the same list, in the same order, with the same names:
 
-| Portal | Who | What is in it |
+| Module | Permission module | What is in it |
 |---|---|---|
-| **Parent** | A parent | Their own children: marks, conduct, reports, register, the bill and its receipts, settling it |
-| **Teaching** | Anybody who teaches or collects the canteen money | Register, class work, exam marks, reports, homework, lesson notes, canteen, their own record |
-| **Finance** | Anybody holding fees, finance or payroll | Collections, arrears, bills, expenditure, statement, payroll, store room, money taken online |
-| **Administration** | Head teacher, management, proprietor, secretary | Enrolment and pupil records, staff and leave, oversight, approvals, notices |
-| **System** | The Super Admin alone | Accounts, access levels, the audit trail, school settings |
+| **Home** | — | Everything this account can open, as tiles |
+| **Dashboard** | `dashboard` | The school this morning: enrolment, attendance, the term |
+| **Students** | `students` | The roll, admissions, status, the register, the students sheet |
+| **Academics** | `academics` | Timetable, class work, exam marks, insight, results, reports, examinations |
+| **Fees Management** | `fees` | Bills, templates, payments, the bulk pay sheet, discounts, books, arrears |
+| **Canteen** | `canteen` | The daily collection, the sheet, the calendar, debtors |
+| **Transport** | `finance` | Routes, riders, the term's transport fees |
+| **Staff Management** | `staff` | The staff roll, status, lesson notes, activities, attendance, leave |
+| **Payroll** | `payroll` | The run, the SSNIT and PAYE schedules, payslips |
+| **Finance** | `finance` | Income, expenditure, the cashbook, the statement, the audit, budgets |
+| **Purchasing & Inventory** | `finance` | Items, stock in and out, purchase tracking |
+| **Notifications** | `notifications` | Notices, the SMS sender, the log of what was sent |
+| **Messages** | `notifications` | Conversations with parents and staff |
+| **Settings** | `settings` | The school's identity, appearance, terms, classes, subjects, grading, users, access, the audit trail |
 
-### Who gets which
+Plus two that belong to nobody's module and which **every** account has, down to
+a security man granted nothing at all: **My work** (their timetable, attendance
+and payslips) and **Account** (their password and this device). Before this,
+those lived inside the teaching area, so an account that could not enter that
+area could not reach its own employment record.
 
-Computed from the resolved permission map, in one place
-(`electron/ipc/_portals.js`), and translated for the two cloud services and the
-app. The translations are checked against the original by a test.
+An account is shown the modules it holds and is never told the others exist. The
+list is computed in one place — `mobile/src/modules.js` — read by the desktop
+browser's sidebar, the tablet rail, the phone's bottom bar and its drawer. Four
+navigations that disagree would be four bugs.
+
+### What became of the portals
+
+The app used to be four areas — Teaching, Finance, Administration, System —
+with a chip strip for moving between them. The grouping was real and it still
+is: it is how the system decides what an account holds, and it is computed in
+`electron/ipc/_portals.js` and translated for the two cloud services.
+
+But it was never the school's own vocabulary. A head teacher who both teaches
+and keeps the books does not think "I am switching portals"; they think "I am
+opening Fees". Worse, the strip **advertised the shape of the access system** to
+somebody who had been handed one part of it, which is the opposite of the rule
+this product is built on. So it is gone from the front of the app, and the
+system works out on its own which modules an account holds:
 
 ```
-teacher    academics: view    OR  canteen: create
-finance    fees: view  OR  finance: view  OR  payroll: view
-admin      (staff: view AND students: edit)  OR  settings: view
+teaching   academics: view    OR  canteen: create
+money      fees: view  OR  finance: view  OR  payroll: view
+running    (staff: view AND students: edit)  OR  settings: view
 system     the Super Admin designation, and nothing else
-           an account with none of the above keeps `teacher`, holding only
-           its own record — a payslip, a clock-in and a password
+           an account with none of the above still has Home and its own record
 ```
 
 Two of those deserve explanation.
 
 **Teaching needs `canteen: create`, not `canteen: view`.** An accountant who may
-glance at canteen takings is not somebody who collects them. Before this rule,
-a bursar signing in was handed a register, a mark sheet and a broadsheet they
-could open and not use — which is the exact failure the product is written
-against.
+glance at canteen takings is not somebody who collects them.
 
 **System is a designation, not a permission tick.** A `settings` tick can be
 granted by mistake; being the Super Admin is a decision somebody made about a
@@ -80,6 +109,22 @@ person. The **Proprietor is deliberately not the Super Admin**: they own the
 school and stay elevated over its money — they may reverse a payment and void a
 bill — but the person who signs the cheques should not also be the one who can
 quietly rewrite who may see that they were signed.
+
+### A parent is not a member of staff
+
+Parents have their own app inside this one, and always did: their own children,
+and nothing else. It is the one navigation that is not a module list, because a
+parent's account holds no modules and never will.
+
+### Tabs
+
+Each module's sections are tabs, in the desktop's order and with the desktop's
+labels, so somebody who learns one has learned the other. A tab can need a
+stronger action than the module itself (Students Sheet needs `edit`, Admissions
+needs `create`), a different module altogether (the canteen's Calendar is a
+`settings` concern), a school feature switched on, or the Super Admin. A module
+opens on the first tab its holder may actually open — never on one that would
+refuse them.
 
 ---
 
@@ -112,8 +157,16 @@ Four layers, and only the last two are security.
 |---|---|---|
 | Navigation | Hides what an account cannot open | No — it is the product's rule about not advertising what somebody may not have |
 | Route guard | Redirects a typed URL back where you belong | No — a courtesy |
-| **Portal gate** | Refuses the route before the module is consulted | **Yes** |
-| **Permission check** | The same check the desktop makes, against the live account | **Yes** |
+| **Permission check** | The same check the desktop makes, on the same resolved permissions, against the live account | **Yes** |
+| **Elevation** | Reversals, voids, discounts and the system itself, over and above the module | **Yes** |
+
+Every route names its module and the action it needs, and that is the gate — the
+same one the desktop applies, so the browser cannot reach anything the installed
+application would refuse. The routes used to carry a portal check as well, and
+it has been removed everywhere a module is named: with the app handing out
+modules, a portal check refuses the very screen the module system just drew. The
+one place a portal is still the gate is the system itself, which is the Super
+Admin's and is not a module anybody can be granted.
 
 Plus scope, which is the question that comes after permission: *whose* class.
 A Subject Teacher with `academics: edit` is not thereby entitled to every class

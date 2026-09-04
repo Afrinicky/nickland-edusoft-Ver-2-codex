@@ -101,6 +101,17 @@ npm run serve:web        # preview it at http://localhost:4748
   the school when it next syncs. It can be added to a phone's home screen like
   an installed app.
 
+**On a computer it is the desktop application.** At 1180 pixels and up the
+browser draws the installer's own shell — the crest and sidebar, the module list
+with the gold rule on the active one, the search box on Ctrl-K, the term and the
+status bar — and the same fourteen modules in the same order: Home, Dashboard,
+Students, Academics, Fees Management, Canteen, Transport, Staff Management,
+Payroll, Finance, Purchasing & Inventory, Notifications, Messages and Settings.
+Each account is shown the ones it holds and is never told the others exist. The
+school's own colours, set in Settings → Appearance, apply everywhere at once.
+On a phone the app keeps the design it already had, with the same modules under
+it.
+
 Teachers get the register, class work and exam marks, the broadsheet and report
 cards, lesson notes, homework, the morning **canteen collection**, class
 performance and attendance insight, a contact book for their class, and their
@@ -158,7 +169,7 @@ nickland-edusoft/
 ├── cloud-python/        # The ONLINE SCHOOL — FastAPI, deployed to Render
 │   ├── schema/          #   generated from electron/db/database.js — do not edit
 │   ├── app/school/      #   the offline modules, ported
-│   └── app/school_api.py#   115 routes, each behind a portal AND a permission
+│   └── app/school_api.py#   the staff routes, each behind a module permission
 ├── scripts/             # build-web.mjs, serve-web.mjs
 ├── resources/           # App icon + initial data files
 ├── package.json         # Dependencies + electron-builder config
