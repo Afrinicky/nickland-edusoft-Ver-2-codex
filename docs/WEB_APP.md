@@ -20,7 +20,7 @@ window and picks its own thresholds.
 |---|---|---|
 | < 768 | Bottom bar of five, plus a **More** sheet holding everything else | One column, full-bleed cards, large tap targets |
 | 768–1179 | A rail of icons down the side | Two or three columns |
-| ≥ 1180 | A labelled sidebar, grouped | Up to four columns; the content column stops widening at 1240px so a register is not stretched across a cinema screen |
+| ≥ 1180 | **The installed application's own shell**: crest, sidebar, top bar and status bar | Up to four columns; the content column stops widening at 1240px so a register is not stretched across a cinema screen |
 
 A browser window dragged narrow gets the phone layout, because at 380 pixels it
 *is* a phone as far as the layout is concerned. Tables render as tables where
@@ -30,9 +30,63 @@ sideways forever.
 
 This meant replacing expo-router's `Tabs` for the signed-in areas, which draws
 a bottom bar and only a bottom bar: on a laptop it showed five of the app's
-fifteen screens along the bottom edge of a 1920-pixel window and hid the rest.
-Routing is unchanged — every screen still has a URL that can be typed,
-bookmarked and shared, and still guards itself.
+screens along the bottom edge of a 1920-pixel window and hid the rest. Routing
+is unchanged — every screen still has a URL that can be typed, bookmarked and
+shared, and still guards itself.
+
+## On a desktop it is the desktop application
+
+At 1180 pixels and up the browser draws what the installed application draws,
+because for a school with one office PC and six teachers, the browser IS the
+application:
+
+* **The sidebar** — the crest and the school's name at the top, the module list
+  down the side with the active one carrying the gold rule the installer uses,
+  the signed-in person and their designation at the bottom, and the clock.
+* **The top bar** — the school's name and motto, a search box bound to Ctrl-K,
+  the notification bell, messages, and the current term.
+* **The status bar** — where this copy is connected, which school, who is
+  signed in.
+* **Tabs**, not pages. Every module's sections are a strip under its title, in
+  the desktop's order and with the desktop's labels — `?tab=` in the URL, so a
+  tab can still be bookmarked and shared.
+
+Below 1180 the phone keeps the design it already had. Home is the day — the
+clock-in, what today still needs, today's lessons, the notices — with the grid
+of modules under it, rather than a menu first and the work second. A teacher at
+ten past seven wants the register; somebody at a desk with a mouse wants the
+menu.
+
+### What is still done on the office computer
+
+Four things, and each for the same reason: they are about that machine, not
+about the school.
+
+* **Backups**, and where they are written to.
+* **Cloud sync** — the keys and the schedule for the school's own projection.
+* **The mobile server** — starting it, and the devices allowed onto it. It is
+  the thing serving the browser app in the first place.
+* **The finance workbook**, which exists so a school whose computer has died
+  can keep trading in Excel and import the result back. Both halves are files
+  on that machine. The tab is there and says so rather than drawing nothing.
+
+Receipt layouts and the signatures printed on report cards are also set on the
+desktop. Everything else a school does — billing, the extra charges a term
+throws up, withdrawing a bill and putting it back, discounts, book charges, the
+store room, the buses, the payroll run and its statutory schedules, staff
+records and what each person teaches, the timetable, question papers, notices
+and the audit trail — is in the browser.
+
+### The colours are the school's
+
+`Settings → Appearance` writes the school's primary and accent colours, and
+they take effect everywhere at once with no rebuild and no reload. On the web
+the theme is a set of CSS custom properties (`--nk-*`) written to the document
+root, and every colour in `mobile/src/theme.js` is a `var()` referring to one —
+so a colour changed in Settings repaints the sidebar, the tabs, the charts and
+the buttons immediately. The desktop shell uses the installer's navy and gold
+chrome; the phone keeps the app's own palette. Both are derived from the same
+two colours a school actually sets.
 
 ## The school's own crest, and everybody's face
 
@@ -447,13 +501,26 @@ without a tunnel.
 ## Checks
 
 ```bash
-npm test                 # includes cloud/test/staff.js — the whole teacher-off-LAN
-                         # round trip against the real cloud and a real desktop
-                         # database, and test/webapp.js for serving and routing
+npm test                 # includes test/app_modules.mjs — what the app draws and
+                         # for whom; test/office_api.js — the office over the
+                         # school's own network; cloud/test/staff.js — the whole
+                         # teacher-off-LAN round trip; and test/webapp.js for
+                         # serving and routing
 npm run build:web        # the build itself; a screen that will not bundle fails here
 
 cd cloud-python && python3 tests/test_staff.py   # the same surface on the Python service
 ```
+
+`test/app_modules.mjs` is the front end's half of the access rule: it runs the
+app's own module list against the six kinds of person a school has and checks
+what is **absent** — that a class teacher's app has no Payroll in it, that a
+bursar is never offered the register, that the audit trail exists for one
+account in the school.
+
+`test/office_api.js` is the other half, against a real server and the real
+schema: that a bursar who may take a payment still cannot grant a discount,
+that a class teacher cannot reach the store room at all, that stock cannot be
+issued below zero, and that a person may always read their own payslip.
 
 CI builds the web app on every branch, so a broken screen is caught on the pull
 request rather than at deploy time.

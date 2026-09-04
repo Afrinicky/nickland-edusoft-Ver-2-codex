@@ -109,8 +109,8 @@ function decideReset(db, { requestId, approve, note, actorUserId }) {
     LEFT JOIN designations d ON d.id = u.designation_id
     WHERE u.id = ? AND u.is_active = 1
   `).get(actorUserId);
-  if (!actor || !['Administrator', 'Proprietor'].includes(actor.designation)) {
-    return { ok: false, error: 'Only an Administrator or Proprietor can approve password requests.' };
+  if (!actor || !require('../ipc/_portals').isElevated(actor.designation)) {
+    return { ok: false, error: 'Only the Super Admin or the Proprietor can approve password requests.' };
   }
 
   const req = db.prepare('SELECT * FROM password_reset_requests WHERE id = ?').get(requestId);
@@ -171,7 +171,7 @@ function completeReset(db, { username, code, newPassword }) {
     SELECT * FROM password_reset_requests
     WHERE username = ? AND status = 'approved' ORDER BY decided_at DESC LIMIT 1
   `).get(uname);
-  if (!req) return { ok: false, error: 'No approved request for that username. Ask an Administrator to approve one.' };
+  if (!req) return { ok: false, error: 'No approved request for that username. Ask the Super Admin to approve one.' };
   if (expired(req.claim_expires_at)) {
     db.prepare("UPDATE password_reset_requests SET status = 'cancelled' WHERE id = ?").run(req.id);
     projectClaim(db, req.id);
@@ -204,7 +204,7 @@ function changeOwnPassword(db, userId, { oldPassword, newPassword, source }) {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
   if (!user) return { ok: false, error: 'User not found.' };
   if (!user.password_hash) {
-    return { ok: false, error: 'This account has no password set. Ask an Administrator to reset it.' };
+    return { ok: false, error: 'This account has no password set. Ask the Super Admin to reset it.' };
   }
   if (!bcrypt().compareSync(String(oldPassword || ''), user.password_hash)) {
     return { ok: false, error: 'Current password is incorrect.' };

@@ -439,7 +439,7 @@ function applyPasswordChange(db, payload) {
 }
 
 // ── a reset asked for from a phone ──────────────────────────────────────────
-// Recorded as a pending request for an Administrator to approve on the
+// Recorded as a pending request for the Super Admin to approve on the
 // desktop, exactly as if it had been raised at the sign-in screen. Nothing is
 // granted here — the whole point of the flow is that a person approves it.
 //

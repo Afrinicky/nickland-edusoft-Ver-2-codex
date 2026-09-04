@@ -306,8 +306,8 @@ function SignatureSection({ role, label, description, sigPath, name, userId, emb
             </select>
             <div className="form-hint">
               {role === 'proprietor'
-                ? 'Only users with Proprietor or Administrator designation are shown.'
-                : 'Only users with Head Teacher or Administrator designation are shown.'}
+                ? 'Only the Proprietor and the Super Admin are shown.'
+                : 'Only the Head Teacher and the Super Admin are shown.'}
               {' '}Only the assigned user can apply this signature when logged in.
             </div>
           </div>

@@ -26,95 +26,63 @@
 // carry ~0.012 chroma toward violet — not toward warm, which is how every
 // interface ends up the same shade of beige.
 
-// ── raw palette ─────────────────────────────────────────────────────────────
-export const palette = {
-  // Violet. The action colour. 600 reads at 7.1:1 on white, so the same hue
-  // works as a button fill AND as a text colour — one value instead of two
-  // that drift apart.
-  violet50:  '#F4F2FE',
-  violet100: '#E9E4FD',
-  violet200: '#D5CBFB',
-  violet300: '#B8A6F7',
-  violet400: '#957CF1',
-  violet500: '#7455E9',
-  violet600: '#5B3FE0',   // primary
-  violet700: '#4A2FC7',   // pressed
-  violet800: '#3B259E',
-  violet900: '#2A1A6E',
+// ── raw palette, token names and font stack ─────────────────────────────────
+// Declared in src/tokens.js, which imports nothing, so the values can be read
+// by the contrast checker and by src/skin.js without dragging a renderer in.
+// Re-exported here because every screen has always imported them from `theme`.
+import { Platform } from 'react-native';
+import { palette, TOKEN_DEFAULTS, FONT_STACK } from './tokens.js';
 
-  // Ink. Near-black with a violet cast, so text sits in the same family as the
-  // accent rather than looking like it was pasted in from another design.
-  ink950: '#15132B',   // chrome: splash, sidebar, profile header
-  ink900: '#14142B',   // headings, figures            15.8:1 on white
-  ink800: '#26263F',
-  ink700: '#3A3A55',   // body                          9.6:1
-  ink600: '#4C4C69',
-  ink500: '#61617E',   // muted — still passes as body  5.6:1
-  ink400: '#8A8AA3',   // DECORATION AND ICONS ONLY     3.4:1
-  ink300: '#B4B4C8',
-  ink200: '#D6D5E4',
-
-  line:      '#E7E5F2',
-  lineSoft:  '#F0EEF8',
-  surface:   '#FFFFFF',
-  surfaceAlt:'#FAF9FE',
-  canvas:    '#F5F4FB',
-
-  // Judgement. Each of these means something; none is decorative.
-  green700: '#0B6B3C', green600: '#12864A', green500: '#1CA85E', green100: '#DCF5E7',
-  amber700: '#8A4B04', amber600: '#B26205', amber500: '#E08A0B', amber100: '#FDF0D8',
-  red700:   '#9F262B', red600:   '#C7343A', red500:   '#E14B51', red100:   '#FDE4E5',
-  teal700:  '#0A6E6E', teal600:  '#0E8E8E', teal500:  '#14A8A8', teal100:  '#D6F2F2',
-  pink600:  '#C43B7A', pink500:  '#E1568F', pink100:  '#FCE3EE',
-  gold700:  '#7A5810', gold600:  '#A0761A', gold500:  '#C99A25', gold400:  '#E3B845', gold100:  '#FBF0D5',
-};
+export { palette, TOKEN_DEFAULTS, FONT_STACK };
 
 // ── semantic colours ────────────────────────────────────────────────────────
 // Screens use these, never the raw palette, so the identity can change in one
 // place. Names kept from the first version so no screen had to be rewritten.
-export const colors = {
-  primary:     palette.violet600,
-  primaryDark: palette.violet700,
-  primarySoft: palette.violet50,
-  primaryLine: palette.violet200,
-  accent:      palette.gold500,
-  accentSoft:  palette.gold100,
+//
+// ── Why they are CSS variables in a browser ─────────────────────────────────
+//
+// The desktop lets a school set its own colours (Settings → Appearance), and
+// they take effect the moment they are picked, because the desktop writes them
+// into CSS custom properties on the document root and every rule reads them
+// through `var()`. The app had no equivalent: its palette was compiled into the
+// bundle, so a school that had spent an afternoon matching its crest saw the
+// result on one of its three screens.
+//
+// So on the web each token is `var(--nk-<name>, <default>)`. react-native-web
+// passes colour strings through to CSS untouched, which means a `StyleSheet`
+// created once at import time — and there are hundreds of them across this app
+// — re-resolves the moment the variable underneath it changes. No provider
+// threading, no re-render, no screen rewritten. See src/skin.js, which computes
+// the values and writes them.
+//
+// The fallback in each `var()` is the app's own default, so a page rendered
+// before the school's settings arrive is the app as it has always looked rather
+// than a flash of black on black.
+//
+// On the phone the values are the plain hexes they always were: a native
+// StyleSheet resolves once, `var()` means nothing to it, and the APK ships with
+// the school's colours already baked in by `--brand` at build time.
+const IS_WEB = Platform.OS === 'web';
+const v = (name, fallback) => (IS_WEB ? `var(--nk-${name}, ${fallback})` : fallback);
 
-  bg:         palette.canvas,
-  card:       palette.surface,
-  surfaceAlt: palette.surfaceAlt,
+export const colors = Object.fromEntries(
+  Object.entries(TOKEN_DEFAULTS).map(([k, hex]) => [k, v(kebab(k), hex)])
+);
 
-  text:     palette.ink900,
-  textSoft: palette.ink700,
-  muted:    palette.ink500,
-  faint:    palette.ink400,   // never body text
-
-  border:     palette.line,
-  borderSoft: palette.lineSoft,
-
-  success: palette.green600,
-  warning: palette.amber600,
-  danger:  palette.red600,
-  info:    palette.violet600,
-  data:    palette.teal600,
-
-  // Chrome — the dark shell the app is framed in.
-  chrome:        palette.ink950,
-  chromeAlt:     '#221D45',
-  chromeLine:    'rgba(255,255,255,0.09)',
-  onChrome:      '#FFFFFF',
-  onChromeMuted: 'rgba(255,255,255,0.64)',
-  onChromeFaint: 'rgba(255,255,255,0.40)',
-};
+// `primaryDark` → `primary-dark`, so the variables read like CSS rather than
+// like JavaScript that leaked into a stylesheet.
+function kebab(k) { return k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()); }
 
 // ── gradients ───────────────────────────────────────────────────────────────
 // Used sparingly and only on chrome: a hero, a profile header, the splash.
 // Never behind text that has to be read at a glance in sunlight.
+// The three that carry the school's identity follow it; the rest mean a thing
+// (success is green because it is green) and are fixed.
 export const gradients = {
-  chrome:  [palette.ink950, '#2A2160'],
-  brand:   [palette.violet700, palette.violet500],
-  violet:  [palette.violet600, palette.violet400],
-  gold:    [palette.gold600, palette.gold400],
+  chrome:  [v('grad-chrome-a', palette.ink950), v('grad-chrome-b', '#2A2160')],
+  brand:   [v('grad-brand-a', palette.violet700), v('grad-brand-b', palette.violet500)],
+  violet:  [v('grad-brand-a', palette.violet600), v('grad-brand-b', palette.violet400)],
+  gold:    [v('grad-gold-a', palette.gold600), v('grad-gold-b', palette.gold400)],
   data:    [palette.teal600, palette.violet500],
   success: [palette.green700, palette.green500],
   danger:  [palette.red700, palette.red500],
@@ -126,10 +94,10 @@ export const gradients = {
 // the list — which on the desktop was Cambria, a SERIF. Every screen in the
 // office was rendering in the wrong kind of typeface. Weight and tracking carry
 // the hierarchy instead of a downloaded family.
-export const fontFamily = [
-  'Segoe UI Variable Text', 'Segoe UI', 'system-ui', '-apple-system',
-  'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif',
-].join(', ');
+// A school that has chosen a face in Settings → Appearance gets it here too;
+// what it chose is prepended to the stack rather than replacing it, so a font
+// the machine does not have degrades to the system one instead of to Times.
+export const fontFamily = IS_WEB ? `var(--nk-font, ${FONT_STACK})` : FONT_STACK;
 
 const face = { fontFamily };
 

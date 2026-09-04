@@ -29,7 +29,8 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
 from . import portals, ratelimit
-from .school import (academics, admin, canteen, communications, db as sdb, fees,
+from .school import (academics, admin, canteen, communications, db as sdb, exams, fees,
+                     office,
                      finance, homework, payments, payroll, security, session,
                      staff, stores, students, timetable)
 
@@ -72,9 +73,17 @@ class Denied(Exception):
 def require(authorization, portal=None, module=None, action="view"):
     """Resolve the caller, and refuse them if this is not theirs.
 
-    Order matters. The portal is checked first because it answers "is this
-    person in this part of the school at all", and that is the answer that
-    decides whether a route may admit to existing.
+    The gate is the MODULE, and the module is the same one the desktop
+    enforces on the same resolved permissions. The app is modules now, not
+    portals: somebody holding Students at Manage is shown Students and the
+    sheet inside it, and a portal check here would refuse the screen the
+    module system just drew for them.
+
+    ``portal`` remains for the one thing that is genuinely not a module —
+    the system itself, which is the Super Admin's and nobody else's. Where
+    both are given, the portal is checked first: it answers "is this person
+    in this part of the school at all", and that decides whether a route may
+    admit to existing.
     """
     school_id, token = _split_token(authorization)
     if not school_id or not token:
@@ -152,6 +161,50 @@ async def schools():
         return {"ok": True, "online": True, "schools": []}
 
 
+@router.get("/branding")
+async def branding(school_id: str = ""):
+    """One school's identity, before anybody signs in.
+
+    Public, and it has to be: the first screen a parent or a teacher sees should
+    be their own school — its crest, its name, its colours — not a generic page
+    that could belong to anybody. Nothing here is a secret; it is what the
+    school prints on its own letterhead.
+    """
+    school_id = str(school_id or "").strip()
+    if not school_id:
+        return _err(400, "school_id is required")
+    try:
+        db = sdb.SchoolDb(school_id)
+        get = db.get_setting
+    except Exception:
+        return _err(404, "Unknown school")
+    phone = get("school_phone_1", "")
+    return {
+        "ok": True,
+        "school": {
+            "name": get("school_name", "School"),
+            "short_name": get("school_abbreviation", ""),
+            "motto": get("school_motto", ""),
+            "type": get("school_type", ""),
+            "address": get("school_address", "") or get("school_location", ""),
+            "digital_address": get("school_digital_address", ""),
+            "website": get("school_website", ""),
+        },
+        "contact": {
+            "phone": phone,
+            "phone_alt": get("school_phone_2", ""),
+            "email": get("school_email", ""),
+            "whatsapp": get("school_whatsapp", "") or phone,
+        },
+        "logo": None,
+        "currency": get("payment_currency", "GHS"),
+        "theme": {k: get(k, "") for k in (
+            "school_color_primary", "school_color_accent",
+            "school_color_background", "school_color_foreground",
+            "ui_font_family", "ui_font_size_base")},
+    }
+
+
 @router.post("/signin")
 async def signin(request: Request):
     body = await _json(request)
@@ -215,7 +268,19 @@ async def me(authorization: str = Header(None)):
         "portals": portals.portal_list_for(actor),
         "home_portal": portals.home_portal(actor),
         "school": {"id": db.school_id, "name": db.get_setting("school_name", "School")},
+        # Which parts of the system this school actually runs. The desktop hides
+        # the canteen outright for a school that does not have one, rather than
+        # showing an empty module; the app reads the same switches from here so
+        # the two draw the same school.
+        "features": _features(db),
     }
+
+
+def _features(db):
+    keys = ["feature_canteen_enabled", "feature_notifications_enabled",
+            "feature_leave_management_enabled", "feature_transport_enabled",
+            "feature_ssnit_enabled", "feature_paye_enabled", "staff_clockin_enabled"]
+    return {k: db.get_setting(k, "") for k in keys}
 
 
 @router.post("/password")
@@ -305,19 +370,19 @@ async def get_student(db, actor, student_id: int):
 
 
 @router.post("/students")
-@guarded(portal="admin", module="students", action="create")
+@guarded(module="students", action="create")
 async def admit_student(db, actor, request: Request):
     return students.create(db, actor, await _json(request))
 
 
 @router.post("/students/{student_id}")
-@guarded(portal="admin", module="students", action="edit")
+@guarded(module="students", action="edit")
 async def update_student(db, actor, student_id: int, request: Request):
     return students.update(db, actor, student_id, await _json(request))
 
 
 @router.post("/students/{student_id}/status")
-@guarded(portal="admin", module="students", action="edit")
+@guarded(module="students", action="edit")
 async def student_status(db, actor, student_id: int, request: Request):
     body = await _json(request)
     return students.set_status(db, actor, student_id, body.get("status"), body.get("reason"))
@@ -422,63 +487,104 @@ async def save_remarks(db, actor, request: Request):
 # ══ fees ════════════════════════════════════════════════════════════════════
 
 @router.get("/fees/overview")
-@guarded(portal="finance", module="fees")
+@guarded(module="fees")
 async def fees_overview(db, actor):
     return fees.overview(db, actor)
 
 
 @router.get("/fees/collections")
-@guarded(portal="finance", module="fees")
+@guarded(module="fees")
 async def fees_collections(db, actor, dateFrom: str = None, dateTo: str = None,
                            classId: int = None, method: str = None):
     return fees.collections(db, actor, dateFrom, dateTo, classId, method)
 
 
 @router.post("/fees/collections")
-@guarded(portal="finance", module="fees", action="create")
+@guarded(module="fees", action="create")
 async def take_payment(db, actor, request: Request):
     return fees.record_payment(db, actor, await _json(request))
 
 
 @router.post("/fees/collections/{payment_id}/reverse")
-@guarded(portal="finance", module="fees", action="edit")
+@guarded(module="fees", action="edit")
 async def reverse_payment(db, actor, payment_id: int, request: Request):
     body = await _json(request)
     return fees.reverse_payment(db, actor, payment_id, body.get("reason"))
 
 
 @router.get("/fees/students/{student_id}")
-@guarded(portal="finance", module="fees")
+@guarded(module="fees")
 async def fees_student(db, actor, student_id: int, termId: int = None):
     return fees.student_account(db, actor, student_id, termId)
 
 
 @router.get("/fees/debtors")
-@guarded(portal="finance", module="fees")
+@guarded(module="fees")
 async def fees_debtors(db, actor, classId: int = None, minimum: float = None):
     return fees.debtors(db, actor, classId, minimum)
 
 
 @router.get("/fees/templates")
-@guarded(portal="finance", module="fees")
-async def fee_templates(db, actor):
-    return fees.templates(db, actor)
+@guarded(module="fees")
+async def fee_templates(db, actor, billType: str = "school_fees"):
+    return fees.templates(db, actor, billType)
+
+
+# ── extra charges, and withdrawing a bill ───────────────────────────────────
+# Both are elevated inside fees.py: raising what every family in a class is
+# asked to pay, and removing a bill from every total in the school, are not the
+# same question as "may this person take a payment".
+
+@router.get("/fees/supplementary")
+@guarded(module="fees")
+async def supplementary_templates(db, actor, termId: int = None):
+    return fees.supplementary_templates(db, actor, termId)
+
+
+@router.post("/fees/supplementary")
+@guarded(module="fees", action="edit")
+async def apply_supplementary(db, actor, request: Request):
+    return fees.apply_supplementary(db, actor, await _json(request))
+
+
+@router.post("/fees/supplementary/remove")
+@guarded(module="fees", action="edit")
+async def remove_supplementary(db, actor, request: Request):
+    return fees.remove_supplementary(db, actor, await _json(request))
+
+
+@router.get("/fees/bills/voided")
+@guarded(module="fees")
+async def voided_bills(db, actor, termId: int = None, all: str = None):
+    return fees.voided_bills(db, actor, termId, str(all or "") == "1")
+
+
+@router.post("/fees/bills/{bill_id}/void")
+@guarded(module="fees", action="edit")
+async def void_bill(db, actor, bill_id: int, request: Request):
+    return fees.void_bill(db, actor, bill_id, (await _json(request)).get("reason"))
+
+
+@router.post("/fees/bills/{bill_id}/restore")
+@guarded(module="fees", action="edit")
+async def restore_bill(db, actor, bill_id: int):
+    return fees.restore_bill(db, actor, bill_id)
 
 
 @router.get("/fees/templates/{template_id}")
-@guarded(portal="finance", module="fees")
+@guarded(module="fees")
 async def fee_template(db, actor, template_id: int):
     return fees.template(db, actor, template_id)
 
 
 @router.post("/fees/templates")
-@guarded(portal="finance", module="fees", action="edit")
+@guarded(module="fees", action="edit")
 async def save_fee_template(db, actor, request: Request):
     return fees.save_template(db, actor, await _json(request))
 
 
 @router.post("/fees/bills")
-@guarded(portal="finance", module="fees", action="create")
+@guarded(module="fees", action="create")
 async def raise_bills(db, actor, request: Request):
     body = await _json(request)
     if body.get("classId"):
@@ -489,43 +595,43 @@ async def raise_bills(db, actor, request: Request):
 # ══ finance ═════════════════════════════════════════════════════════════════
 
 @router.get("/finance/income")
-@guarded(portal="finance", module="finance")
+@guarded(module="finance")
 async def income(db, actor, dateFrom: str = None, dateTo: str = None, category: str = None):
     return finance.income(db, actor, dateFrom, dateTo, category)
 
 
 @router.post("/finance/income")
-@guarded(portal="finance", module="finance", action="create")
+@guarded(module="finance", action="create")
 async def record_income(db, actor, request: Request):
     return finance.record_income(db, actor, await _json(request))
 
 
 @router.get("/finance/expenses")
-@guarded(portal="finance", module="finance")
+@guarded(module="finance")
 async def expenses(db, actor, dateFrom: str = None, dateTo: str = None, category: str = None):
     return finance.expenses(db, actor, dateFrom, dateTo, category)
 
 
 @router.post("/finance/expenses")
-@guarded(portal="finance", module="finance", action="create")
+@guarded(module="finance", action="create")
 async def record_expense(db, actor, request: Request):
     return finance.record_expense(db, actor, await _json(request))
 
 
 @router.post("/finance/expenses/{expense_id}/approve")
-@guarded(portal="finance", module="finance", action="edit")
+@guarded(module="finance", action="edit")
 async def approve_expense(db, actor, expense_id: int):
     return finance.approve_expense(db, actor, expense_id)
 
 
 @router.get("/finance/statement")
-@guarded(portal="finance", module="finance")
+@guarded(module="finance")
 async def statement(db, actor, termId: int = None, dateFrom: str = None, dateTo: str = None):
     return finance.statement(db, actor, termId, dateFrom, dateTo)
 
 
 @router.get("/finance/audit")
-@guarded(portal="finance", module="finance")
+@guarded(module="finance")
 async def finance_audit(db, actor, termId: int = None):
     return finance.audit_checks(db, actor, termId)
 
@@ -533,13 +639,13 @@ async def finance_audit(db, actor, termId: int = None):
 # ══ payroll ═════════════════════════════════════════════════════════════════
 
 @router.get("/payroll")
-@guarded(portal="finance", module="payroll")
+@guarded(module="payroll")
 async def payroll_month(db, actor, month: int = None, year: int = None):
     return payroll.month_sheet(db, actor, month, year)
 
 
 @router.post("/payroll/run")
-@guarded(portal="finance", module="payroll", action="edit")
+@guarded(module="payroll", action="edit")
 async def run_payroll(db, actor, request: Request):
     body = await _json(request)
     return payroll.run_month(db, actor, body.get("month"), body.get("year"),
@@ -547,7 +653,7 @@ async def run_payroll(db, actor, request: Request):
 
 
 @router.post("/payroll/{salary_id}/paid")
-@guarded(portal="finance", module="payroll", action="edit")
+@guarded(module="payroll", action="edit")
 async def mark_salary_paid(db, actor, salary_id: int, request: Request):
     body = await _json(request)
     return payroll.mark_paid(db, actor, salary_id,
@@ -556,19 +662,19 @@ async def mark_salary_paid(db, actor, salary_id: int, request: Request):
 
 
 @router.get("/payroll/{staff_id}/payslip")
-@guarded(portal="finance", module="payroll")
+@guarded(module="payroll")
 async def get_payslip(db, actor, staff_id: int, month: int = None, year: int = None):
     return payroll.payslip(db, actor, staff_id, month, year)
 
 
 @router.get("/payroll/{staff_id}/ytd")
-@guarded(portal="finance", module="payroll")
+@guarded(module="payroll")
 async def payroll_ytd(db, actor, staff_id: int, year: int = None):
     return payroll.ytd(db, actor, staff_id, year)
 
 
 @router.get("/payroll/schedule/{kind}")
-@guarded(portal="finance", module="payroll")
+@guarded(module="payroll")
 async def statutory(db, actor, kind: str, month: int = None, year: int = None):
     if kind not in ("ssnit", "paye"):
         return {"ok": False, "status": 404, "error": "No such schedule."}
@@ -578,44 +684,44 @@ async def statutory(db, actor, kind: str, month: int = None, year: int = None):
 # ══ staff ═══════════════════════════════════════════════════════════════════
 
 @router.get("/staff")
-@guarded(portal="admin", module="staff")
+@guarded(module="staff")
 async def list_staff(db, actor, status: str = "Active"):
     return staff.listing(db, actor, status)
 
 
 @router.get("/staff/{staff_id}")
-@guarded(portal="admin", module="staff")
+@guarded(module="staff")
 async def get_staff(db, actor, staff_id: int):
     return staff.get(db, actor, staff_id)
 
 
 @router.post("/staff")
-@guarded(portal="admin", module="staff", action="create")
+@guarded(module="staff", action="create")
 async def save_staff(db, actor, request: Request):
     return staff.save(db, actor, await _json(request))
 
 
 @router.post("/staff/{staff_id}/assignments")
-@guarded(portal="admin", module="staff", action="edit")
+@guarded(module="staff", action="edit")
 async def set_assignments(db, actor, staff_id: int, request: Request):
     body = await _json(request)
     return staff.set_assignments(db, actor, staff_id, body.get("assignments"))
 
 
 @router.get("/staff-register")
-@guarded(portal="admin", module="staff")
+@guarded(module="staff")
 async def staff_register(db, actor, date: str = None):
     return staff.register(db, actor, date)
 
 
 @router.get("/leave")
-@guarded(portal="admin", module="staff")
+@guarded(module="staff")
 async def leave_list(db, actor, status: str = "pending"):
     return staff.leave_list(db, actor, status)
 
 
 @router.post("/leave/{request_id}/decision")
-@guarded(portal="admin", module="staff", action="edit")
+@guarded(module="staff", action="edit")
 async def decide_leave(db, actor, request_id: int, request: Request):
     body = await _json(request)
     return staff.decide_leave(db, actor, request_id, body.get("decision"), body.get("notes"))
@@ -727,7 +833,7 @@ async def canteen_debtors(db, actor, termId: int = None):
 # ══ administration ══════════════════════════════════════════════════════════
 
 @router.get("/admin/academics")
-@guarded(portal="admin", module="academics")
+@guarded(module="academics")
 async def admin_academics(db, actor, termId: int = None):
     return admin.academic_overview(db, actor, termId)
 
@@ -855,6 +961,142 @@ async def system_save_settings(request: Request, authorization: str = Header(Non
     return _send(admin.save_settings(db, actor, body.get("settings") or body))
 
 
+# ══ staff activities, budgets and the cashbook ══════════════════════════════
+
+@router.get("/activities")
+async def staff_activities(authorization: str = Header(None), staffId: int = None,
+                           dateFrom: str = None, dateTo: str = None):
+    """Deliberately not module-guarded: a person may always read and file their
+    OWN activities, and app/school/office.py narrows the query to them when the
+    account has no staff module. Reading a colleague's is what needs the module."""
+    try:
+        db, actor = require(authorization)
+    except Denied as d:
+        return d.response
+    return _send(office.activities(db, actor, staffId, dateFrom, dateTo))
+
+
+@router.post("/activities")
+async def save_activity(request: Request, authorization: str = Header(None)):
+    try:
+        db, actor = require(authorization)
+    except Denied as d:
+        return d.response
+    return _send(office.save_activity(db, actor, await _json(request)))
+
+
+@router.post("/activities/{activity_id}/acknowledge")
+@guarded(module="staff", action="edit")
+async def acknowledge_activity(db, actor, activity_id: int):
+    return office.acknowledge_activity(db, actor, activity_id)
+
+
+@router.post("/activities/{activity_id}/delete")
+async def delete_activity(activity_id: int, authorization: str = Header(None)):
+    try:
+        db, actor = require(authorization)
+    except Denied as d:
+        return d.response
+    return _send(office.delete_activity(db, actor, activity_id))
+
+
+@router.get("/budgets")
+@guarded(module="finance")
+async def budgets(db, actor, id: int = None):
+    return office.budgets(db, actor, id)
+
+
+@router.post("/budgets")
+@guarded(module="finance", action="edit")
+async def save_budget(db, actor, request: Request):
+    return office.save_budget(db, actor, await _json(request))
+
+
+@router.post("/budgets/{budget_id}/delete")
+@guarded(module="finance", action="delete")
+async def delete_budget(db, actor, budget_id: int):
+    return office.delete_budget(db, actor, budget_id)
+
+
+@router.get("/finance/cashbook")
+@guarded(module="finance")
+async def cashbook(db, actor, dateFrom: str = None, dateTo: str = None):
+    return office.cashbook(db, actor, dateFrom, dateTo)
+
+
+# ══ examinations ════════════════════════════════════════════════════════════
+#
+# Papers, their sections, and the question bank. A teacher writes an
+# end-of-term paper on a Sunday evening, not at the one PC in the office on a
+# Friday afternoon; and a question bank that can only be reached from that PC
+# is a resource the school builds and cannot use.
+
+@router.get("/exams/papers")
+@guarded(module="academics")
+async def exam_papers(db, actor, classId: int = None, subjectId: int = None,
+                      termId: int = None, status: str = None):
+    return exams.list_papers(db, actor, classId, subjectId, termId, status)
+
+
+@router.get("/exams/papers/{paper_id}")
+@guarded(module="academics")
+async def exam_paper(db, actor, paper_id: int):
+    return exams.get_paper(db, actor, paper_id)
+
+
+@router.post("/exams/papers")
+@guarded(module="academics", action="create")
+async def save_exam_paper(db, actor, request: Request):
+    return exams.save_paper(db, actor, await _json(request))
+
+
+@router.post("/exams/papers/{paper_id}/delete")
+@guarded(module="academics", action="delete")
+async def delete_exam_paper(db, actor, paper_id: int):
+    return exams.delete_paper(db, actor, paper_id)
+
+
+@router.post("/exams/sections")
+@guarded(module="academics", action="create")
+async def save_exam_section(db, actor, request: Request):
+    return exams.save_section(db, actor, await _json(request))
+
+
+@router.post("/exams/sections/{section_id}/delete")
+@guarded(module="academics", action="delete")
+async def delete_exam_section(db, actor, section_id: int):
+    return exams.delete_section(db, actor, section_id)
+
+
+@router.get("/exams/questions")
+@guarded(module="academics")
+async def exam_questions(db, actor, paperId: int = None, classId: int = None,
+                         subjectId: int = None, questionType: str = None,
+                         difficulty: str = None, inBank: int = None, search: str = None):
+    return exams.list_questions(db, actor, paperId, classId, subjectId,
+                                questionType, difficulty, inBank, search)
+
+
+@router.post("/exams/questions")
+@guarded(module="academics", action="create")
+async def save_exam_question(db, actor, request: Request):
+    return exams.save_question(db, actor, await _json(request))
+
+
+@router.post("/exams/questions/{question_id}/delete")
+@guarded(module="academics", action="delete")
+async def delete_exam_question(db, actor, question_id: int):
+    return exams.delete_question(db, actor, question_id)
+
+
+@router.post("/exams/papers/{paper_id}/from-bank")
+@guarded(module="academics", action="create")
+async def copy_from_bank(db, actor, paper_id: int, request: Request):
+    body = await _json(request)
+    return exams.copy_from_bank(db, actor, paper_id, body.get("sectionId"),
+                                body.get("questionIds") or [])
+
+
 # ══ the timetable ═══════════════════════════════════════════════════════════
 
 @router.get("/timetable/periods")
@@ -864,7 +1106,7 @@ async def timetable_periods(db, actor):
 
 
 @router.post("/timetable/periods")
-@guarded(portal="admin", module="academics", action="edit")
+@guarded(module="academics", action="edit")
 async def save_period(db, actor, request: Request):
     return timetable.save_period(db, actor, await _json(request))
 
@@ -974,25 +1216,25 @@ async def queue_notifications(db, actor, request: Request):
 # ══ inventory, transport and books ══════════════════════════════════════════
 
 @router.get("/inventory")
-@guarded(portal="finance", module="finance")
+@guarded(module="finance")
 async def inventory(db, actor, category: str = None, lowStock: bool = False):
     return stores.items(db, actor, category, lowStock)
 
 
 @router.post("/inventory")
-@guarded(portal="finance", module="finance", action="edit")
+@guarded(module="finance", action="edit")
 async def save_inventory_item(db, actor, request: Request):
     return stores.save_item(db, actor, await _json(request))
 
 
 @router.post("/inventory/movement")
-@guarded(portal="finance", module="finance", action="create")
+@guarded(module="finance", action="create")
 async def move_stock(db, actor, request: Request):
     return stores.move_stock(db, actor, await _json(request))
 
 
 @router.get("/inventory/movements")
-@guarded(portal="finance", module="finance")
+@guarded(module="finance")
 async def stock_movements(db, actor, itemId: int = None, limit: int = 200):
     return stores.movements(db, actor, itemId, limit)
 
@@ -1010,13 +1252,13 @@ async def transport_route(db, actor, route_id: int):
 
 
 @router.post("/transport")
-@guarded(portal="finance", module="finance", action="edit")
+@guarded(module="finance", action="edit")
 async def save_transport_route(db, actor, request: Request):
     return stores.save_route(db, actor, await _json(request))
 
 
 @router.post("/transport/riders")
-@guarded(portal="finance", module="finance", action="edit")
+@guarded(module="finance", action="edit")
 async def assign_rider(db, actor, request: Request):
     body = await _json(request)
     return stores.assign_rider(db, actor, body.get("studentId") or body.get("student_id"),
@@ -1026,7 +1268,7 @@ async def assign_rider(db, actor, request: Request):
 
 
 @router.post("/transport/payment")
-@guarded(portal="finance", module="fees", action="create")
+@guarded(module="fees", action="create")
 async def transport_payment(db, actor, request: Request):
     body = await _json(request)
     return stores.transport_payment(db, actor, body.get("studentId") or body.get("student_id"),
@@ -1035,20 +1277,20 @@ async def transport_payment(db, actor, request: Request):
 
 
 @router.get("/books/{student_id}")
-@guarded(portal="finance", module="fees")
+@guarded(module="fees")
 async def books_account(db, actor, student_id: int, yearId: int = None):
     return stores.books_account(db, actor, student_id, yearId)
 
 
 @router.post("/books/{student_id}")
-@guarded(portal="finance", module="fees", action="edit")
+@guarded(module="fees", action="edit")
 async def save_books(db, actor, student_id: int, request: Request):
     body = await _json(request)
     return stores.save_books(db, actor, student_id, body.get("items"), body.get("yearId"))
 
 
 @router.post("/books/{student_id}/payment")
-@guarded(portal="finance", module="fees", action="create")
+@guarded(module="fees", action="create")
 async def books_payment(db, actor, student_id: int, request: Request):
     body = await _json(request)
     return stores.books_payment(db, actor, student_id, body.get("amount"),
@@ -1056,13 +1298,13 @@ async def books_payment(db, actor, student_id: int, request: Request):
 
 
 @router.get("/discounts")
-@guarded(portal="finance", module="fees")
+@guarded(module="fees")
 async def discounts(db, actor, studentId: int = None):
     return stores.discounts(db, actor, studentId)
 
 
 @router.post("/discounts")
-@guarded(portal="finance", module="fees", action="edit")
+@guarded(module="fees", action="edit")
 async def grant_discount(db, actor, request: Request):
     return stores.grant_discount(db, actor, await _json(request))
 
@@ -1070,7 +1312,7 @@ async def grant_discount(db, actor, request: Request):
 # ══ money taken online, and the office's reconciliation of it ═══════════════
 
 @router.get("/fees/online")
-@guarded(portal="finance", module="fees")
+@guarded(module="fees")
 async def online_payments(db, actor, status: str = "pending"):
     if status not in ("pending", "acknowledged", "rejected"):
         status = "pending"
@@ -1078,20 +1320,20 @@ async def online_payments(db, actor, status: str = "pending"):
 
 
 @router.post("/fees/online/{intent_id}/acknowledge")
-@guarded(portal="finance", module="fees", action="edit")
+@guarded(module="fees", action="edit")
 async def acknowledge_intent(db, actor, intent_id: int, request: Request):
     body = await _json(request)
     return payments.acknowledge(db, actor, intent_id, body.get("method"))
 
 
 @router.post("/fees/online/{intent_id}/reject")
-@guarded(portal="finance", module="fees", action="edit")
+@guarded(module="fees", action="edit")
 async def reject_intent(db, actor, intent_id: int, request: Request):
     body = await _json(request)
     return payments.reject(db, actor, intent_id, body.get("reason"))
 
 
 @router.post("/fees/online/{intent_id}/verify")
-@guarded(portal="finance", module="fees", action="edit")
+@guarded(module="fees", action="edit")
 async def verify_intent(db, actor, intent_id: int):
     return payments.verify_one(db, actor, intent_id)

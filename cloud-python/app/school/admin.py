@@ -42,6 +42,21 @@ SETTINGS_READABLE = [
     "payment_gateway", "paystack_public_key", "paystack_base_url", "paystack_callback_url",
     "online_payments_enabled", "online_payment_min", "online_payment_max",
     "online_token_ttl_days",
+    # Appearance. The same six keys the desktop's Settings -> Appearance writes
+    # and its stylesheet reads through CSS custom properties. They are here so a
+    # school can set its colours from the browser as well as from the PC in the
+    # office, and so the app can read back what was set.
+    "school_color_primary", "school_color_accent",
+    "school_color_background", "school_color_foreground",
+    "ui_font_family", "ui_font_size_base",
+    # The switches that decide whether a whole module exists. The desktop hides
+    # the canteen outright for a school that does not run one; the app reads the
+    # same flags, so the two agree about what this school is.
+    "feature_canteen_enabled", "feature_notifications_enabled",
+    "feature_leave_management_enabled", "feature_transport_enabled",
+    "staff_clockin_enabled",
+    # Grading and the academic calendar, which the settings screens edit.
+    "grading_scheme", "pass_mark", "attendance_required_pct",
 ]
 # Written, but never read back. A secret a screen can display is a secret a
 # screenshot can carry out of the building.
@@ -287,10 +302,13 @@ def create_user(db, actor, data):
 
 def _would_orphan_school(db, user_id):
     """Is this the last account that can administer the school?"""
+    # Both spellings count. A school mid-upgrade can hold accounts under the
+    # old designation name, and refusing to see them would report the school as
+    # already orphaned and block the very change that fixes it.
     return db.value("""
       SELECT count(*) FROM users u JOIN designations d ON d.id = u.designation_id
-       WHERE u.is_active = 1 AND d.name = %s AND u.id <> %s""",
-                    (security.SUPER_ADMIN, user_id), 0) == 0
+       WHERE u.is_active = 1 AND d.name IN (%s, %s) AND u.id <> %s""",
+                    (security.SUPER_ADMIN, security.SUPER_ADMIN_LEGACY, user_id), 0) == 0
 
 
 def set_user_status(db, actor, user_id, active):
@@ -302,7 +320,7 @@ def set_user_status(db, actor, user_id, active):
                 "error": "You cannot deactivate the account you are signed in with."}
     if not active and _would_orphan_school(db, user_id):
         return {"ok": False, "status": 400,
-                "error": "That is the last administrator account. The school would be locked out."}
+                "error": "That is the last Super Admin account. The school would be locked out."}
 
     db.run("UPDATE users SET is_active = %s WHERE id = %s", (1 if active else 0, user_id))
     if not active:
@@ -322,13 +340,14 @@ def set_user_role(db, actor, user_id, designation_id):
     role = db.one("SELECT id, name FROM designations WHERE id = %s", (designation_id,))
     if not role:
         return {"ok": False, "status": 400, "error": "That role does not exist."}
-    if int(user_id) == int(actor["user_id"]) and role["name"] != security.SUPER_ADMIN:
+    if int(user_id) == int(actor["user_id"]) and not security.is_super_admin_name(role["name"]):
         return {"ok": False, "status": 400,
-                "error": "You cannot take the administrator role off the account you are signed in with."}
-    if user["designation"] == security.SUPER_ADMIN and role["name"] != security.SUPER_ADMIN \
+                "error": "You cannot take the Super Admin role off the account you are signed in with."}
+    if security.is_super_admin_name(user["designation"]) \
+            and not security.is_super_admin_name(role["name"]) \
             and _would_orphan_school(db, user_id):
         return {"ok": False, "status": 400,
-                "error": "That is the last administrator account. The school would be locked out."}
+                "error": "That is the last Super Admin account. The school would be locked out."}
 
     db.run("UPDATE users SET designation_id = %s WHERE id = %s", (designation_id, user_id))
     # A changed role is a changed permission map and a changed teaching scope.

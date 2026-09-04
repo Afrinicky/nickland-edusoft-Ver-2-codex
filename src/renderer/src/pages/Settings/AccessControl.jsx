@@ -43,7 +43,7 @@ export default function AccessControl() {
           <b> Manage</b> edits, <b>Full</b> also deletes. Anything set to
           <b> No access</b> is hidden entirely, not greyed out.
           {!canManage && <div style={{ marginTop: 6, color: 'var(--warning)' }}>
-            You can view this, but only an Administrator or Proprietor can make changes.
+            You can view this, but only the Super Admin or the Proprietor can make changes.
           </div>}
         </div>
       </div>

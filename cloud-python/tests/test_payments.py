@@ -86,7 +86,7 @@ def main():
     admin_id = db.insert("users", {
         "username": "adjei", "password_hash": session.hash_password("pass1234"),
         "full_name": "Ms Adjei", "is_active": 1,
-        "designation_id": db.value("SELECT id FROM designations WHERE name = 'Administrator'"),
+        "designation_id": db.value("SELECT id FROM designations WHERE name = 'Super Admin'"),
     })
     b5 = db.value("SELECT id FROM class_groups WHERE short_code = 'BS5'")
     term = db.value("SELECT id FROM terms WHERE is_current = 1")

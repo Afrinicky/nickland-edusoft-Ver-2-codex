@@ -4,6 +4,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { sanitizeForForm } from '../../lib/formSafe.js';
+import { isSupervisor as isSupervisorRole } from '../../lib/roles.js';
 
 const STATUS_BADGE = {
   draft:    { label: 'Draft',    cls: 'badge-muted' },
@@ -21,7 +22,7 @@ export default function LessonNotesTab() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
 
-  const isSupervisor = ['Administrator', 'Proprietor', 'Head Teacher'].includes(currentUser?.designation);
+  const isSupervisor = isSupervisorRole(currentUser?.designation);
 
   async function refresh() {
     setLoading(true);
@@ -70,7 +71,7 @@ export default function LessonNotesTab() {
             <div className="text-sm text-muted">
               {isSupervisor
                 ? 'All staff lesson notes. Click a note to review it.'
-                : 'Your structured lesson plans. Heads/Administrators can review and acknowledge.'}
+                : 'Your structured lesson plans. The head teacher can review and acknowledge them.'}
             </div>
           </div>
           <button className="btn btn-primary" onClick={() => setEditing({})}>

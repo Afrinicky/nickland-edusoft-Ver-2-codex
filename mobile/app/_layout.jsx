@@ -44,13 +44,13 @@ function Branded() {
         <Stack.Screen name="connect" />
         <Stack.Screen name="login" />
         <Stack.Screen name="parent" />
-        <Stack.Screen name="staff" />
-        {/* The three areas the office works in. Each guards itself: an account
-            without the portal is sent to the one it does hold, and the server
-            refuses regardless of what the app drew. */}
-        <Stack.Screen name="finance" />
-        <Stack.Screen name="admin" />
-        <Stack.Screen name="system" />
+        {/* The whole of the staff-facing application: one list of modules,
+            gated by what the account holds. See src/appshell.jsx. */}
+        <Stack.Screen name="app" />
+        {/* Where the four old portal areas — /staff, /finance, /admin, /system —
+            now point. They are in bookmarks and in staff-room chats, and none
+            of them should land on a blank page. */}
+        <Stack.Screen name="[...legacy]" />
       </Stack>
     </BrandingProvider>
   );

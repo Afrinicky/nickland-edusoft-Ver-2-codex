@@ -21,7 +21,7 @@
 // Three things are deliberately NOT here, and should not be added:
 //
 //   • Approving a password reset. That happens on the desktop, face to face,
-//     because the whole point of the code an Administrator reads out is that
+//     because the whole point of the code the Super Admin reads out is that
 //     the person asking is standing in front of them. Raising and redeeming a
 //     request are already reachable remotely; approval is the human step.
 //   • Any read of a stored gateway secret. Settings answer whether a key is
@@ -62,13 +62,37 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     catch (_) { return null; }
   };
 
+  // The gate on these routes is the MODULE, and only the module.
+  //
+  // It used to be the administration portal as well, and that was right while
+  // the app was four portals: a bursar had no administration screen, so a
+  // bursar had no business at an administration route. The app is modules now,
+  // exactly as the desktop has always been — a person holding Students at
+  // Manage is shown Students and the sheet inside it, whether or not they also
+  // hold the staff register — and a portal check here would refuse the very
+  // screen the module system just drew for them. A module a person may not use
+  // is still never drawn; that rule is unchanged and is enforced in the same
+  // permission map both sides read.
+  //
+  // Nothing is widened by this. `can()` is the same check the desktop makes on
+  // the same resolved permissions, and every route below still names the
+  // module and the action it needs.
   const adminGate = (ctx, res, module, action = 'view') => {
     if (!ctx || ctx.role !== 'staff') { deny(res, 'Staff only.'); return false; }
-    if (!portals.hasPortal(ctx, 'admin')) { deny(res); return false; }
-    if (module && !can(ctx, module, action)) {
-      deny(res, `Access denied. You do not have permission to ${action} ${module}.`);
-      return false;
+    if (module) {
+      if (!can(ctx, module, action)) {
+        deny(res, `Access denied. You do not have permission to ${action} ${module}.`);
+        return false;
+      }
+      return true;
     }
+    // The cross-module summary. It reports each part only to an account that
+    // holds that part (see `may` below), so the gate is simply: does this
+    // person hold any of it? Somebody granted nothing is told no, once, rather
+    // than handed a page of zeroes.
+    const any = ['students', 'staff', 'academics', 'fees', 'dashboard']
+      .some(m => can(ctx, m, 'view'));
+    if (!any) { deny(res); return false; }
     return true;
   };
 
@@ -242,6 +266,54 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     return json(res, 200, { ok: true, id: r.lastInsertRowid, index_number: indexNumber });
   });
 
+  // Correcting a pupil's record.
+  //
+  // The web app's Students Sheet is the desktop's spreadsheet view: a whole
+  // class on screen, corrected in place, the way an office actually works
+  // through a pile of admission forms. Without this route it could show the
+  // sheet and not save it.
+  //
+  // The editable list is the same one the online school allows
+  // (cloud-python/app/school/students.py EDITABLE) so a correction made in a
+  // browser on the school Wi-Fi and the same correction made over the internet
+  // change the same set of columns. Everything else about a pupil — the
+  // admission number, the photograph, the audit trail — is not editable from
+  // here at all.
+  add('POST', `${API}/admin/students/:id`, async (ctx, req, res, params, body) => {
+    if (!adminGate(ctx, res, 'students', 'edit')) return undefined;
+    const id = parseInt(params.id, 10);
+    const existing = db.prepare('SELECT id, surname, first_name, current_class_id FROM students WHERE id = ?').get(id);
+    if (!existing) return json(res, 404, { ok: false, error: 'That pupil is not on the roll.' });
+
+    const EDITABLE = [
+      'surname', 'first_name', 'other_names', 'gender', 'denomination', 'date_of_birth',
+      'place_of_birth', 'place_of_residence', 'street_address', 'house_number',
+      'digital_address', 'nhis_number', 'father_name', 'father_contact', 'father_email',
+      'mother_name', 'mother_contact', 'mother_email', 'guardian_name', 'guardian_contact',
+      'guardian_email', 'current_class_id', 'admission_date', 'notes',
+    ];
+    const patch = {};
+    for (const k of EDITABLE) if (Object.prototype.hasOwnProperty.call(body, k)) patch[k] = body[k];
+    if (!Object.keys(patch).length) return bad(res, 'Nothing to change.');
+
+    if (patch.current_class_id
+        && Number(patch.current_class_id) !== Number(existing.current_class_id)
+        && !db.prepare('SELECT id FROM class_groups WHERE id = ?').get(patch.current_class_id)) {
+      return bad(res, 'That class does not exist.');
+    }
+    if ('surname' in patch && !String(patch.surname || '').trim()) return bad(res, 'A surname is required.');
+    if ('first_name' in patch && !String(patch.first_name || '').trim()) return bad(res, 'A first name is required.');
+
+    const cols = Object.keys(patch);
+    db.prepare(`UPDATE students SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ?`)
+      .run(...cols.map(c => (patch[c] === '' ? null : patch[c])), id);
+
+    try { require('./sync/outbox').enqueueStudentSnapshot(db, id); } catch (_) {}
+    audit(db, ctx, 'student', id, 'update_student',
+      `${existing.surname} ${existing.first_name}: ${cols.join(', ')}`);
+    return json(res, 200, { ok: true });
+  });
+
   // Withdrawing, graduating or readmitting. A status change is what a parent
   // notices first — the app stops showing their child — so it is audited with
   // the reason, and the reason is required.
@@ -277,6 +349,12 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     `).all(todayISO(), status);
     return json(res, 200, {
       ok: true, status,
+      may_edit: can(ctx, 'staff', 'edit'),
+      may_add: can(ctx, 'staff', 'create'),
+      // The designations, with the roll: a form that asks what somebody's job
+      // is needs the school's own list of jobs, and fetching it from the user
+      // table would put a Super Admin's screen behind a staff screen.
+      designations: db.prepare('SELECT id, name FROM designations ORDER BY name').all(),
       staff: rows.map(r => ({ ...r, name: `${r.surname || ''} ${r.first_name || ''}`.trim() })),
     });
   });
@@ -319,6 +397,112 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
       },
       assignments, attendance, leave, may_see_pay: showPay,
     });
+  });
+
+  /**
+   * Create or amend a staff record.
+   *
+   * The pay columns are only written by an account that may SEE them. Without
+   * that check an account with `staff: edit` and no payroll could set anybody's
+   * salary — including their own — without ever being able to read it back,
+   * which is worse than being able to read it.
+   */
+  add('POST', `${API}/admin/staff`, async (ctx, req, res, params, body) => {
+    const isNew = !body.id;
+    if (!adminGate(ctx, res, 'staff', isNew ? 'create' : 'edit')) return undefined;
+
+    const FIELDS = ['surname', 'first_name', 'other_names', 'gender', 'date_of_birth', 'phone',
+                    'email', 'address', 'role', 'designation_id', 'status', 'qualification',
+                    'specialization', 'hire_date', 'stop_date', 'notes', 'staff_number'];
+    const PAY = ['base_salary', 'bank_account', 'bank_name', 'ssnit_number', 'ssnit_enrolled'];
+    const allowed = can(ctx, 'payroll', 'edit') ? [...FIELDS, ...PAY] : FIELDS;
+
+    const patch = {};
+    for (const k of allowed) if (Object.prototype.hasOwnProperty.call(body, k)) patch[k] = body[k];
+
+    if (isNew) {
+      if (!String(patch.surname || '').trim() || !String(patch.first_name || '').trim()) {
+        return bad(res, 'A surname and a first name are required.');
+      }
+      if (!patch.role) patch.role = 'Teaching';
+      if (!patch.status) patch.status = 'Active';
+      if (!patch.staff_number) {
+        const n = db.prepare('SELECT COUNT(*) c FROM staff').get().c || 0;
+        patch.staff_number = `STAFF/${String(n + 1).padStart(4, '0')}`;
+      }
+      if (db.prepare('SELECT id FROM staff WHERE staff_number = ?').get(patch.staff_number)) {
+        return bad(res, 'That staff number is already in use.');
+      }
+      const cols = Object.keys(patch);
+      const r = db.prepare(`INSERT INTO staff (${cols.join(', ')})
+                            VALUES (${cols.map(() => '?').join(', ')})`)
+        .run(...cols.map(k => patch[k]));
+      audit(db, ctx, 'staff', r.lastInsertRowid, 'create_staff',
+        `${patch.surname} ${patch.first_name}`, 'high');
+      return json(res, 200, { ok: true, id: r.lastInsertRowid, staff_number: patch.staff_number });
+    }
+
+    const id = parseInt(body.id, 10);
+    if (!db.prepare('SELECT id FROM staff WHERE id = ?').get(id)) {
+      return missing(res, 'No such member of staff.');
+    }
+    const cols = Object.keys(patch);
+    if (!cols.length) return bad(res, 'Nothing to change.');
+    db.prepare(`UPDATE staff SET ${cols.map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...cols.map(k => patch[k]), id);
+    audit(db, ctx, 'staff', id, 'update_staff', cols.join(', '));
+    try {
+      const owner = db.prepare('SELECT id FROM users WHERE staff_id = ?').get(id);
+      if (owner) require('./sync/staff_projection').enqueueStaffProfile(db, owner.id);
+    } catch (_) {}
+    return json(res, 200, { ok: true, id });
+  });
+
+  /**
+   * Which classes and subjects somebody teaches.
+   *
+   * The single most consequential write in the staff module: the teaching
+   * scope is built from this, so it decides whose marks a teacher can touch.
+   * Replaced wholesale rather than patched, so what is stored always matches
+   * what the screen showed.
+   */
+  add('POST', `${API}/admin/staff/:id/assignments`, async (ctx, req, res, params, body) => {
+    if (!adminGate(ctx, res, 'staff', 'edit')) return undefined;
+    const id = parseInt(params.id, 10);
+    if (!db.prepare('SELECT id FROM staff WHERE id = ?').get(id)) {
+      return missing(res, 'No such member of staff.');
+    }
+    const rows = [];
+    for (const a of (Array.isArray(body.assignments) ? body.assignments : [])) {
+      const classId = a.class_group_id ?? a.classId ?? null;
+      const subjectId = a.subject_id ?? a.subjectId ?? null;
+      if (!classId && !subjectId) continue;
+      rows.push([classId || null, subjectId || null, a.is_class_teacher ? 1 : 0]);
+    }
+
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM staff_assignments WHERE staff_id = ?').run(id);
+      for (const [classId, subjectId, isCt] of rows) {
+        // One class has one class teacher. Setting a second silently would give
+        // two people the register and the report cards.
+        if (isCt && classId) {
+          db.prepare('UPDATE staff_assignments SET is_class_teacher = 0 WHERE class_group_id = ? AND is_class_teacher = 1')
+            .run(classId);
+        }
+        db.prepare(`INSERT INTO staff_assignments (staff_id, class_group_id, subject_id, is_class_teacher)
+                    VALUES (?, ?, ?, ?)`).run(id, classId, subjectId, isCt);
+      }
+    });
+    tx();
+
+    audit(db, ctx, 'staff', id, 'set_assignments', `${rows.length} assignment(s)`, 'high');
+    // Every session that member of staff holds is now resolving a scope that
+    // has changed; the next request re-reads it, so nothing needs revoking.
+    try {
+      const owner = db.prepare('SELECT id FROM users WHERE staff_id = ?').get(id);
+      if (owner) require('./sync/staff_projection').enqueueStaffProfile(db, owner.id);
+    } catch (_) {}
+    return json(res, 200, { ok: true, assignments: rows.length });
   });
 
   // ── Approvals: leave ──────────────────────────────────────────────────────
@@ -475,7 +659,7 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     return json(res, 200, {
       ok: true, counts, sync,
       // Requests raised from a phone or a browser, waiting for somebody to
-      // approve them at the desktop. Shown here so an Administrator knows to
+      // approve them at the desktop. Shown here so the Super Admin knows to
       // go and do it — never approved here.
       password_requests: db.prepare(
         "SELECT COUNT(*) c FROM password_reset_requests WHERE status = 'pending'"
@@ -555,7 +739,7 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     if (!active) {
       const admins = db.prepare(`
         SELECT COUNT(*) c FROM users u JOIN designations d ON d.id = u.designation_id
-        WHERE u.is_active = 1 AND d.name IN ('Proprietor','Administrator') AND u.id <> ?
+        WHERE u.is_active = 1 AND d.name IN ('Proprietor','Super Admin','Administrator') AND u.id <> ?
       `).get(id).c;
       if (admins === 0) return bad(res, 'That is the last administrator account. The school would be locked out.');
     }
@@ -579,7 +763,7 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     if (!u) return missing(res, 'No such account.');
     const d = db.prepare('SELECT id, name FROM designations WHERE id = ?').get(designationId);
     if (!d) return bad(res, 'That role does not exist.');
-    if (id === ctx.user.id && !['Proprietor', 'Administrator'].includes(d.name)) {
+    if (id === ctx.user.id && !portals.isElevated(d.name)) {
       return bad(res, 'You cannot take the administrator role off the account you are signed in with.');
     }
     db.prepare('UPDATE users SET designation_id = ? WHERE id = ?').run(designationId, id);

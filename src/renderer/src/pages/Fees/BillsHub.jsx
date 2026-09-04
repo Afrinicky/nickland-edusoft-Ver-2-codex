@@ -39,7 +39,7 @@ export default function BillsHub() {
     { id: 'templates', label: 'Fee Templates' },
     { id: 'extras', label: 'Extra Charges' },
     { id: 'books', label: 'Books' },
-    // Withdrawn bills are a Proprietor/Administrator concern. Anyone else does
+    // Withdrawn bills are a Proprietor/Super Admin concern. Anyone else does
     // not get a tab that only ever shows them bills they cannot act on.
     ...(perms.can_manage_issued_bills ? [{ id: 'voided', label: 'Voided' }] : []),
   ];

@@ -42,15 +42,53 @@
 // Note what this is NOT. The Proprietor owns the school and is elevated over
 // its money — they may reverse a payment and void a bill (see
 // _security.ELEVATED) — but running the SYSTEM is the Super Admin's, and a
-// proprietor who wants both is given both accounts or the Administrator
+// proprietor who wants both is given both accounts or the Super Admin
 // designation. Keeping them apart is the point: the person who signs the
 // cheques should not also be the person who can quietly rewrite who may see
 // that they were signed.
-const SUPER_ADMIN = 'Administrator';
+//
+// ── The name ────────────────────────────────────────────────────────────────
+//
+// It was "Administrator" for the first two releases and it was the wrong word.
+// Every school has administrators — the secretary who keeps the roll, the
+// bursar's assistant — and calling the one account with total authority by the
+// same name meant nobody could tell from a user list who actually ran the
+// system. It is "Super Admin" now, on the desktop, in the browser and on the
+// phone.
+//
+// The old name is still ACCEPTED, everywhere, and always will be. A school
+// upgrading has the designation renamed for it by a migration, but a database
+// restored from an older backup, a projection pushed up before the upgrade and
+// a phone a release behind all still say "Administrator", and none of them
+// should lock the head teacher out of their own system.
+const SUPER_ADMIN = 'Super Admin';
+const SUPER_ADMIN_LEGACY = 'Administrator';
+
+// Compared case- and space-insensitively: a school that typed "superadmin" into
+// the designation field by hand meant this, and being told otherwise by a
+// missing space is not a rule anybody would defend out loud.
+const normaliseRole = (name) => String(name || '').trim().toLowerCase().replace(/\s+/g, '');
+const SUPER_NAMES = new Set([SUPER_ADMIN, SUPER_ADMIN_LEGACY].map(normaliseRole));
+
+const isSuperAdminName = (name) => SUPER_NAMES.has(normaliseRole(name));
 
 const isSuperAdmin = (profile) => !!profile && (
-  profile.is_super === true || profile.designation === SUPER_ADMIN
+  profile.is_super === true || isSuperAdminName(profile.designation)
 );
+
+// The two designations that run the school and are held back nowhere. One list,
+// imported by _access, _security and _scope, so "who is unrestricted" cannot
+// be answered three different ways.
+const ELEVATED_NAMES = ['Proprietor', SUPER_ADMIN, SUPER_ADMIN_LEGACY];
+const isElevated = (name) => name === 'Proprietor' || isSuperAdminName(name);
+
+// Those two, and the head teacher: the people who APPROVE things — a lesson
+// note, a leave request, a staff activity — as opposed to the people who are
+// held back nowhere. One list again, because a hard-coded
+// ['Administrator', 'Proprietor', 'Head Teacher'] somewhere is a head teacher
+// who cannot sign off a lesson note the day the designation is renamed.
+const SUPERVISOR_NAMES = [...ELEVATED_NAMES, 'Head Teacher'];
+const isSupervisor = (name) => isElevated(name) || name === 'Head Teacher';
 
 // Ranked lowest to highest. `rank` decides where an account lands when it
 // signs in: the most capable portal it holds, so a head teacher does not begin
@@ -186,6 +224,7 @@ function hasPortal(profile, key) {
 }
 
 module.exports = {
-  PORTALS, PORTAL_KEYS, SUPER_ADMIN,
-  allows, isSuperAdmin, portalsFor, portalListFor, homePortal, hasPortal, portal,
+  PORTALS, PORTAL_KEYS, SUPER_ADMIN, SUPER_ADMIN_LEGACY, ELEVATED_NAMES, SUPERVISOR_NAMES,
+  allows, isSuperAdmin, isSuperAdminName, isElevated, isSupervisor,
+  portalsFor, portalListFor, homePortal, hasPortal, portal,
 };

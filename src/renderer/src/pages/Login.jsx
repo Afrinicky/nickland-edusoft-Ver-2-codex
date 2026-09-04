@@ -103,7 +103,7 @@ export default function Login({ onLogin }) {
     onLogin(res.user);
   };
 
-  // Ask an Administrator or Proprietor to approve a reset.
+  // Ask the Super Admin or the Proprietor to approve a reset.
   const handleForgot = async (e) => {
     e.preventDefault();
     setError('');
@@ -115,7 +115,7 @@ export default function Login({ onLogin }) {
     setLoading(false);
     if (!r.ok) return setError(r.error || 'Could not send the request.');
     setResetState('pending');
-    setNotice('Request sent. An Administrator or Proprietor will approve it, then give you a 6-digit code.');
+    setNotice('Request sent. The Super Admin or the Proprietor will approve it, then give you a 6-digit code.');
   };
 
   // Redeem the approval and set the password.
@@ -259,7 +259,7 @@ export default function Login({ onLogin }) {
               </div>
             )}
             {resetState === 'denied' && (
-              <div className="auth-error">That request was declined. Speak to your Administrator.</div>
+              <div className="auth-error">That request was declined. Speak to your Super Admin.</div>
             )}
             {resetState === 'expired' && (
               <div className="auth-error">That approval expired before it was used. Send a new request.</div>
@@ -293,7 +293,7 @@ export default function Login({ onLogin }) {
             <div className="form-group">
               <label>Approval code</label>
               <input type="text" value={pw.code} onChange={updatePw('code')}
-                placeholder="6-digit code from your Administrator"
+                placeholder="6-digit code from your Super Admin"
                 inputMode="numeric" maxLength={6} />
             </div>
             {passwordFields}

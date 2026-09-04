@@ -20,7 +20,7 @@ database itself.
 |------|-----|-------|
 | `parent` | Guardians | Only their own children (fees, canteen, attendance, reports, notices). |
 | `staff` | Teachers & other staff | Exactly what their **designation permissions** allow (same matrix as desktop). |
-| `staff` + admin | Proprietor / Administrator | All staff modules; structural config stays desktop-only. |
+| `staff` + admin | Proprietor / Super Admin | All staff modules; structural config stays desktop-only. |
 
 Parents are a **separate identity** (`parents` table) linked to `students` via
 `parent_students`. A parent self-registers only if their phone/email matches a
@@ -107,6 +107,54 @@ student's guardian contact on file; otherwise an admin provisions the account.
 | GET | `/announcements` | Active notices. |
 | POST | `/announcements` | Post one (needs `notifications` → Manage). |
 
+### Staff — the office
+
+The browser app is the desktop application now, so the school's own server has
+to answer for the whole office and not only for the teaching day. These are the
+routes that used to live behind an IPC handler on the one PC in the office
+(`electron/server/office_api.js`), and they are the same operations the online
+school performs (`cloud-python/app/school/*.py`) against SQLite instead of
+Postgres, so the two answer the same shapes.
+
+Every one of them names its module and its action and is refused by the same
+`can()` the rest of the API uses. **None of them is a bridge to an arbitrary
+IPC channel** — that would be a hole in the middle of the access system,
+however convenient.
+
+| Method | Path | Needs | Purpose |
+|--------|------|-------|---------|
+| GET/POST | `/fees/templates`, `/fees/templates/:id` | `fees` / `fees:edit` | The bill a class is charged, and its line items. `?billType=` selects school fees (the default), `supplementary`, or `all`. A second school-fees template for the same class and term is refused. |
+| POST | `/fees/bills` | `fees:create` | Raise the bills for a whole class from its template — arrears carried forward, discounts applied, anybody already billed skipped. |
+| GET/POST | `/discounts` | `fees` / **elevated** | Who has been forgiven what, and by whom. Granting one needs the Proprietor or the Super Admin: a bursar with Fees at Full may take money and may not forgive it. |
+| GET/POST | `/fees/supplementary`, `/fees/supplementary/remove` | `fees` / **elevated** | The extra charges a term throws up — excursion, sports week, mock exams. Applied onto bills that already exist, so a parent keeps one bill; idempotent per (bill, charge), and withdrawable from every bill it was added to. |
+| GET | `/fees/bills/voided` | `fees` | What was withdrawn, by whom, and on what stated grounds. Readable by anybody who may see fees — that is the point of the screen. |
+| POST | `/fees/bills/:id/void`, `/fees/bills/:id/restore` | **elevated** | Withdrawing a bill and putting it back. A reason of at least five characters, written to the audit trail. Money already received stays recorded in Finance and the answer says so. |
+| GET/POST | `/books/:id`, `/books/:id/payment` | `fees` / `fees:edit`, `fees:create` | Book charges against a pupil, and paying them off. |
+| GET/POST | `/inventory`, `/inventory/movement`, `/inventory/movements` | `finance` | The store room: items, stock in and out, and every movement logged. Issuing more than is on the books is refused with the figure that is. |
+| GET/POST | `/transport`, `/transport/:id`, `/transport/riders`, `/transport/payment` | `finance` | Routes, who rides them and what they owe. Assigning a pupil again moves them; nobody is ever on two buses. |
+| GET | `/canteen/debtors` | `canteen` | Canteen arrears at the rate the school set. |
+| GET | `/admin/staff-register` | `staff` | Who is in today. |
+| GET/POST | `/activities`, `/activities/:id/acknowledge` | `staff` | Staff activities and duties, and acknowledging one. |
+| POST | `/payroll/run`, `/payroll/:id/paid` | `payroll:create`, `payroll:edit` | Run the month, and mark a salary paid. |
+| GET | `/payroll/schedule/ssnit\|paye` | `payroll` | The two statutory schedules a school files monthly. |
+| GET | `/payroll/:staffId/payslip` | own, or `payroll` | **A person may always read their own payslip**, whatever their modules say. Anybody else's needs payroll. |
+| POST | `/finance/income`, `/finance/expenses/:id/approve` | `finance:create`, `finance:edit` | Money in, and approving money out — never your own. |
+| GET | `/finance/audit`, `/finance/cashbook` | `finance` | Receipts against the ledger, and both sides in date order. |
+| GET/POST | `/budgets` | `finance` | The term's budget and how it is running. |
+| GET/POST | `/notifications`, `/announcements/:id/withdraw` | `notifications` / `notifications:create` | The notice board, the SMS sender and the log of what was sent. |
+| POST | `/system/users/:id/password` | Super Admin | Set an account's password. |
+| GET/POST | `/timetable/periods`, `/timetable/class` | `academics` / `academics:edit` | The bell schedule, and a class's whole week saved in one act. |
+| GET/POST | `/exams/papers`, `/exams/sections`, `/exams/questions`, `/exams/papers/:id/from-bank` | `academics` / `academics:edit` | Question papers, their sections and questions, and copying from the bank. |
+| POST | `/admin/students/:id` | `students:edit` | Correct a pupil's record — the students sheet. The admission number is not the sheet's to change. |
+| POST | `/admin/staff` | `staff:create` / `staff:edit` | Put somebody on the roll, or amend their record. The pay columns are only written by an account that may edit payroll — one that could set a salary it cannot read back is worse than one that can read it. |
+| POST | `/admin/staff/:id/assignments` | `staff:edit` | Which classes and subjects somebody teaches. The teaching scope is built from this, so it decides whose marks they can touch; replaced wholesale, and a class keeps exactly one class teacher. |
+
+The gate on these is the **module**, not a portal. The app hands out modules the
+way the desktop always has, so somebody holding Students at Manage is shown
+Students and the sheet inside it whether or not they also hold the staff
+register — and a portal check here would refuse the very screen the module
+system just drew for them.
+
 ### Staff — their own employment
 Everything under `/hr` is about the signed-in person and nobody else. There is
 no `staffId` parameter anywhere in it by design: the token decides whose
@@ -136,7 +184,7 @@ every staff route above.
 
 The register, the canteen sheet and the end-of-term remarks belong to the one
 teacher answerable for the class (`is_class_teacher`), not to everyone who
-takes a subject in it. Proprietors, Administrators and Head Teachers are
+takes a subject in it. Proprietors, Super Admins and Head Teachers are
 unrestricted as to *which* class; money and system modules are still theirs
 only if the school granted them.
 

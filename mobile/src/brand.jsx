@@ -15,13 +15,38 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { api } from './api';
 import { channels as contactChannels } from './contact';
+import { applyTheme, deriveTokens, deriveFont } from './skin';
 
-const BrandCtx = createContext({ ready: false, school: null, contact: {}, logo: null, channels: [] });
+const BrandCtx = createContext({ ready: false, school: null, contact: {}, logo: null,
+                                 channels: [], theme: {} });
 
 export function useBranding() { return useContext(BrandCtx); }
 
+/**
+ * Wear the school's colours.
+ *
+ * `skin` is which set of defaults to fall back to when the school has chosen
+ * nothing — 'desk' for the browser at desktop width, which is the desktop
+ * installer's own layout and therefore its navy and gold, 'app' everywhere
+ * else. The moment the school HAS chosen, both follow it.
+ *
+ * The work is one write of a handful of CSS custom properties, and it is
+ * skipped when nothing has moved, so calling this from a layout that re-renders
+ * on every navigation costs nothing.
+ */
+export function useSkin(skin = 'app') {
+  const { theme } = useBranding();
+  const settings = theme || EMPTY;
+  useEffect(() => {
+    applyTheme(deriveTokens(skin, settings), deriveFont(settings));
+  }, [skin, settings]);
+}
+
+const EMPTY = {};
+
 export function BrandingProvider({ host, children }) {
-  const [state, setState] = useState({ ready: false, school: null, contact: {}, logo: null, channels: [] });
+  const [state, setState] = useState({ ready: false, school: null, contact: {}, logo: null,
+                                       channels: [], theme: {} });
 
   const load = useCallback(async () => {
     if (!host) { setState(s => ({ ...s, ready: true })); return; }
@@ -34,6 +59,9 @@ export function BrandingProvider({ host, children }) {
         logo: r.logo || null,
         currency: r.currency || 'GHS',
         channels: contactChannels(r.contact || {}),
+        // What the school picked in Settings -> Appearance. An older host that
+        // has never heard of colours sends nothing, and the app keeps its own.
+        theme: r.theme || {},
       });
     } catch (_) {
       // An older school desktop has no /branding. Fall back to /info, which
@@ -49,6 +77,7 @@ export function BrandingProvider({ host, children }) {
           logo: null,
           currency: i.payment_currency || 'GHS',
           channels: contactChannels(contact),
+          theme: {},
         });
       } catch (__) {
         setState(s => ({ ...s, ready: true }));

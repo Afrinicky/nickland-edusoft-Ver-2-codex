@@ -39,7 +39,10 @@ function getCurrentDesignation() {
 // actions (voiding or deleting a bill). Deliberately narrower than
 // checkPermission: an Accountant with fees.delete can still not void a bill,
 // because a voided bill rewrites what a parent was told they owe.
-const ELEVATED = ['Proprietor', 'Administrator'];
+// The name list comes from _portals so "Super Admin" and its legacy spelling
+// "Administrator" are recognised in one place rather than eleven.
+const { ELEVATED_NAMES, isElevated: isElevatedName } = require('./_portals');
+const ELEVATED = ELEVATED_NAMES;
 
 // Resolves elevation from the database rather than trusting the renderer, and
 // falls back to the designation captured at login when the user row is gone.
@@ -54,14 +57,14 @@ function isElevated(db, userId = currentUserId) {
     `).get(userId);
     if (row && row.designation) designation = row.designation;
   } catch (_) { /* fall back to the login-time designation */ }
-  return ELEVATED.includes(designation);
+  return isElevatedName(designation);
 }
 
 // Returns true if the current user is allowed to perform `action` on `module`.
-// Proprietor and Administrator always pass.
+// The Proprietor and the Super Admin always pass.
 function checkPermission(db, module, action = 'view') {
   if (!currentUserId) return false;
-  if (['Proprietor', 'Administrator'].includes(currentUserDesignation)) return true;
+  if (isElevatedName(currentUserDesignation)) return true;
   const perms = resolveEffectivePermissions(db, currentUserId);
   const p = perms[module];
   if (!p) return false;

@@ -114,7 +114,7 @@ export default function Sidebar() {
           {(currentUser?.fullName || 'A').charAt(0).toUpperCase()}
         </div>
         <div className="sidebar-user-info">
-          <div className="sidebar-user-name">{currentUser?.fullName || 'Administrator'}</div>
+          <div className="sidebar-user-name">{currentUser?.fullName || 'Super Admin'}</div>
           <div className="sidebar-user-role">{currentUser?.designation || 'Admin'}</div>
           <div className="sidebar-user-status">
             <span className="status-dot online" />Online

@@ -34,7 +34,7 @@ let BASE = null;
 let MODE = 'host';          // 'host' | 'cloud' | 'online'
 let SCHOOL_ID = null;       // required in cloud mode (chosen at connect time)
 let ROLE = null;            // 'parent' | 'staff' — which surface this session is on
-// Stamped on password requests so the Administrator approving one can see
+// Stamped on password requests so the Super Admin approving one can see
 // whether it came from a phone or a browser.
 const SOURCE = (typeof navigator !== 'undefined' && navigator.product !== 'ReactNative') ? 'web' : 'mobile';
 
@@ -252,7 +252,22 @@ const hostOnly = (name) => () => {
 
 // In cloud mode a staff route lives under /staff; on the desktop it is at the
 // top level. One helper, so every staff method reads the same.
-const staffPath = (path) => (MODE === 'cloud' ? `/staff${path}` : path);
+/**
+ * Where a teaching route lives, in whichever mode this session is in.
+ *
+ *   host    /api/v1/<path>              the school's own system
+ *   cloud   /api/v1/staff/<path>        the thin portal's staff surface
+ *   online  /api/v1/school/<path>       the online school
+ *
+ * The online case was missing, and its absence was not visible from any one
+ * screen: every teaching call — the register, the mark sheets, the results,
+ * homework, messages — asked the online service for a path only the desktop
+ * serves, and got a 404 that read as "no data". The paths themselves are the
+ * same on both, deliberately; the handful that are not are dispatched
+ * individually below and say so where they are.
+ */
+const staffPath = (path) =>
+  (MODE === 'cloud' ? `/staff${path}` : MODE === 'online' ? `/school${path}` : path);
 
 export const api = {
   // Public
@@ -284,7 +299,15 @@ export const api = {
   },
   // The school's crest, name and contact details. Public: the sign-in screen
   // should show the parent their own school before they have typed anything.
-  branding: () => request(MODE === 'cloud' ? `/portal/branding?school_id=${encodeURIComponent(SCHOOL_ID || '')}` : '/branding'),
+  branding: () => {
+    // Three modes, three places the same answer lives. `online` was reaching
+    // for the desktop's route, which that service does not serve, so every
+    // browser on the online school fell through to /info and drew a school
+    // with no crest and no colours.
+    if (MODE === 'cloud') return request(`/portal/branding?school_id=${encodeURIComponent(SCHOOL_ID || '')}`);
+    if (MODE === 'online') return request(`/school/branding?school_id=${encodeURIComponent(SCHOOL_ID || '')}`);
+    return request('/branding');
+  },
   health: () => request('/health'),
   schools: () => request('/portal/schools'),          // cloud: list tenants to pick from
   staffLogin: (username, password, device) =>
@@ -341,7 +364,7 @@ export const api = {
 
   // ── Passwords ──
   // Available on both connections. Approving a reset is on neither: an
-  // Administrator does that at the school, face to face, and hands over a
+  // Super Admin does that at the school, face to face, and hands over a
   // six-digit code. Everything here either raises a request or spends one.
   requestPasswordReset: ({ username, reason }) =>
     MODE === 'cloud'
@@ -569,7 +592,10 @@ export const api = {
   // directly; over the internet they read the projected class rosters and
   // queue writes for the desktop to apply — which is what lets a teacher mark
   // a register at home with the school's machine switched off.
-  dashboard: (token) => request(staffPath('/dashboard'), { token }),
+  // The online school calls this /overview, and answers a fuller shape: the
+  // whole school rather than one teacher's corner of it.
+  dashboard: (token) =>
+    MODE === 'online' ? school.overview(token) : request(staffPath('/dashboard'), { token }),
   students: (token, classId, opts = {}) => {
     const q = [classId ? `classId=${classId}` : '', opts.photos && classId ? 'photos=1' : '']
       .filter(Boolean).join('&');
@@ -583,7 +609,11 @@ export const api = {
   markAttendance: (token, date, marks) => request(staffPath('/attendance'), { method: 'POST', token, body: { date, marks } }),
 
   // Staff — score entry (raw exam marks 0–100 for a class + subject)
-  scoreSubjects: (token, classId) => request(staffPath(`/scores/subjects?classId=${classId}`), { token }),
+  // Online, the subjects a class sits and the subjects it is MARKED on are one
+  // route; the desktop kept two.
+  scoreSubjects: (token, classId) =>
+    MODE === 'online' ? school.subjects(token, classId)
+                      : request(staffPath(`/scores/subjects?classId=${classId}`), { token }),
   scoreSheet: (token, classId, subjectId) => request(staffPath(`/scores?classId=${classId}&subjectId=${subjectId}`), { token }),
   saveScores: (token, subjectId, marks) => request(staffPath('/scores'), { method: 'POST', token, body: { subjectId, marks } }),
 
@@ -684,15 +714,23 @@ export const api = {
       : request(`/lesson-notes/${id}`, { method: 'DELETE', token }),
 
   // ── Staff — the teacher's own employment ──
-  hrMe: (token) => request(staffPath('/hr/me'), { token }),
-  clock: (token, direction) => request(staffPath('/hr/clock'), { method: 'POST', token, body: { direction } }),
+  // A person's own employment record: /hr/* on the desktop, /my/* online.
+  hrMe: (token) =>
+    MODE === 'online' ? school.myEmployment(token) : request(staffPath('/hr/me'), { token }),
+  clock: (token, direction) =>
+    MODE === 'online' ? school.clock(token, direction)
+                      : request(staffPath('/hr/clock'), { method: 'POST', token, body: { direction } }),
   hrAttendance: (token, month, year) => {
     const q = [month ? `month=${month}` : '', year ? `year=${year}` : ''].filter(Boolean).join('&');
     return request(staffPath(`/hr/attendance${q ? `?${q}` : ''}`), { token });
   },
   leaveRequests: (token) => request(staffPath('/hr/leave'), { token }),
-  requestLeave: (token, body) => request(staffPath('/hr/leave'), { method: 'POST', token, body }),
-  payslips: (token, year) => request(staffPath(`/hr/payslips${year ? `?year=${year}` : ''}`), { token }),
+  requestLeave: (token, body) =>
+    MODE === 'online' ? school.requestLeave(token, body)
+                      : request(staffPath('/hr/leave'), { method: 'POST', token, body }),
+  payslips: (token, year) =>
+    MODE === 'online' ? school.myEmployment(token, year)
+                      : request(staffPath(`/hr/payslips${year ? `?year=${year}` : ''}`), { token }),
 
   // ── Staff — messages and notices ──
   staffThreads: (token) => request(staffPath('/messages'), { token }),
@@ -709,30 +747,266 @@ export const api = {
   announcements: (token) => request(staffPath('/announcements'), { token }),
   postAnnouncement: (token, body) => request(staffPath('/announcements'), { method: 'POST', token, body }),
 
-  // ── Staff — canteen sheet and class timetable ──
-  canteenClass: (token, classId) => request(staffPath(`/canteen/class?classId=${classId}`), { token }),
-
-  // ── Canteen: the daily collection ──
-  // The desktop's quick-pay, which the teacher's app never had: the class for
-  // one day, who has paid, who was absent, and one press to mark the rest.
-  // Host-only by design — the roster is a live read and the money is real, so
-  // it is not something to queue from a phone with the school's computer off.
+  // ── Canteen: the sheet and the daily collection ──
+  // The class for one day: who has paid, who was absent, who is behind, and one
+  // press to mark the rest. Not served by the thin projection by design — the
+  // roster is a live read and the money is real, so it is not something to
+  // queue from a phone with the school's computer switched off.
+  canteenClass: (token, classId, date) =>
+    MODE === 'online' ? school.canteenClass(token, classId, date)
+      : MODE === 'cloud' ? hostOnly('The canteen sheet')()
+                         : request(`/canteen/class${qs({ classId, date })}`, { token }),
   canteenQuickPay: (token, classId, date) =>
-    MODE === 'cloud'
-      ? hostOnly('The daily canteen collection')()
-      : request(`/canteen/quick-pay?classId=${classId}&date=${encodeURIComponent(date)}`, { token }),
+    MODE === 'online' ? school.canteenClass(token, classId, date)
+      : MODE === 'cloud' ? hostOnly('The daily canteen collection')()
+                         : request(`/canteen/quick-pay${qs({ classId, date })}`, { token }),
   canteenQuickPaySave: (token, { classId, date, studentIds, paymentMethod }) =>
-    MODE === 'cloud'
-      ? hostOnly('The daily canteen collection')()
-      : request('/canteen/quick-pay', { method: 'POST', token, body: { classId, date, studentIds, paymentMethod } }),
+    MODE === 'online'
+      ? school.canteenQuickPay(token, { classId, date, studentIds, paymentMethod })
+      : MODE === 'cloud' ? hostOnly('The daily canteen collection')()
+                         : request('/canteen/quick-pay', { method: 'POST', token, body: { classId, date, studentIds, paymentMethod } }),
   canteenExempt: (token, { classId, date, studentIds, reason }) =>
-    MODE === 'cloud'
-      ? hostOnly('Excusing a pupil from the canteen')()
-      : request('/canteen/exempt', { method: 'POST', token, body: { classId, date, studentIds, reason } }),
-  classTimetable: (token, classId) =>
-    MODE === 'cloud'
-      ? hostOnly('A class timetable')()
-      : request(`/timetable/class/${classId}`, { token }),
+    MODE === 'online' ? school.canteenExempt(token, { classId, date, studentIds, reason })
+      : MODE === 'cloud' ? hostOnly('Excusing a pupil from the canteen')()
+                         : request('/canteen/exempt', { method: 'POST', token, body: { classId, date, studentIds, reason } }),
+  // ── Billing, and everything that sits on a bill ──────────────────────────
+  //
+  // Writing what a class is charged, raising it against them, and the discounts
+  // and book charges that adjust it. None of this existed in the app at all,
+  // which is why a school could take a payment from a phone and could not tell
+  // the phone what the payment was against.
+  feeTemplates: (token, billType = 'school_fees') =>
+    MODE === 'online' ? school.feeTemplates(token, billType)
+      : MODE === 'cloud' ? hostOnly('Fee templates')()
+                         : request(`/fees/templates${qs({ billType })}`, { token }),
+
+  // ── extra charges, and withdrawing a bill ──
+  // Both elevated on every server: raising what every family in a class is
+  // asked to pay, and taking a bill out of the school's totals, are not the
+  // same question as "may this person take a payment".
+  supplementary: (token, termId) =>
+    MODE === 'online' ? school.supplementary(token, termId)
+      : MODE === 'cloud' ? hostOnly('Extra charges')()
+                         : request(`/fees/supplementary${qs({ termId })}`, { token }),
+  applySupplementary: (token, body) =>
+    MODE === 'online' ? school.applySupplementary(token, body)
+      : MODE === 'cloud' ? hostOnly('Applying an extra charge')()
+                         : request('/fees/supplementary', { method: 'POST', token, body }),
+  removeSupplementary: (token, body) =>
+    MODE === 'online' ? school.removeSupplementary(token, body)
+      : MODE === 'cloud' ? hostOnly('Withdrawing an extra charge')()
+                         : request('/fees/supplementary/remove', { method: 'POST', token, body }),
+  voidedBills: (token, q = {}) =>
+    MODE === 'online' ? school.voidedBills(token, q)
+      : MODE === 'cloud' ? hostOnly('Withdrawn bills')()
+                         : request(`/fees/bills/voided${qs(q)}`, { token }),
+  voidBill: (token, id, reason) =>
+    MODE === 'online' ? school.voidBill(token, id, reason)
+      : MODE === 'cloud' ? hostOnly('Withdrawing a bill')()
+                         : request(`/fees/bills/${id}/void`, { method: 'POST', token, body: { reason } }),
+  restoreBill: (token, id) =>
+    MODE === 'online' ? school.restoreBill(token, id)
+      : MODE === 'cloud' ? hostOnly('Restoring a bill')()
+                         : request(`/fees/bills/${id}/restore`, { method: 'POST', token }),
+  feeTemplate: (token, id) =>
+    MODE === 'online' ? school.feeTemplate(token, id)
+      : MODE === 'cloud' ? hostOnly('A fee template')()
+                         : request(`/fees/templates/${id}`, { token }),
+  saveFeeTemplate: (token, body) =>
+    MODE === 'online' ? school.saveFeeTemplate(token, body)
+      : MODE === 'cloud' ? hostOnly('Writing a fee template')()
+                         : request('/fees/templates', { method: 'POST', token, body }),
+  raiseBills: (token, body) =>
+    MODE === 'online' ? school.raiseBills(token, body)
+      : MODE === 'cloud' ? hostOnly('Raising bills')()
+                         : request('/fees/bills', { method: 'POST', token, body }),
+  feeDiscounts: (token, q = {}) =>
+    MODE === 'online' ? school.discounts(token, q)
+      : MODE === 'cloud' ? hostOnly('Discounts')()
+                         : request(`/discounts${qs(q)}`, { token }),
+  saveFeeDiscount: (token, body) =>
+    MODE === 'online' ? school.saveDiscount(token, body)
+      : MODE === 'cloud' ? hostOnly('Granting a discount')()
+                         : request('/discounts', { method: 'POST', token, body }),
+  studentBooks: (token, studentId) =>
+    MODE === 'online' ? school.books(token, studentId)
+      : MODE === 'cloud' ? hostOnly('Book charges')()
+                         : request(`/books/${studentId}`, { token }),
+  saveStudentBooks: (token, studentId, body) =>
+    MODE === 'online' ? school.saveBooks(token, studentId, body)
+      : MODE === 'cloud' ? hostOnly('Charging for books')()
+                         : request(`/books/${studentId}`, { method: 'POST', token, body }),
+  bookPayment: (token, studentId, body) =>
+    MODE === 'online' ? school.bookPayment(token, studentId, body)
+      : MODE === 'cloud' ? hostOnly('A book payment')()
+                         : request(`/books/${studentId}/payment`, { method: 'POST', token, body }),
+
+  // ── The store room, the buses ────────────────────────────────────────────
+  inventory: (token, q = {}) =>
+    MODE === 'online' ? school.inventory(token, q)
+      : MODE === 'cloud' ? hostOnly('The store room')()
+                         : request(`/inventory${qs(q)}`, { token }),
+  saveInventoryItem: (token, body) =>
+    MODE === 'online' ? school.saveItem(token, body)
+      : MODE === 'cloud' ? hostOnly('Changing an item')()
+                         : request('/inventory', { method: 'POST', token, body }),
+  moveStock: (token, body) =>
+    MODE === 'online' ? school.moveStock(token, body)
+      : MODE === 'cloud' ? hostOnly('Moving stock')()
+                         : request('/inventory/movement', { method: 'POST', token, body }),
+  stockMovements: (token, q = {}) =>
+    MODE === 'online' ? school.inventoryMovements(token, q)
+      : MODE === 'cloud' ? hostOnly('Stock movements')()
+                         : request(`/inventory/movements${qs(q)}`, { token }),
+  transportRoutes: (token) =>
+    MODE === 'online' ? school.transport(token)
+      : MODE === 'cloud' ? hostOnly('Transport')()
+                         : request('/transport', { token }),
+  transportRoute: (token, id) =>
+    MODE === 'online' ? school.transportRoute(token, id)
+      : MODE === 'cloud' ? hostOnly('A route')() : request(`/transport/${id}`, { token }),
+  saveTransportRoute: (token, body) =>
+    MODE === 'online' ? school.saveRoute(token, body)
+      : MODE === 'cloud' ? hostOnly('Changing a route')()
+                         : request('/transport', { method: 'POST', token, body }),
+  setTransportRiders: (token, body) =>
+    MODE === 'online' ? school.setRiders(token, body)
+      : MODE === 'cloud' ? hostOnly('Assigning riders')()
+                         : request('/transport/riders', { method: 'POST', token, body }),
+  transportPayment: (token, body) =>
+    MODE === 'online' ? school.transportPayment(token, body)
+      : MODE === 'cloud' ? hostOnly('A transport payment')()
+                         : request('/transport/payment', { method: 'POST', token, body }),
+
+  // ── The canteen, beyond the daily collection ─────────────────────────────
+  canteenDebtors: (token, classId) =>
+    MODE === 'online' ? school.canteenDebtors(token, classId)
+      : MODE === 'cloud' ? hostOnly('Canteen arrears')()
+                         : request(`/canteen/debtors${qs({ classId })}`, { token }),
+
+  // ── Payroll, past the run ────────────────────────────────────────────────
+  payrollRun: (token, month, year) =>
+    MODE === 'online' ? school.runPayroll(token, month, year)
+      : MODE === 'cloud' ? hostOnly('Running payroll')()
+                         : request('/payroll/run', { method: 'POST', token, body: { month, year } }),
+  payrollSchedule: (token, kind, month, year) =>
+    MODE === 'online' ? school.schedule(token, kind, month, year)
+      : MODE === 'cloud' ? hostOnly('A statutory schedule')()
+                         : request(`/payroll/schedule/${kind}${qs({ month, year })}`, { token }),
+  payslip: (token, staffId, month, year) =>
+    MODE === 'online' ? school.payslip(token, staffId, month, year)
+      : MODE === 'cloud' ? hostOnly('A payslip')()
+                         : request(`/payroll/${staffId}/payslip${qs({ month, year })}`, { token }),
+  markSalaryPaid: (token, id, body) =>
+    MODE === 'online' ? school.markSalaryPaid(token, id, body)
+      : MODE === 'cloud' ? hostOnly('Marking a salary paid')()
+                         : request(`/payroll/${id}/paid`, { method: 'POST', token, body }),
+
+  // ── Notices and SMS ──────────────────────────────────────────────────────
+  notificationLog: (token, q = {}) =>
+    MODE === 'online' ? school.notifications(token, q)
+      : MODE === 'cloud' ? hostOnly('What has been sent')()
+                         : request(`/notifications${qs(q)}`, { token }),
+  sendNotification: (token, body) =>
+    MODE === 'online' ? school.sendNotification(token, body)
+      : MODE === 'cloud' ? hostOnly('Sending a message')()
+                         : request('/notifications', { method: 'POST', token, body }),
+  withdrawAnnouncement: (token, id) =>
+    MODE === 'online' ? school.withdrawAnnouncement(token, id)
+      : MODE === 'cloud' ? hostOnly('Withdrawing a notice')()
+                         : request(`/announcements/${id}/withdraw`, { method: 'POST', token }),
+
+  // ── Staff activities, budgets and the cashbook ───────────────────────────
+  staffActivities: (token, q = {}) =>
+    MODE === 'online' ? school.activities(token, q)
+      : MODE === 'cloud' ? hostOnly('Staff activities')()
+                         : request(`/activities${qs(q)}`, { token }),
+  saveStaffActivity: (token, body) =>
+    MODE === 'online' ? school.saveActivity(token, body)
+      : MODE === 'cloud' ? hostOnly('Filing an activity')()
+                         : request('/activities', { method: 'POST', token, body }),
+  acknowledgeActivity: (token, id) =>
+    MODE === 'online' ? school.acknowledgeActivity(token, id)
+      : MODE === 'cloud' ? hostOnly('Acknowledging an activity')()
+                         : request(`/activities/${id}/acknowledge`, { method: 'POST', token }),
+  budgets: (token, id) =>
+    MODE === 'online' ? school.budgets(token, id)
+      : MODE === 'cloud' ? hostOnly('Budgets')()
+                         : request(`/budgets${qs({ id })}`, { token }),
+  saveBudget: (token, body) =>
+    MODE === 'online' ? school.saveBudget(token, body)
+      : MODE === 'cloud' ? hostOnly('Writing a budget')()
+                         : request('/budgets', { method: 'POST', token, body }),
+  cashbook: (token, q = {}) =>
+    MODE === 'online' ? school.cashbook(token, q)
+      : MODE === 'cloud' ? hostOnly('The cashbook')()
+                         : request(`/finance/cashbook${qs(q)}`, { token }),
+
+  // ── Examinations ─────────────────────────────────────────────────────────
+  //
+  // Papers and the question bank, which the app could not reach at all: the
+  // desktop kept them behind IPC handlers, so an end-of-term paper could only
+  // be written at the one PC in the office. Both servers serve the same shape
+  // now — see electron/ipc/_exams.js and cloud-python/app/school/exams.py.
+  examPapers: (token, q = {}) =>
+    MODE === 'online' ? school.examPapers(token, q)
+      : MODE === 'cloud' ? hostOnly('Exam papers')()
+                         : request(`/exams/papers${qs(q)}`, { token }),
+  examPaper: (token, id) =>
+    MODE === 'online' ? school.examPaper(token, id)
+      : MODE === 'cloud' ? hostOnly('An exam paper')()
+                         : request(`/exams/papers/${id}`, { token }),
+  saveExamPaper: (token, body) =>
+    MODE === 'online' ? school.saveExamPaper(token, body)
+      : MODE === 'cloud' ? hostOnly('Writing an exam paper')()
+                         : request('/exams/papers', { method: 'POST', token, body }),
+  deleteExamPaper: (token, id) =>
+    MODE === 'online' ? school.deleteExamPaper(token, id)
+      : MODE === 'cloud' ? hostOnly('Deleting an exam paper')()
+                         : request(`/exams/papers/${id}/delete`, { method: 'POST', token }),
+  examQuestions: (token, q = {}) =>
+    MODE === 'online' ? school.examQuestions(token, q)
+      : MODE === 'cloud' ? hostOnly('The question bank')()
+                         : request(`/exams/questions${qs(q)}`, { token }),
+  saveExamQuestion: (token, body) =>
+    MODE === 'online' ? school.saveExamQuestion(token, body)
+      : MODE === 'cloud' ? hostOnly('Writing a question')()
+                         : request('/exams/questions', { method: 'POST', token, body }),
+  deleteExamQuestion: (token, id) =>
+    MODE === 'online' ? school.deleteExamQuestion(token, id)
+      : MODE === 'cloud' ? hostOnly('Deleting a question')()
+                         : request(`/exams/questions/${id}/delete`, { method: 'POST', token }),
+  examFromBank: (token, paperId, sectionId, questionIds) =>
+    MODE === 'online' ? school.examFromBank(token, paperId, sectionId, questionIds)
+      : MODE === 'cloud' ? hostOnly('Taking questions from the bank')()
+                         : request(`/exams/papers/${paperId}/from-bank`,
+                                   { method: 'POST', token, body: { sectionId, questionIds } }),
+
+  // ── The timetable ────────────────────────────────────────────────────────
+  //
+  // The two servers key their entries differently — the desktop by
+  // `"<day>:<period>"` in one flat map, the online school by day and then by
+  // period in a nested one — and that difference had leaked into the screen.
+  // Both are normalised HERE to the flat form, so a grid is drawn once.
+  timetablePeriods: (token) =>
+    MODE === 'online' ? school.periods(token)
+      : MODE === 'cloud' ? hostOnly('The bell schedule')()
+                         : request('/timetable/periods', { token }),
+  saveTimetablePeriods: (token, periods) =>
+    MODE === 'online' ? school.savePeriods(token, periods)
+      : MODE === 'cloud' ? hostOnly('Changing the bell schedule')()
+                         : request('/timetable/periods', { method: 'POST', token, body: { periods } }),
+  classTimetable: (token, classId) => {
+    if (MODE === 'cloud') return hostOnly('A class timetable')();
+    const call = MODE === 'online'
+      ? school.classTimetable(token, classId)
+      : request(`/timetable/class/${classId}`, { token });
+    return call.then(flattenTimetable);
+  },
+  saveClassTimetable: (token, classId, entries) =>
+    MODE === 'online' ? school.saveClassTimetable(token, classId, entries)
+      : MODE === 'cloud' ? hostOnly('Setting a timetable')()
+                         : request('/timetable/class', { method: 'POST', token, body: { classId, entries } }),
 
   // Withdrawing an assignment removes marks with it, so it stays on the
   // desktop where the teacher can see what that costs.
@@ -745,7 +1019,9 @@ export const api = {
   // pretend they are:
   //
   //   host   the school's own system on the school Wi-Fi — everything, live.
-  //   online the online school — everything, live, from anywhere.
+  //   online the ONLINE SCHOOL — everything, live, from anywhere. Its routes
+  //          live under /api/v1/school/* and are reached through `school.*`
+  //          below.
   //   cloud  the thin projection — the figures, and the two approvals that
   //          move no money. Anything else answers `host_only`, which the
   //          screens turn into "the school's own system does this" rather
@@ -753,113 +1029,209 @@ export const api = {
   //
   // One method per thing, dispatching once here, so a screen never asks which
   // mode it is in.
+  //
+  // ── The bug this shape existed to cause ─────────────────────────────────
+  //
+  // These used to be a two-way choice: `cloud ? host_only : <desktop route>`.
+  // Which meant the ONLINE school — the mode a browser on a Vercel deployment
+  // is always in, and the one the whole office is expected to work from — fell
+  // into the "desktop route" branch and asked a FastAPI service for
+  // `/api/v1/admin/students`, a path it has never served. Every screen in the
+  // office answered 404 over the internet: the roll, the staff register, the
+  // ledgers, payroll, the audit trail. Half of these screens had grown a
+  // private `mode === 'online' ? api.school.x : api.y` in the component to
+  // work around it, and the other half had not, which is exactly how a
+  // dispatch decision leaks out of the client and into eleven screens.
+  //
+  // It is a three-way choice now, decided here, once.
   financeOverview: (token) =>
-    MODE === 'cloud' ? request('/staff/finance/overview', { token })
-                     : request('/finance/overview', { token }),
+    MODE === 'online' ? school.feesOverview(token)
+      : MODE === 'cloud' ? request('/staff/finance/overview', { token })
+                         : request('/finance/overview', { token }),
   financeDebtors: (token, classId) =>
-    MODE === 'cloud' ? request('/staff/finance/debtors', { token })
-                     : request(`/finance/debtors${classId ? `?classId=${classId}` : ''}`, { token }),
+    MODE === 'online' ? school.debtors(token, { classId })
+      : MODE === 'cloud' ? request('/staff/finance/debtors', { token })
+                         : request(`/finance/debtors${qs({ classId })}`, { token }),
   financeCollections: (token, q = {}) =>
-    MODE === 'cloud' ? hostOnly('The day’s collections')()
-                     : request(`/finance/collections${qs(q)}`, { token }),
+    MODE === 'online' ? school.collections(token, q)
+      : MODE === 'cloud' ? hostOnly('The day’s collections')()
+                         : request(`/finance/collections${qs(q)}`, { token }),
   financeTakePayment: (token, body) =>
-    MODE === 'cloud' ? hostOnly('Taking a payment')()
-                     : request('/finance/collections', { method: 'POST', token, body }),
+    MODE === 'online' ? school.takePayment(token, body)
+      : MODE === 'cloud' ? hostOnly('Taking a payment')()
+                         : request('/finance/collections', { method: 'POST', token, body }),
   financeReverse: (token, id, reason) =>
-    MODE === 'cloud' ? hostOnly('Reversing a payment')()
-                     : request(`/finance/collections/${id}/reverse`, { method: 'POST', token, body: { reason } }),
+    MODE === 'online' ? school.reversePayment(token, id, reason)
+      : MODE === 'cloud' ? hostOnly('Reversing a payment')()
+                         : request(`/finance/collections/${id}/reverse`, { method: 'POST', token, body: { reason } }),
   financeStudents: (token, q = {}) =>
-    MODE === 'cloud' ? hostOnly('Searching for a pupil’s account')()
-                     : request(`/finance/students${qs(q)}`, { token }),
+    MODE === 'online' ? school.students(token, q)
+      : MODE === 'cloud' ? hostOnly('Searching for a pupil’s account')()
+                         : request(`/finance/students${qs(q)}`, { token }),
   financeStudentBill: (token, id, termId) =>
-    MODE === 'cloud' ? hostOnly('A pupil’s account')()
-                     : request(`/finance/students/${id}/bill${termId ? `?termId=${termId}` : ''}`, { token }),
+    MODE === 'online' ? school.studentAccount(token, id, termId)
+      : MODE === 'cloud' ? hostOnly('A pupil’s account')()
+                         : request(`/finance/students/${id}/bill${termId ? `?termId=${termId}` : ''}`, { token }),
   financeIncome: (token, q = {}) =>
-    MODE === 'cloud' ? hostOnly('The income ledger')() : request(`/finance/income${qs(q)}`, { token }),
+    MODE === 'online' ? school.income(token, q)
+      : MODE === 'cloud' ? hostOnly('The income ledger')()
+                         : request(`/finance/income${qs(q)}`, { token }),
+  financeRecordIncome: (token, body) =>
+    MODE === 'online' ? school.recordIncome(token, body)
+      : MODE === 'cloud' ? hostOnly('Recording income')()
+                         : request('/finance/income', { method: 'POST', token, body }),
   financeExpenses: (token, q = {}) =>
-    MODE === 'cloud' ? hostOnly('The expenditure ledger')() : request(`/finance/expenses${qs(q)}`, { token }),
+    MODE === 'online' ? school.expenses(token, q)
+      : MODE === 'cloud' ? hostOnly('The expenditure ledger')()
+                         : request(`/finance/expenses${qs(q)}`, { token }),
   financeRecordExpense: (token, body) =>
-    MODE === 'cloud' ? hostOnly('Recording an expense')()
-                     : request('/finance/expenses', { method: 'POST', token, body }),
+    MODE === 'online' ? school.recordExpense(token, body)
+      : MODE === 'cloud' ? hostOnly('Recording an expense')()
+                         : request('/finance/expenses', { method: 'POST', token, body }),
+  financeApproveExpense: (token, id) =>
+    MODE === 'online' ? school.approveExpense(token, id)
+      : MODE === 'cloud' ? hostOnly('Approving an expense')()
+                         : request(`/finance/expenses/${id}/approve`, { method: 'POST', token }),
   financeStatement: (token, q = {}) =>
-    MODE === 'cloud' ? hostOnly('The financial statement')() : request(`/finance/statement${qs(q)}`, { token }),
+    MODE === 'online' ? school.statement(token, q)
+      : MODE === 'cloud' ? hostOnly('The financial statement')()
+                         : request(`/finance/statement${qs(q)}`, { token }),
+  financeAudit: (token, termId) =>
+    MODE === 'online' ? school.financeAudit(token, termId)
+      : MODE === 'cloud' ? hostOnly('The finance audit')()
+                         : request(`/finance/audit${qs({ termId })}`, { token }),
   financePayroll: (token, month, year) =>
-    MODE === 'cloud' ? hostOnly('Payroll')()
-                     : request(`/finance/payroll${qs({ month, year })}`, { token }),
+    MODE === 'online' ? school.payroll(token, month, year)
+      : MODE === 'cloud' ? hostOnly('Payroll')()
+                         : request(`/finance/payroll${qs({ month, year })}`, { token }),
   financeOnline: (token, status) =>
-    MODE === 'cloud' ? hostOnly('Payments taken online')()
-                     : request(`/finance/online${qs({ status })}`, { token }),
+    MODE === 'online' ? school.onlinePayments(token, status)
+      : MODE === 'cloud' ? hostOnly('Payments taken online')()
+                         : request(`/finance/online${qs({ status })}`, { token }),
   financeAcknowledge: (token, id, method) =>
-    MODE === 'cloud' ? hostOnly('Confirming a payment')()
-                     : request(`/finance/online/${id}/acknowledge`, { method: 'POST', token, body: { method } }),
+    MODE === 'online' ? school.acknowledgeIntent(token, id, method)
+      : MODE === 'cloud' ? hostOnly('Confirming a payment')()
+                         : request(`/finance/online/${id}/acknowledge`, { method: 'POST', token, body: { method } }),
   financeReject: (token, id, reason) =>
-    MODE === 'cloud' ? hostOnly('Rejecting a payment')()
-                     : request(`/finance/online/${id}/reject`, { method: 'POST', token, body: { reason } }),
+    MODE === 'online' ? school.rejectIntent(token, id, reason)
+      : MODE === 'cloud' ? hostOnly('Rejecting a payment')()
+                         : request(`/finance/online/${id}/reject`, { method: 'POST', token, body: { reason } }),
 
   adminOverview: (token) =>
-    MODE === 'cloud' ? request('/staff/admin/overview', { token })
-                     : request('/admin/overview', { token }),
+    MODE === 'online' ? school.overview(token)
+      : MODE === 'cloud' ? request('/staff/admin/overview', { token })
+                         : request('/admin/overview', { token }),
   adminStudents: (token, q = {}) =>
-    MODE === 'cloud' ? hostOnly('The whole roll')() : request(`/admin/students${qs(q)}`, { token }),
+    MODE === 'online' ? school.students(token, q)
+      : MODE === 'cloud' ? hostOnly('The whole roll')()
+                         : request(`/admin/students${qs(q)}`, { token }),
   adminAdmit: (token, body) =>
-    MODE === 'cloud' ? hostOnly('Admitting a pupil')()
-                     : request('/admin/students', { method: 'POST', token, body }),
+    MODE === 'online' ? school.admitStudent(token, body)
+      : MODE === 'cloud' ? hostOnly('Admitting a pupil')()
+                         : request('/admin/students', { method: 'POST', token, body }),
+  adminUpdateStudent: (token, id, body) =>
+    MODE === 'online' ? school.updateStudent(token, id, body)
+      : MODE === 'cloud' ? hostOnly('Changing a pupil’s record')()
+                         : request(`/admin/students/${id}`, { method: 'POST', token, body }),
   adminStudentStatus: (token, id, status, reason) =>
-    MODE === 'cloud' ? hostOnly('Changing a pupil’s status')()
-                     : request(`/admin/students/${id}/status`, { method: 'POST', token, body: { status, reason } }),
+    MODE === 'online' ? school.studentStatus(token, id, status, reason)
+      : MODE === 'cloud' ? hostOnly('Changing a pupil’s status')()
+                         : request(`/admin/students/${id}/status`, { method: 'POST', token, body: { status, reason } }),
   adminStaff: (token, status) =>
-    MODE === 'cloud' ? hostOnly('The staff register')()
-                     : request(`/admin/staff${qs({ status })}`, { token }),
+    MODE === 'online' ? school.staff(token, status)
+      : MODE === 'cloud' ? hostOnly('The staff register')()
+                         : request(`/admin/staff${qs({ status })}`, { token }),
   adminStaffMember: (token, id) =>
-    MODE === 'cloud' ? hostOnly('A staff record')() : request(`/admin/staff/${id}`, { token }),
+    MODE === 'online' ? school.staffMember(token, id)
+      : MODE === 'cloud' ? hostOnly('A staff record')()
+                         : request(`/admin/staff/${id}`, { token }),
+  adminSaveStaff: (token, body) =>
+    MODE === 'online' ? school.saveStaff(token, body)
+      : MODE === 'cloud' ? hostOnly('Changing a staff record')()
+                         : request('/admin/staff', { method: 'POST', token, body }),
+  adminSetAssignments: (token, id, assignments) =>
+    MODE === 'online' ? school.setAssignments(token, id, assignments)
+      : MODE === 'cloud' ? hostOnly('Setting what somebody teaches')()
+                         : request(`/admin/staff/${id}/assignments`,
+                                   { method: 'POST', token, body: { assignments } }),
+  adminStaffRegister: (token, date) =>
+    MODE === 'online' ? school.staffRegister(token, date)
+      : MODE === 'cloud' ? hostOnly('The staff attendance register')()
+                         : request(`/admin/staff-register${qs({ date })}`, { token }),
   adminApprovals: (token) =>
-    MODE === 'cloud' ? request('/staff/admin/approvals', { token })
-                     : Promise.all([
-                         request('/admin/leave?status=pending', { token }).catch(() => ({ requests: [] })),
-                         request('/admin/lesson-notes?status=submitted', { token }).catch(() => ({ notes: [] })),
-                       ]).then(([leave, notes]) => ({
-                         ok: true, leave: leave.requests || [], lesson_notes: notes.notes || [],
-                         may_decide: { leave: !!leave.may_decide, lesson_notes: !!notes.may_decide },
-                       })),
+    MODE === 'online'
+      ? Promise.all([
+          school.leave(token, 'pending').catch(() => ({ requests: [] })),
+          school.lessonNotes(token, { status: 'submitted' }).catch(() => ({ notes: [] })),
+        ]).then(([leave, notes]) => ({
+          ok: true, leave: leave.requests || [], lesson_notes: notes.notes || [],
+          may_decide: { leave: !!leave.may_decide, lesson_notes: !!notes.may_decide },
+        }))
+      : MODE === 'cloud' ? request('/staff/admin/approvals', { token })
+      : Promise.all([
+          request('/admin/leave?status=pending', { token }).catch(() => ({ requests: [] })),
+          request('/admin/lesson-notes?status=submitted', { token }).catch(() => ({ notes: [] })),
+        ]).then(([leave, notes]) => ({
+          ok: true, leave: leave.requests || [], lesson_notes: notes.notes || [],
+          may_decide: { leave: !!leave.may_decide, lesson_notes: !!notes.may_decide },
+        })),
   adminDecideLeave: (token, id, decision, notes) =>
-    MODE === 'cloud'
-      ? request('/staff/admin/leave/decision', { method: 'POST', token, body: { id, decision, notes } })
-      : request(`/admin/leave/${id}/decision`, { method: 'POST', token, body: { decision, notes } }),
+    MODE === 'online' ? school.decideLeave(token, id, decision, notes)
+      : MODE === 'cloud'
+        ? request('/staff/admin/leave/decision', { method: 'POST', token, body: { id, decision, notes } })
+        : request(`/admin/leave/${id}/decision`, { method: 'POST', token, body: { decision, notes } }),
   adminDecideNote: (token, id, decision, comments) =>
-    MODE === 'cloud'
-      ? request('/staff/admin/lesson-note/decision', { method: 'POST', token, body: { id, decision, notes: comments } })
-      : request(`/admin/lesson-notes/${id}/decision`, { method: 'POST', token, body: { decision, comments } }),
+    MODE === 'online' ? school.decideLessonNote(token, id, decision, comments)
+      : MODE === 'cloud'
+        ? request('/staff/admin/lesson-note/decision', { method: 'POST', token, body: { id, decision, notes: comments } })
+        : request(`/admin/lesson-notes/${id}/decision`, { method: 'POST', token, body: { decision, comments } }),
   adminAcademics: (token, termId) =>
-    MODE === 'cloud' ? hostOnly('Academic oversight')()
-                     : request(`/admin/academics${qs({ termId })}`, { token }),
+    MODE === 'online' ? school.academicOverview(token, termId)
+      : MODE === 'cloud' ? hostOnly('Academic oversight')()
+                         : request(`/admin/academics${qs({ termId })}`, { token }),
 
-  // The system portal is not served over the internet at all, by design:
-  // accounts, access and the audit trail are administered where the system is.
+  // Accounts, access and the audit trail are administered where the system is.
+  // That is the desktop, or the online school — never the thin projection,
+  // which holds no accounts to administer.
   systemOverview: (token) =>
-    MODE === 'cloud' ? hostOnly('The system')() : request('/system/overview', { token }),
+    MODE === 'online' ? school.systemOverview(token)
+      : MODE === 'cloud' ? hostOnly('The system')() : request('/system/overview', { token }),
   systemUsers: (token) =>
-    MODE === 'cloud' ? hostOnly('User accounts')() : request('/system/users', { token }),
+    MODE === 'online' ? school.users(token)
+      : MODE === 'cloud' ? hostOnly('User accounts')() : request('/system/users', { token }),
   systemCreateUser: (token, body) =>
-    MODE === 'cloud' ? hostOnly('Creating an account')()
-                     : request('/system/users', { method: 'POST', token, body }),
+    MODE === 'online' ? school.createUser(token, body)
+      : MODE === 'cloud' ? hostOnly('Creating an account')()
+                         : request('/system/users', { method: 'POST', token, body }),
   systemUserStatus: (token, id, active) =>
-    MODE === 'cloud' ? hostOnly('Changing an account')()
-                     : request(`/system/users/${id}/status`, { method: 'POST', token, body: { active } }),
+    MODE === 'online' ? school.setUserStatus(token, id, active)
+      : MODE === 'cloud' ? hostOnly('Changing an account')()
+                         : request(`/system/users/${id}/status`, { method: 'POST', token, body: { active } }),
   systemUserRole: (token, id, designationId) =>
-    MODE === 'cloud' ? hostOnly('Changing a role')()
-                     : request(`/system/users/${id}/role`, { method: 'POST', token, body: { designationId } }),
+    MODE === 'online' ? school.setUserRole(token, id, designationId)
+      : MODE === 'cloud' ? hostOnly('Changing a role')()
+                         : request(`/system/users/${id}/role`, { method: 'POST', token, body: { designationId } }),
+  systemUserPassword: (token, id, password) =>
+    MODE === 'online' ? school.resetUserPassword(token, id, password)
+      : MODE === 'cloud' ? hostOnly('Resetting a password')()
+                         : request(`/system/users/${id}/password`, { method: 'POST', token, body: { password } }),
   systemAccess: (token) =>
-    MODE === 'cloud' ? hostOnly('Access levels')() : request('/system/access', { token }),
+    MODE === 'online' ? school.accessMatrix(token)
+      : MODE === 'cloud' ? hostOnly('Access levels')() : request('/system/access', { token }),
   systemSetAccess: (token, designationId, levels) =>
-    MODE === 'cloud' ? hostOnly('Changing access')()
-                     : request('/system/access', { method: 'POST', token, body: { designationId, levels } }),
+    MODE === 'online' ? school.setAccess(token, designationId, levels)
+      : MODE === 'cloud' ? hostOnly('Changing access')()
+                         : request('/system/access', { method: 'POST', token, body: { designationId, levels } }),
   systemAudit: (token, q = {}) =>
-    MODE === 'cloud' ? hostOnly('The audit trail')() : request(`/system/audit${qs(q)}`, { token }),
+    MODE === 'online' ? school.auditTrail(token, q)
+      : MODE === 'cloud' ? hostOnly('The audit trail')() : request(`/system/audit${qs(q)}`, { token }),
   systemSettings: (token) =>
-    MODE === 'cloud' ? hostOnly('School settings')() : request('/system/settings', { token }),
+    MODE === 'online' ? school.settings(token)
+      : MODE === 'cloud' ? hostOnly('School settings')() : request('/system/settings', { token }),
   systemSaveSettings: (token, settings) =>
-    MODE === 'cloud' ? hostOnly('Changing a setting')()
-                     : request('/system/settings', { method: 'POST', token, body: { settings } }),
+    MODE === 'online' ? school.saveSettings(token, settings)
+      : MODE === 'cloud' ? hostOnly('Changing a setting')()
+                         : request('/system/settings', { method: 'POST', token, body: { settings } }),
 
   // Staff — how much of this teacher's work has not reached the school yet.
   // Only meaningful over the internet; on the desktop a write has landed by
@@ -867,6 +1239,32 @@ export const api = {
   staffPending: (token) =>
     MODE === 'cloud' ? request('/staff/pending', { token }) : Promise.resolve({ ok: true, pending: 0 }),
 };
+
+/**
+ * One shape for a class's week.
+ *
+ * The desktop answers `entries: { "1:4": {...} }` and the online school answers
+ * `entries: { "1": { "4": {...} } }`. Both become the flat form, and both gain
+ * `days` and `periods` if whichever server was asked left them out.
+ */
+function flattenTimetable(r) {
+  const raw = (r && r.entries) || {};
+  const flat = {};
+  for (const [day, value] of Object.entries(raw)) {
+    if (value && typeof value === 'object' && !value.period_id && !value.day_of_week) {
+      for (const [period, entry] of Object.entries(value)) flat[`${day}:${period}`] = entry;
+    } else {
+      flat[day] = value;             // already "<day>:<period>"
+    }
+  }
+  return { ...r, entries: flat, periods: r.periods || [], days: r.days || DEFAULT_DAYS };
+}
+
+const DEFAULT_DAYS = [
+  { value: 1, label: 'Monday' }, { value: 2, label: 'Tuesday' },
+  { value: 3, label: 'Wednesday' }, { value: 4, label: 'Thursday' },
+  { value: 5, label: 'Friday' },
+];
 
 export function money(n) {
   const v = Number(n) || 0;
@@ -956,7 +1354,16 @@ export const school = {
   studentAccount: (token, id, termId) =>
     schoolRequest(`/fees/students/${id}`, { token, query: { termId } }),
   debtors: (token, query) => schoolRequest('/fees/debtors', { token, query }),
-  feeTemplates: (token) => schoolRequest('/fees/templates', { token }),
+  feeTemplates: (token, billType) => schoolRequest('/fees/templates', { token, query: { billType } }),
+  supplementary: (token, termId) => schoolRequest('/fees/supplementary', { token, query: { termId } }),
+  applySupplementary: (token, body) =>
+    schoolRequest('/fees/supplementary', { method: 'POST', token, body }),
+  removeSupplementary: (token, body) =>
+    schoolRequest('/fees/supplementary/remove', { method: 'POST', token, body }),
+  voidedBills: (token, query) => schoolRequest('/fees/bills/voided', { token, query }),
+  voidBill: (token, id, reason) =>
+    schoolRequest(`/fees/bills/${id}/void`, { method: 'POST', token, body: { reason } }),
+  restoreBill: (token, id) => schoolRequest(`/fees/bills/${id}/restore`, { method: 'POST', token }),
   saveFeeTemplate: (token, body) => schoolRequest('/fees/templates', { method: 'POST', token, body }),
   raiseBills: (token, body) => schoolRequest('/fees/bills', { method: 'POST', token, body }),
   onlinePayments: (token, status) => schoolRequest('/fees/online', { token, query: { status } }),
@@ -1031,6 +1438,111 @@ export const school = {
   settings: (token) => schoolRequest('/system/settings', { token }),
   saveSettings: (token, settings) =>
     schoolRequest('/system/settings', { method: 'POST', token, body: { settings } }),
+
+  staffRegister: (token, date) => schoolRequest('/staff-register', { token, query: { date } }),
+  saveLessonNote: (token, body) => schoolRequest('/my/lesson-notes', { method: 'POST', token, body }),
+
+  // ── teaching ──
+  // The register, the marks and the report card, online. The desktop and the
+  // thin portal answer these under different paths; `staffPath` handles those
+  // two, and this handles the third.
+  attendance: (token, classId, date) =>
+    schoolRequest('/attendance', { token, query: { classId, date } }),
+  markAttendance: (token, body) => schoolRequest('/attendance', { method: 'POST', token, body }),
+  attendanceHistory: (token, classId, days) =>
+    schoolRequest('/attendance/history', { token, query: { classId, days } }),
+  subjects: (token, classId) => schoolRequest('/subjects', { token, query: { classId } }),
+  scores: (token, classId, subjectId, termId) =>
+    schoolRequest('/scores', { token, query: { classId, subjectId, termId } }),
+  saveScores: (token, body) => schoolRequest('/scores', { method: 'POST', token, body }),
+  assessments: (token, classId, subjectId, termId) =>
+    schoolRequest('/assessments', { token, query: { classId, subjectId, termId } }),
+  saveAssessments: (token, body) => schoolRequest('/assessments', { method: 'POST', token, body }),
+  addAssessmentColumn: (token, body) =>
+    schoolRequest('/assessments/column', { method: 'POST', token, body }),
+  results: (token, classId, termId) =>
+    schoolRequest('/results', { token, query: { classId, termId } }),
+  studentResult: (token, id, termId) =>
+    schoolRequest(`/results/student/${id}`, { token, query: { termId } }),
+  saveRemarks: (token, body) => schoolRequest('/results/remarks', { method: 'POST', token, body }),
+
+  // ── the timetable ──
+  periods: (token) => schoolRequest('/timetable/periods', { token }),
+  savePeriods: (token, periods) =>
+    schoolRequest('/timetable/periods', { method: 'POST', token, body: { periods } }),
+  classTimetable: (token, classId) =>
+    schoolRequest('/timetable/class', { token, query: { classId } }),
+  saveClassTimetable: (token, classId, slots) =>
+    schoolRequest('/timetable/class', { method: 'POST', token, body: { classId, slots } }),
+  myTimetable: (token) => schoolRequest('/timetable/mine', { token }),
+
+  // ── homework ──
+  homework: (token, classId, all) =>
+    schoolRequest('/homework', { token, query: { classId, all: all ? 1 : undefined } }),
+  saveHomework: (token, body) => schoolRequest('/homework', { method: 'POST', token, body }),
+  homeworkSheet: (token, id) => schoolRequest(`/homework/${id}`, { token }),
+  saveHomeworkMarks: (token, id, entries) =>
+    schoolRequest(`/homework/${id}/marks`, { method: 'POST', token, body: { entries } }),
+
+  // ── the canteen ──
+  canteenStudent: (token, id) => schoolRequest(`/canteen/student/${id}`, { token }),
+  canteenCollect: (token, body) => schoolRequest('/canteen/collect', { method: 'POST', token, body }),
+  canteenClass: (token, classId, date) =>
+    schoolRequest('/canteen/class', { token, query: { classId, date } }),
+  canteenQuickPay: (token, body) => schoolRequest('/canteen/quick-pay', { method: 'POST', token, body }),
+  canteenExempt: (token, body) => schoolRequest('/canteen/exempt', { method: 'POST', token, body }),
+  canteenDebtors: (token, classId) =>
+    schoolRequest('/canteen/debtors', { token, query: { classId } }),
+
+  // ── talking ──
+  messages: (token) => schoolRequest('/messages', { token }),
+  thread: (token, id) => schoolRequest(`/messages/${id}`, { token }),
+  sendMessage: (token, body) => schoolRequest('/messages', { method: 'POST', token, body }),
+  withdrawAnnouncement: (token, id) =>
+    schoolRequest(`/announcements/${id}/withdraw`, { method: 'POST', token }),
+  notifications: (token, query) => schoolRequest('/notifications', { token, query }),
+  sendNotification: (token, body) => schoolRequest('/notifications', { method: 'POST', token, body }),
+
+  // ── the store room, the buses, the extras ──
+  inventoryMovements: (token, query) => schoolRequest('/inventory/movements', { token, query }),
+  transport: (token) => schoolRequest('/transport', { token }),
+  transportRoute: (token, id) => schoolRequest(`/transport/${id}`, { token }),
+  saveRoute: (token, body) => schoolRequest('/transport', { method: 'POST', token, body }),
+  setRiders: (token, body) => schoolRequest('/transport/riders', { method: 'POST', token, body }),
+  transportPayment: (token, body) =>
+    schoolRequest('/transport/payment', { method: 'POST', token, body }),
+  books: (token, studentId) => schoolRequest(`/books/${studentId}`, { token }),
+  saveBooks: (token, studentId, body) =>
+    schoolRequest(`/books/${studentId}`, { method: 'POST', token, body }),
+  bookPayment: (token, studentId, body) =>
+    schoolRequest(`/books/${studentId}/payment`, { method: 'POST', token, body }),
+  discounts: (token, query) => schoolRequest('/discounts', { token, query }),
+  saveDiscount: (token, body) => schoolRequest('/discounts', { method: 'POST', token, body }),
+  feeTemplate: (token, id) => schoolRequest(`/fees/templates/${id}`, { token }),
+
+  // ── activities, budgets, the cashbook ──
+  activities: (token, query) => schoolRequest('/activities', { token, query }),
+  saveActivity: (token, body) => schoolRequest('/activities', { method: 'POST', token, body }),
+  acknowledgeActivity: (token, id) =>
+    schoolRequest(`/activities/${id}/acknowledge`, { method: 'POST', token }),
+  budgets: (token, id) => schoolRequest('/budgets', { token, query: { id } }),
+  saveBudget: (token, body) => schoolRequest('/budgets', { method: 'POST', token, body }),
+  cashbook: (token, query) => schoolRequest('/finance/cashbook', { token, query }),
+
+  // ── examinations ──
+  examPapers: (token, query) => schoolRequest('/exams/papers', { token, query }),
+  examPaper: (token, id) => schoolRequest(`/exams/papers/${id}`, { token }),
+  saveExamPaper: (token, body) => schoolRequest('/exams/papers', { method: 'POST', token, body }),
+  deleteExamPaper: (token, id) =>
+    schoolRequest(`/exams/papers/${id}/delete`, { method: 'POST', token }),
+  examQuestions: (token, query) => schoolRequest('/exams/questions', { token, query }),
+  saveExamQuestion: (token, body) =>
+    schoolRequest('/exams/questions', { method: 'POST', token, body }),
+  deleteExamQuestion: (token, id) =>
+    schoolRequest(`/exams/questions/${id}/delete`, { method: 'POST', token }),
+  examFromBank: (token, paperId, sectionId, questionIds) =>
+    schoolRequest(`/exams/papers/${paperId}/from-bank`,
+                  { method: 'POST', token, body: { sectionId, questionIds } }),
 
   // ── a person's own record, in every portal ──
   myEmployment: (token, year) => schoolRequest('/my/employment', { token, query: { year } }),

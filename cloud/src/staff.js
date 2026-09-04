@@ -908,7 +908,7 @@ async function submitClock(store, school_id, rec, body) {
 //     than after the school's computer next syncs. The change is queued for the
 //     desktop as a bcrypt hash — never a password.
 //
-//   • Forgetting one raises a request for an Administrator to approve ON THE
+//   • Forgetting one raises a request for the Super Admin to approve ON THE
 //     DESKTOP. The cloud cannot approve anything: approval is a person
 //     recognising another person. Once approved, the desktop projects the hash
 //     of the six-digit code, and only then can the cloud check one.
@@ -971,7 +971,7 @@ async function requestPasswordReset(store, school_id, { username, reason }, sour
   return { ok: true, submitted: true };
 }
 
-// Redeem a code an Administrator approved on the desktop. The claim reaches the
+// Redeem a code the Super Admin approved on the desktop. The claim reaches the
 // cloud only as a hash, so a code cannot be read out of the projection.
 async function completePasswordReset(store, school_id, { username, code, newPassword }, source) {
   const u = String(username || '').trim();

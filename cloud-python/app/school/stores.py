@@ -329,7 +329,7 @@ def grant_discount(db, actor, data):
     """
     if not security.is_elevated(actor):
         return {"ok": False, "status": 403,
-                "error": "Only an Administrator or the Proprietor may grant a discount."}
+                "error": "Only the Super Admin or the Proprietor may grant a discount."}
     student_id = data.get("student_id") or data.get("studentId")
     reason = str(data.get("reason") or "").strip()
     if not student_id:

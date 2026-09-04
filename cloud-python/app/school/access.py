@@ -54,7 +54,9 @@ MODULES = [
 MODULE_KEYS = [m["key"] for m in MODULES]
 
 # Designations always granted everything, whatever the stored rows say.
-ALWAYS_FULL = ["Proprietor", "Administrator"]
+from ..portals import ELEVATED_NAMES
+
+ALWAYS_FULL = ELEVATED_NAMES
 
 _ORDER = {l["key"]: l["order"] for l in LEVELS}
 

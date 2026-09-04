@@ -9,6 +9,7 @@ let _bcrypt = null;
 function bcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
 const passwords = require('../server/passwords');
 const security = require('./_security');
+const { SUPER_ADMIN, isElevated, isSupervisor } = require('./_portals');
 const { setSetting } = require('../utils/idgen');
 
 // ── Failed-login throttling ─────────────────────────────
@@ -56,7 +57,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   });
 
   // ── Create first admin account (bootstrap) ────────────
-  // Runs exactly once, on a brand-new database. It creates an Administrator
+  // Runs exactly once, on a brand-new database. It creates the Super Admin
   // without asking for any credentials, so it must refuse to run again once
   // setup is complete — otherwise anyone able to reach this channel could mint
   // themselves a full-access account on a live school database.
@@ -75,7 +76,14 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     if (existing) return { ok: false, error: 'Username already exists.' };
 
     const hash = bcrypt().hashSync(password, 10);
-    const adminDesig = db.prepare("SELECT id FROM designations WHERE name = 'Administrator'").get();
+    // The designation was renamed from "Administrator" to "Super Admin"; a
+    // database restored from an older backup may still carry the old name, and
+    // a bootstrap that cannot find the row would create the school's first
+    // account with no designation at all — an owner locked out of their own
+    // system on the first screen.
+    const adminDesig = db.prepare(
+      "SELECT id FROM designations WHERE name IN ('Super Admin', 'Administrator') ORDER BY name = 'Super Admin' DESC"
+    ).get();
     db.prepare(`
       INSERT INTO users (username, password_hash, full_name, designation_id, is_active, must_change_password)
       VALUES (?, ?, ?, ?, 1, 0)
@@ -141,7 +149,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
         id: user.id,
         username: user.username,
         fullName: user.full_name,
-        designation: user.designation_name || 'Administrator',
+        designation: user.designation_name || SUPER_ADMIN,
         mustChangePassword: !!user.must_change_password,
         permissions: permMap,
       }
@@ -177,7 +185,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // ── Create user ───────────────────────────────────────
   ipcMain.handle('auth:create-user', (_e, { username, fullName, password, designationId, staffId }) => {
     if (!security.checkPermission(db, 'settings', 'create')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+      return { ok: false, error: 'Access denied. Only the Super Admin or the Proprietor can manage users.' };
     }
 
     if (!username || !String(username).trim()) return { ok: false, error: 'Username is required.' };
@@ -199,7 +207,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // ── Update user ───────────────────────────────────────
   ipcMain.handle('auth:update-user', (_e, { id, fullName, designationId, isActive, newPassword }) => {
     if (!security.checkPermission(db, 'settings', 'edit')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+      return { ok: false, error: 'Access denied. Only the Super Admin or the Proprietor can manage users.' };
     }
 
     if (newPassword) {
@@ -220,19 +228,19 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   ipcMain.handle('auth:reset-password', (_e, { targetUserId, newPassword }) => {
     // The actor is taken from the signed-in session, never from the caller.
     // Reading it from the payload let any signed-in user claim to be the
-    // Administrator and reset the Administrator's own password.
+    // Super Admin and reset the Super Admin's own password.
     const actorUserId = security.getCurrentUserId();
     if (!actorUserId) return { ok: false, error: 'Please sign in again.' };
 
-    // Only Admin or Proprietor designations may reset others' passwords
+    // Only the Super Admin or the Proprietor may reset somebody else's password
     const actor = db.prepare(`
       SELECT u.id, d.name AS designation
       FROM users u LEFT JOIN designations d ON d.id = u.designation_id
       WHERE u.id = ? AND u.is_active = 1
     `).get(actorUserId);
-    const allowed = actor && ['Administrator', 'Proprietor'].includes(actor.designation);
+    const allowed = actor && isElevated(actor.designation);
     if (!allowed) {
-      return { ok: false, error: 'Only an Administrator or Proprietor can reset passwords.' };
+      return { ok: false, error: 'Only the Super Admin or the Proprietor can reset passwords.' };
     }
     if (!newPassword || newPassword.length < 6) {
       return { ok: false, error: 'New password must be at least 6 characters.' };
@@ -259,7 +267,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // ── Set permission override ───────────────────────────
   ipcMain.handle('auth:set-permission-override', (_e, { userId, module, canView, canCreate, canEdit, canDelete }) => {
     if (!security.checkPermission(db, 'settings', 'edit')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+      return { ok: false, error: 'Access denied. Only the Super Admin or the Proprietor can manage users.' };
     }
 
     db.prepare(`
@@ -284,7 +292,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 
   ipcMain.handle('auth:update-designation-permission', (_e, { designationId, module, canView, canCreate, canEdit, canDelete }) => {
     if (!security.checkPermission(db, 'settings', 'edit')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+      return { ok: false, error: 'Access denied. Only the Super Admin or the Proprietor can manage users.' };
     }
 
     db.prepare(`
@@ -311,7 +319,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // the payload: accepting a caller-supplied userId meant a signed-in user
   // could target somebody else's account, and any account whose password_hash
   // was still NULL could be taken over outright because the old-password check
-  // was skipped for it. Administrators reset other people via auth:reset-password.
+  // was skipped for it. The Super Admin resets other people via auth:reset-password.
   ipcMain.handle('auth:change-password', (_e, { oldPassword, newPassword }) =>
     passwords.changeOwnPassword(db, security.getCurrentUserId(), { oldPassword, newPassword, source: 'desktop' }));
 
@@ -345,7 +353,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       LEFT JOIN designations d ON d.id = u.designation_id
       WHERE u.id = ? AND u.is_active = 1
     `).get(userId);
-    return !!(actor && ['Administrator', 'Proprietor'].includes(actor.designation));
+    return !!(actor && isElevated(actor.designation));
   }
 
   ipcMain.handle('auth:request-password-reset', (_e, { username, reason, from } = {}) =>
@@ -359,7 +367,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 
   ipcMain.handle('auth:list-password-resets', (_e, { status } = {}) => {
     if (!isDecider(security.getCurrentUserId())) {
-      return { ok: false, error: 'Only an Administrator or Proprietor can review password requests.', requests: [] };
+      return { ok: false, error: 'Only the Super Admin or the Proprietor can review password requests.', requests: [] };
     }
     return { ok: true, requests: passwords.listRequests(db, status) };
   });
@@ -397,7 +405,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // than `settings.edit`: a Head Teacher runs the timetable and the staffing,
   // but has settings.view only, so the permission that fits the job is the
   // designation, not a settings flag.
-  const ASSIGNERS = ['Administrator', 'Proprietor', 'Head Teacher'];
+  // The Super Admin, the Proprietor and the Head Teacher — one list, shared.
   function mayAssign() {
     const actorId = security.getCurrentUserId();
     if (!actorId) return false;
@@ -406,7 +414,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       LEFT JOIN designations d ON d.id = u.designation_id
       WHERE u.id = ? AND u.is_active = 1
     `).get(actorId);
-    return !!(row && ASSIGNERS.includes(row.designation));
+    return !!(row && isSupervisor(row.designation));
   }
 
   // Three shapes, and all three are real:
@@ -421,7 +429,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // later silently left them out.
   ipcMain.handle('auth:add-user-assignment', (_e, { userId, classGroupId, subjectId, termId, isClassTeacher }) => {
     if (!mayAssign()) {
-      return { ok: false, error: 'Only an Administrator, Proprietor or Head Teacher can set teaching assignments.' };
+      return { ok: false, error: 'Only a Head Teacher, the Super Admin or the Proprietor can set teaching assignments.' };
     }
 
     const cid = classGroupId ? parseInt(classGroupId, 10) : null;
@@ -493,7 +501,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 
   ipcMain.handle('auth:remove-user-assignment', (_e, assignmentId) => {
     if (!mayAssign()) {
-      return { ok: false, error: 'Only an Administrator, Proprietor or Head Teacher can set teaching assignments.' };
+      return { ok: false, error: 'Only a Head Teacher, the Super Admin or the Proprietor can set teaching assignments.' };
     }
     const row = db.prepare(`
       SELECT u.id AS user_id FROM staff_assignments sa
@@ -569,7 +577,7 @@ function resolveEffectivePermissions(db, userId) {
     }
   }
 
-  // 3. Proprietor + Administrator always get full access (safety net).
+  // 3. Proprietor + Super Admin always get full access (safety net).
   // The designation is read from the account, and falls back to the one
   // captured at sign-in when the row carries none — an old restore, or a
   // bootstrap that ran before the designations existed, leaves designation_id
@@ -582,7 +590,7 @@ function resolveEffectivePermissions(db, userId) {
       if (security.getCurrentUserId() === userId) designation = security.getCurrentDesignation();
     } catch (_) { /* the session is a fallback, never a requirement */ }
   }
-  if (['Proprietor', 'Administrator'].includes(designation)) {
+  if (isElevated(designation)) {
     for (const m of modules) {
       result[m] = { canView: true, canCreate: true, canEdit: true, canDelete: true };
     }

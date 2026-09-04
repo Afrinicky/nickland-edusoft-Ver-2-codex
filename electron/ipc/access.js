@@ -4,7 +4,7 @@
 // The level-based front for the permission tables: roles (designations) and the
 // per-person overrides that let, say, a teacher be granted limited Finance
 // access at a school with no dedicated accountant — without making them an
-// accountant. All mutations require settings-edit (Proprietor/Administrator, or
+// accountant. All mutations require settings-edit (Proprietor/Super Admin, or
 // anyone they have explicitly granted that), and every change is audited.
 
 const security = require('./_security');
@@ -18,7 +18,7 @@ function requireSettingsEdit(db, action) {
         VALUES ('access_control', NULL, 'permission_denied', ?, ?, 'high')
       `).run(security.getCurrentUserId(), `Denied ${action}`);
     } catch (_) {}
-    return { ok: false, error: 'Only an Administrator or Proprietor can change who can do what.' };
+    return { ok: false, error: 'Only the Super Admin or the Proprietor can change who can do what.' };
   }
   return null;
 }

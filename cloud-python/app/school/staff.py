@@ -49,7 +49,11 @@ def listing(db, actor, status="Active"):
     for r in rows:
         r["name"] = f"{r.get('surname') or ''} {r.get('first_name') or ''}".strip()
     return {"ok": True, "status": status, "staff": rows,
-            "may_edit": security.can(actor, "staff", "edit")}
+            "may_edit": security.can(actor, "staff", "edit"),
+            "may_add": security.can(actor, "staff", "create"),
+            # The designations, with the roll: a form that asks what somebody's
+            # job is needs the school's own list of jobs.
+            "designations": db.all("SELECT id, name FROM designations ORDER BY name")}
 
 
 def get(db, actor, staff_id):

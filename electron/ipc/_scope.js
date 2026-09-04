@@ -29,7 +29,8 @@
 // only see their own class could not check anybody else's marks, which is most
 // of the job.
 
-const UNRESTRICTED_DESIGNATIONS = ['Proprietor', 'Administrator', 'Head Teacher'];
+const { ELEVATED_NAMES } = require('./_portals');
+const UNRESTRICTED_DESIGNATIONS = [...ELEVATED_NAMES, 'Head Teacher'];
 
 // Two sources, and both matter. The database is the truth, but an account
 // whose designation_id was never set — a database restored from an old

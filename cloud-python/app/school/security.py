@@ -4,7 +4,7 @@ Three pieces, from three files on the desktop:
 
   * ``resolve_effective_permissions`` — electron/ipc/auth.js. Designation
     defaults, then per-user overrides, then the safety net that keeps a
-    Proprietor or an Administrator from ever being locked out of their own
+    Proprietor or the Super Admin from ever being locked out of their own
     school by a missing row.
   * ``check_permission`` — electron/ipc/_security.js.
   * ``audit`` — the audit_log write the desktop's guard makes on every denial.
@@ -25,10 +25,17 @@ _ACTION_KEY = {"view": "canView", "create": "canCreate", "edit": "canEdit", "del
 # (voiding a bill, reversing a payment). Deliberately narrower than
 # check_permission: an Accountant with fees:delete still cannot void a bill,
 # because a voided bill rewrites what a parent was told they owed.
-ELEVATED = ["Proprietor", "Administrator"]
+# Imported from app/portals.py rather than repeated, so "Super Admin" and its
+# legacy spelling "Administrator" are recognised in one place.
+from .. import portals as _portals
+
+ELEVATED = _portals.ELEVATED_NAMES
 
 # The Super Admin: overall control of the system itself. See app/portals.py.
-SUPER_ADMIN = "Administrator"
+SUPER_ADMIN = _portals.SUPER_ADMIN
+SUPER_ADMIN_LEGACY = _portals.SUPER_ADMIN_LEGACY
+is_super_admin_name = _portals.is_super_admin_name
+is_elevated_name = _portals.is_elevated
 
 
 def resolve_effective_permissions(db, user_id):
@@ -93,11 +100,11 @@ def can_any(actor, pairs):
 
 
 def is_elevated(actor):
-    return bool(actor) and actor.get("designation") in ELEVATED
+    return bool(actor) and is_elevated_name(actor.get("designation"))
 
 
 def is_super_admin(actor):
-    return bool(actor) and actor.get("designation") == SUPER_ADMIN
+    return bool(actor) and is_super_admin_name(actor.get("designation"))
 
 
 def audit(db, actor, entity_type, entity_id, action, note="", severity="normal"):

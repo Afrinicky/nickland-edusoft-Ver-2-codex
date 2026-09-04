@@ -20,6 +20,7 @@ const scopeLib = require('../ipc/_scope');
 const { registerStaffRoutes } = require('./staff_api');
 const { registerFinanceRoutes } = require('./finance_api');
 const { registerAdminRoutes } = require('./admin_api');
+const registerOfficeRoutes = require('./office_api');
 const { registerPaymentRoutes, onlinePaymentsEnabled } = require('./payments_api');
 const portals = require('../ipc/_portals');
 // Required at call-time (not destructured at load) to avoid a load-order
@@ -108,7 +109,7 @@ function subjectContext(db, subject) {
   `).get(subject.subject_id);
   if (!u) return null;
   const perms = resolveEffectivePermissions(db, u.id);
-  const isAdmin = ['Proprietor', 'Administrator'].includes(u.designation);
+  const isAdmin = portals.isElevated(u.designation);
   return { role: 'staff', user: u, designation: u.designation, is_admin: isAdmin, permissions: perms };
 }
 
@@ -334,6 +335,21 @@ function createApiServer(db, opts = {}) {
       },
       logo: media.logoUri(db, getSetting),
       currency: getSetting(db, 'payment_currency', 'GHS'),
+      // What the school chose in Settings -> Appearance. The desktop has
+      // written these into its own CSS custom properties since the first
+      // release; the app reads the same keys and derives the same shades, so a
+      // school that matched its crest sees it on the phone and in the browser
+      // rather than on one screen out of three. Sent unauthenticated with the
+      // rest of the identity: a colour is not a secret, and the login screen is
+      // the first place a parent should recognise their own school.
+      theme: {
+        school_color_primary:    getSetting(db, 'school_color_primary', ''),
+        school_color_accent:     getSetting(db, 'school_color_accent', ''),
+        school_color_background: getSetting(db, 'school_color_background', ''),
+        school_color_foreground: getSetting(db, 'school_color_foreground', ''),
+        ui_font_family:          getSetting(db, 'ui_font_family', ''),
+        ui_font_size_base:       getSetting(db, 'ui_font_size_base', ''),
+      },
     });
   }, { public: true });
 
@@ -356,7 +372,7 @@ function createApiServer(db, opts = {}) {
   // own screens use (electron/server/passwords.js), so a rule cannot hold in
   // one place and not the other. Raising a request and redeeming a code both
   // happen before sign-in, so neither can require a token; approving is not
-  // here at all, because an Administrator does that on the desktop.
+  // here at all, because the Super Admin does that on the desktop.
   add('POST', `${API}/auth/password-reset/request`, async (ctx, req, res, params, body, ip) => {
     if (rateLimited(ip, body.username)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
     return json(res, 200, passwords.requestReset(db, {
@@ -477,6 +493,19 @@ function createApiServer(db, opts = {}) {
       // headed a teacher's screen "Nickland Edusoft" rather than their own
       // school, which the cloud's /staff/me has always returned.
       school: { name: getSetting(db, 'school_name', 'School') },
+      // Which parts of the system this school runs. The desktop's own sidebar
+      // hides the canteen outright for a school that has switched it off,
+      // rather than offering an empty module; the app reads the same switches
+      // so both draw the same school.
+      features: {
+        feature_canteen_enabled:          getSetting(db, 'feature_canteen_enabled', ''),
+        feature_notifications_enabled:    getSetting(db, 'feature_notifications_enabled', ''),
+        feature_leave_management_enabled: getSetting(db, 'feature_leave_management_enabled', ''),
+        feature_transport_enabled:        getSetting(db, 'feature_transport_enabled', ''),
+        feature_ssnit_enabled:            getSetting(db, 'feature_ssnit_enabled', ''),
+        feature_paye_enabled:             getSetting(db, 'feature_paye_enabled', ''),
+        staff_clockin_enabled:            getSetting(db, 'staff_clockin_enabled', ''),
+      },
       // So the phone insists on a new password before anything else, the same
       // way the desktop's login screen does.
       must_change_password: !!ctx.user.must_change_password,
@@ -1238,6 +1267,150 @@ function createApiServer(db, opts = {}) {
     return json(res, 200, { ok: true, ...tt.getClassTimetable(db, classId) });
   });
 
+  // ── Examinations: papers and the question bank ──
+  //
+  // The same surface the online school serves (cloud-python/app/school/exams.py),
+  // so a paper written on the school Wi-Fi and one written over the internet are
+  // the same three rows in the same three tables. The desktop's own screens use
+  // the IPC handlers in ipc/academics.js against that same data.
+  add('GET', `${API}/exams/papers`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'view')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const ex = require('../ipc/_exams');
+    return json(res, 200, {
+      ok: true,
+      papers: ex.listPapers(db, query),
+      may_create: can(ctx, 'academics', 'create'),
+      may_edit: can(ctx, 'academics', 'edit'),
+    });
+  });
+
+  add('GET', `${API}/exams/papers/:id`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'view')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const ex = require('../ipc/_exams');
+    const paper = ex.getPaper(db, parseInt(params.id, 10));
+    if (!paper) return json(res, 404, { ok: false, error: 'No such paper.' });
+    return json(res, 200, { ok: true, paper });
+  });
+
+  add('POST', `${API}/exams/papers`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', body.id ? 'edit' : 'create')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const ex = require('../ipc/_exams');
+    const r = ex.savePaper(db, body, ctx.user.id);
+    if (!r.ok) return json(res, 400, r);
+    audit(db, ctx, 'exam_paper', r.id, 'save_exam_paper', body.title || '');
+    return json(res, 200, r);
+  });
+
+  add('POST', `${API}/exams/papers/:id/delete`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'delete')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const ex = require('../ipc/_exams');
+    const r = ex.deletePaper(db, parseInt(params.id, 10));
+    if (!r.ok) return json(res, 404, r);
+    audit(db, ctx, 'exam_paper', parseInt(params.id, 10), 'delete_exam_paper', r.title || '', 'high');
+    return json(res, 200, { ok: true });
+  });
+
+  add('POST', `${API}/exams/sections`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', body.id ? 'edit' : 'create')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const r = require('../ipc/_exams').saveSection(db, body);
+    return json(res, r.ok ? 200 : 400, r);
+  });
+
+  add('POST', `${API}/exams/sections/:id/delete`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'delete')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    return json(res, 200, require('../ipc/_exams').deleteSection(db, parseInt(params.id, 10)));
+  });
+
+  add('GET', `${API}/exams/questions`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'view')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    return json(res, 200, { ok: true, questions: require('../ipc/_exams').listQuestions(db, query) });
+  });
+
+  add('POST', `${API}/exams/questions`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', body.id ? 'edit' : 'create')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const r = require('../ipc/_exams').saveQuestion(db, body, ctx.user.id);
+    return json(res, r.ok ? 200 : 400, r);
+  });
+
+  add('POST', `${API}/exams/questions/:id/delete`, async (ctx, req, res, params) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'delete')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    return json(res, 200, require('../ipc/_exams').deleteQuestion(db, parseInt(params.id, 10)));
+  });
+
+  add('POST', `${API}/exams/papers/:id/from-bank`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'create')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const r = require('../ipc/_exams').copyFromBank(db, {
+      paperId: parseInt(params.id, 10),
+      sectionId: body.sectionId || null,
+      questionIds: body.questionIds || [],
+    }, ctx.user.id);
+    return json(res, r.ok ? 200 : 400, r);
+  });
+
+  // ── Timetable: the bell schedule ──
+  // The periods are the school's, not a class's: one list, shared by every
+  // grid. Reading them needs academics; changing them is a structural decision
+  // and needs edit.
+  add('GET', `${API}/timetable/periods`, async (ctx, req, res) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'view')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const tt = require('../ipc/timetable');
+    return json(res, 200, { ok: true, periods: tt.listPeriods(db) });
+  });
+
+  add('POST', `${API}/timetable/periods`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'edit')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const tt = require('../ipc/timetable');
+    const r = tt.savePeriods(db, Array.isArray(body.periods) ? body.periods : [body]);
+    if (!r.ok) return json(res, 400, r);
+    audit(db, ctx, 'timetable_period', null, 'save_periods', `${r.written} period(s)`);
+    return json(res, 200, r);
+  });
+
+  // ── Timetable: writing a class's week ──
+  //
+  // Wholesale rather than cell by cell, which is what the online school does
+  // (cloud-python/app/school/timetable.py) and what the screen needs: a grid
+  // half-applied is a class in two rooms at once, and a network that drops
+  // between the fourth cell and the fifth would leave one behind.
+  add('POST', `${API}/timetable/class`, async (ctx, req, res, params, body) => {
+    if (ctx.role !== 'staff' || !can(ctx, 'academics', 'edit')) {
+      return json(res, 403, { ok: false, error: 'Access denied.' });
+    }
+    const classId = parseInt(body.classId, 10);
+    if (!classId) return json(res, 400, { ok: false, error: 'Which class?' });
+    if (!scopeLib.canAccessClass(scopeOf(ctx), classId)) {
+      return json(res, 403, { ok: false, error: 'That class is not yours.' });
+    }
+    const tt = require('../ipc/timetable');
+    const r = tt.saveClassWeek(db, classId, body.entries || []);
+    audit(db, ctx, 'timetable', classId, 'save_timetable', `${r.entries} period(s)`);
+    return json(res, 200, r);
+  });
+
   // ── Timetable: a parent's child's class grid ──
   add('GET', `${API}/parent/children/:id/timetable`, async (ctx, req, res, params) => {
     if (ctx.role !== 'parent') return json(res, 403, { ok: false, error: 'Parents only.' });
@@ -1328,6 +1501,10 @@ function createApiServer(db, opts = {}) {
   // so an account that cannot see a portal cannot reach it by typing a URL.
   registerFinanceRoutes({ add, db, json, can, API, getSetting, audit });
   registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, media, audit });
+  // Billing, discounts, books, the store room, the buses, payroll's schedules,
+  // the notification log, activities, budgets and the cashbook — everything the
+  // browser app needs on the school's own Wi-Fi that used to live behind IPC.
+  registerOfficeRoutes({ add, db, json, can, API, getSetting, audit });
 
   // Money moving in from outside the school: a parent's checkout, the
   // gateway's webhook, and the office's verification of a charge nobody heard
@@ -1386,6 +1563,10 @@ function createApiServer(db, opts = {}) {
     try {
       await route.handler(ctx, req, res, routeParams, body, ip, tokenId, parsed.query || {}, rawBody);
     } catch (e) {
+      // The browser is told nothing but "Server error" — a stack trace is a
+      // map of the building. The person holding the machine gets the fault in
+      // the log, where a school's support call is actually answered from.
+      console.error('[api] ' + req.method + ' ' + req.url + ' — ' + (e && e.message));
       json(res, 500, { ok: false, error: 'Server error' });
     }
   });

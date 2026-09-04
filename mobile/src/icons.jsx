@@ -105,6 +105,14 @@ function Tri({ x, y, w, h, size, color, rotate = 0, opacity = 1 }) {
 
 const DRAW = {
   // Overview
+  // A pitched roof over a body — the front door of the app. The roof is a
+  // triangle and the body a rounded rectangle tucked under it, so at 19px in a
+  // sidebar it still reads as a house rather than as an arrow on a box.
+  home: (p) => (<>
+    <Tri {...p} x={0.50} y={0.14} w={0.84} h={0.34} />
+    <R {...p} x={0.18} y={0.46} w={0.64} h={0.40} radius={0.06} />
+    <R {...p} x={0.41} y={0.62} w={0.18} h={0.24} radius={0.03} fill />
+  </>),
   grid: (p) => (<>
     <R {...p} x={0.10} y={0.10} w={0.33} h={0.33} radius={0.08} fill />
     <R {...p} x={0.57} y={0.10} w={0.33} h={0.33} radius={0.08} fill opacity={0.55} />
@@ -151,6 +159,24 @@ const DRAW = {
     <Bar {...p} x={0.20} y={0.76} w={0.26} rotate={-24} />
     <Bar {...p} x={0.54} y={0.76} w={0.26} rotate={24} />
   </>),
+  // A mortarboard: the flat board as a rotated square, the cap under it, and
+  // the tassel down the right. Academics is the module the desktop draws with
+  // one, and a rosette in its place reads as "prize giving" rather than "marks".
+  cap: (p) => (<>
+    {/* The board, seen from in front: two flat triangles making one wide
+        diamond. A rotated square reads as a blob at 19px; this does not. */}
+    <Tri {...p} x={0.03} y={0.14} w={0.94} h={0.21} />
+    <Tri {...p} x={0.03} y={0.35} w={0.94} h={0.21} rotate={180} />
+    {/* The cap under it, and the tassel down the right. */}
+    <View pointerEvents="none" style={{
+      position: 'absolute', left: 0.28 * p.size, top: 0.48 * p.size,
+      width: 0.44 * p.size, height: 0.26 * p.size,
+      borderWidth: S(p.size), borderTopWidth: 0, borderColor: p.color,
+      borderBottomLeftRadius: 0.14 * p.size, borderBottomRightRadius: 0.14 * p.size,
+    }} />
+    <Bar {...p} x={0.74} y={0.46} w={0.24} rotate={90} />
+    <Ring {...p} cx={0.855} cy={0.76} r={0.065} fill />
+  </>),
 
   // Work
   book: (p) => (<>
@@ -181,6 +207,23 @@ const DRAW = {
   wallet: (p) => (<>
     <R {...p} x={0.08} y={0.22} w={0.84} h={0.58} radius={0.16} />
     <Ring {...p} cx={0.72} cy={0.51} r={0.09} fill />
+  </>),
+  // A school bus in side view: a body, a windscreen band and two wheels under
+  // it. Transport is the one module whose subject is a vehicle, so it gets one.
+  bus: (p) => (<>
+    <R {...p} x={0.10} y={0.20} w={0.80} h={0.50} radius={0.12} />
+    <Bar {...p} x={0.14} y={0.40} w={0.72} />
+    <Ring {...p} cx={0.30} cy={0.78} r={0.10} fill />
+    <Ring {...p} cx={0.70} cy={0.78} r={0.10} fill />
+  </>),
+  // A payslip: a sheet with a column rule down it and two ruled lines, which is
+  // what a salary schedule looks like on paper in every school office.
+  payroll: (p) => (<>
+    <R {...p} x={0.12} y={0.14} w={0.76} h={0.72} radius={0.10} />
+    <Bar {...p} x={0.12} y={0.36} w={0.76} />
+    <Bar {...p} x={0.36} y={0.36} w={0.50} rotate={90} />
+    <Bar {...p} x={0.52} y={0.52} w={0.28} />
+    <Bar {...p} x={0.52} y={0.66} w={0.20} />
   </>),
   bowl: (p) => (<>
     <Bar {...p} x={0.14} y={0.36} w={0.72} />

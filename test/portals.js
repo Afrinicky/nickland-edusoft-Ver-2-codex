@@ -339,10 +339,24 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
     r.json.approvals.leave === 1 && r.json.approvals.lesson_notes === 1);
   ck('...and the fee position, because they may see fees', !!r.json.fees);
 
+  // The gate on these is the module, not the portal — the app hands out
+  // modules the way the desktop always has. A bursar holds Students at View
+  // (they must be able to find the child a parent is paying for), so the roll
+  // opens for them; what they do NOT hold, they are not shown, and the summary
+  // proves it by simply omitting the parts they may not see.
   r = await req(base, 'GET', '/api/v1/admin/overview', { token: bursar });
-  ck('the bursar cannot open administration', r.status === 403);
+  ck('the bursar, who holds Students, is given the school as far as that goes',
+    r.status === 200 && r.json.enrolment.total === 3);
+  ck('...and not one figure from the staff room they may not see',
+    r.json.may.staff === false && r.json.staff === undefined && r.json.approvals === undefined);
   r = await req(base, 'GET', '/api/v1/admin/students', { token: bursar });
-  ck('...nor the whole roll through it', r.status === 403);
+  ck('...and the roll opens for them, because View is what View means',
+    r.status === 200 && r.json.students.length === 3);
+  r = await req(base, 'POST', `/api/v1/admin/students/1`, { token: bursar, body: { notes: 'x' } });
+  ck('...but they cannot change a word of it', r.status === 403);
+  r = await req(base, 'GET', '/api/v1/admin/overview', { token: guard });
+  ck('an account granted nothing is told so once, not handed a page of zeroes',
+    r.status === 403);
   r = await req(base, 'GET', '/api/v1/admin/staff', { token: teacher });
   ck('a class teacher cannot read the staff register', r.status === 403);
 
@@ -515,6 +529,26 @@ const LEVELS = { no: [0, 0, 0, 0], view: [1, 0, 0, 0], contribute: [1, 1, 0, 0],
     ck(`the portal model and the server agree about ${username}`,
       JSON.stringify(fromServer) === JSON.stringify(fromModel));
   }
+
+  // ── the designation, under either of its names ────────────────────────────
+  //
+  // The role was renamed from "Administrator" to "Super Admin", and a school
+  // upgrading has it renamed for it by a migration. But a database restored
+  // from an older backup, a projection pushed up before the upgrade and a
+  // phone a release behind all still say the old name, and none of them should
+  // lock the head teacher out of their own school. Every place that used to
+  // compare against a hard-coded list now asks these two.
+  ck('the Super Admin is elevated', portals.isElevated('Super Admin'));
+  ck('...under the name the system used to use', portals.isElevated('Administrator'));
+  ck('...however a school typed it', portals.isSuperAdminName('superadmin'));
+  ck('the Proprietor is elevated too, and is not the Super Admin',
+    portals.isElevated('Proprietor') && !portals.isSuperAdminName('Proprietor'));
+  ck('a head teacher is neither', !portals.isElevated('Head Teacher'));
+  ck('but a head teacher supervises — a lesson note, a leave request, an activity',
+    portals.isSupervisor('Head Teacher') && portals.isSupervisor('Super Admin')
+    && portals.isSupervisor('Administrator') && portals.isSupervisor('Proprietor'));
+  ck('...and a class teacher does not', !portals.isSupervisor('Class Teacher'));
+  ck('an unknown designation is nobody', !portals.isElevated('') && !portals.isSupervisor(null));
 
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -12,7 +12,7 @@
 
 -- designations (10)
 INSERT INTO designations (id, name, description, is_system, created_at) VALUES (1, 'Proprietor', 'Overall owner/director of the school. Full access to all modules.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (2, 'Administrator', 'System administrator. Manages users, settings, and all modules.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (2, 'Super Admin', 'Overall authority over the system. Manages users, access, settings and every module.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
 INSERT INTO designations (id, name, description, is_system, created_at) VALUES (3, 'Head Teacher', 'Academic and administrative head. Full access except user management.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
 INSERT INTO designations (id, name, description, is_system, created_at) VALUES (4, 'Class Teacher', 'Assigned to a specific class. Access to Academics and Canteen.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
 INSERT INTO designations (id, name, description, is_system, created_at) VALUES (5, 'Subject Teacher', 'Teaches specific subjects. Access to Academics and Canteen.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;

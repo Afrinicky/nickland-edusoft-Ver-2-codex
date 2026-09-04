@@ -99,7 +99,7 @@ def main():
     make_user("owusu", "Mr Owusu", "Class Teacher", staff_ids["OWUSU"])
     make_user("asante", "Mrs Asante", "Accountant", staff_ids["ASANTE"])
     make_user("boateng", "Mr Boateng", "Head Teacher", staff_ids["BOATENG"])
-    make_user("adjei", "Ms Adjei", "Administrator")
+    make_user("adjei", "Ms Adjei", "Super Admin")
     make_user("amoah", "Nana Amoah", "Proprietor")
     make_user("tetteh", "Mr Tetteh", "Security")
 
@@ -397,7 +397,7 @@ def main():
     ck("and withdrawing it closes the door on the very next request — no re-sign-in",
        get("owusu", "/fees/debtors").status_code == 403)
 
-    r = post("adjei", "/system/access", {"designationId": designation("Administrator"),
+    r = post("adjei", "/system/access", {"designationId": designation("Super Admin"),
                                          "levels": {"finance": "no"}})
     ck("the Super Admin's own role cannot be weakened", r.status_code == 400)
     r = post("adjei", "/system/access", {"designationId": designation("Class Teacher"),

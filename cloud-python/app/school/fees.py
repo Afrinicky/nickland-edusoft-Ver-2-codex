@@ -268,7 +268,7 @@ def reverse_payment(db, actor, payment_id, reason):
     """
     if not security.is_elevated(actor):
         return {"ok": False, "status": 403,
-                "error": "Only an Administrator or the Proprietor may reverse a payment."}
+                "error": "Only the Super Admin or the Proprietor may reverse a payment."}
     reason = str(reason or "").strip()
     if len(reason) < 5:
         return {"ok": False, "status": 400, "error": "Give the reason the payment is being reversed."}
@@ -340,7 +340,15 @@ def generate_bills_for_class(db, actor, class_id, term_id=None):
     return {"ok": True, "generated": done, "failed": failed}
 
 
-def templates(db, actor):
+def templates(db, actor, bill_type="school_fees"):
+    """The fee schedules. School fees by default.
+
+    The extra charges a term throws up are a different list on a different
+    screen — mixing them was how a class ended up billed for the excursion
+    twice.
+    """
+    where = "" if bill_type in (None, "all") else \
+        " AND COALESCE(ft.bill_type,'school_fees') = %(bill_type)s"
     rows = db.all("""
       SELECT ft.*, c.name AS class_name, t.label AS term_label,
              (SELECT COALESCE(SUM(amount),0) FROM fee_line_items WHERE fee_template_id = ft.id) AS total,
@@ -348,8 +356,238 @@ def templates(db, actor):
         FROM fee_templates ft
         LEFT JOIN class_groups c ON c.id = ft.class_group_id
         LEFT JOIN terms t ON t.id = ft.term_id
-       WHERE ft.is_active = 1 ORDER BY c.name NULLS FIRST, t.label NULLS FIRST, ft.id""")
+       WHERE ft.is_active = 1""" + where + """
+       ORDER BY c.name NULLS FIRST, t.label NULLS FIRST, ft.id""",
+                  {"bill_type": bill_type})
     return {"ok": True, "templates": rows}
+
+
+def supplementary_templates(db, actor, term_id=None):
+    """The extra charges a term throws up, and how many bills each is on.
+
+    School fees are billed once a term. Excursion, sports week, mock exams,
+    BECE registration, speech day — those are raised here and land on the
+    pupil's existing term bill as extra lines, so a parent still has one bill
+    and one balance to settle.
+    """
+    term = db.one("SELECT * FROM terms WHERE id = %s", (term_id,)) if term_id else current_term(db)
+    tid = term["id"] if term else None
+    rows = db.all("""
+      SELECT ft.*, c.name AS class_name,
+             (SELECT COALESCE(SUM(amount),0) FROM fee_line_items WHERE fee_template_id = ft.id) AS total,
+             (SELECT count(*) FROM fee_line_items WHERE fee_template_id = ft.id) AS items,
+             (SELECT count(DISTINCT li.student_bill_id)
+                FROM bill_line_items li JOIN student_bills b ON b.id = li.student_bill_id
+               WHERE li.source_template_id = ft.id AND li.charge_type = 'extra'
+                 AND (%(term)s IS NULL OR b.term_id = %(term)s)) AS applied_to
+        FROM fee_templates ft
+        LEFT JOIN class_groups c ON c.id = ft.class_group_id
+       WHERE ft.is_active = 1 AND ft.bill_type = 'supplementary'
+       ORDER BY ft.id DESC""", {"term": tid})
+    return {"ok": True, "templates": rows, "may_apply": security.is_elevated(actor),
+            "term": {"id": tid, "label": term["label"]} if term else None}
+
+
+def apply_supplementary(db, actor, data):
+    """Add a supplementary charge onto bills that already exist.
+
+    Elevated: this raises what every family in a class is asked to pay, which
+    is not the same question as "may this person take a payment". Idempotent
+    per (bill, template) — applying twice does not charge twice, and it says
+    how many it skipped rather than pretending it did nothing.
+    """
+    if not security.is_elevated(actor):
+        return {"ok": False, "status": 403,
+                "error": "Only the Super Admin or the Proprietor may apply a supplementary charge."}
+    template_id = data.get("templateId") or data.get("template_id")
+    tpl = db.one("SELECT * FROM fee_templates WHERE id = %s", (template_id,)) if template_id else None
+    if not tpl:
+        return {"ok": False, "status": 404, "error": "That supplementary bill no longer exists."}
+    if (tpl.get("bill_type") or "school_fees") != "supplementary":
+        return {"ok": False, "status": 400,
+                "error": "Only a supplementary bill can be added on top of a term bill. "
+                         "School fees are billed once per term through Generate Bills."}
+    items = [i for i in billing.template_items(db, template_id)
+             if (i.get("amount") or 0) != 0 or i.get("description")]
+    if not items:
+        return {"ok": False, "status": 400, "error": "That supplementary bill has no line items."}
+
+    tid = data.get("termId") or data.get("term_id")
+    term = db.one("SELECT * FROM terms WHERE id = %s", (tid,)) if tid else current_term(db)
+    if not term:
+        return {"ok": False, "status": 400,
+                "error": "No term is running, so there is nothing to add the charge to."}
+
+    sc = data.get("scope") if data.get("scope") in ("class", "selected") else "all"
+    if sc == "class" and data.get("classId"):
+        bills = db.all("""
+          SELECT b.id FROM student_bills b JOIN students s ON s.id = b.student_id
+           WHERE b.term_id = %s AND s.current_class_id = %s
+             AND COALESCE(b.status,'active') = 'active'""", (term["id"], data["classId"]))
+    elif sc == "selected" and data.get("studentIds"):
+        bills = db.all("""
+          SELECT id FROM student_bills
+           WHERE term_id = %s AND COALESCE(status,'active') = 'active'
+             AND student_id = ANY(%s)""", (term["id"], list(data["studentIds"])))
+    else:
+        bills = db.all("""
+          SELECT b.id FROM student_bills b JOIN students s ON s.id = b.student_id
+           WHERE b.term_id = %s AND s.status = 'Active'
+             AND COALESCE(b.status,'active') = 'active'""", (term["id"],))
+    if not bills:
+        return {"ok": False, "status": 400,
+                "error": "No term bills matched. Generate the term bills first, "
+                         "then add the extra charge."}
+
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    applied = skipped = 0
+    amount = 0.0
+    with db.tx() as tx:
+        for b in bills:
+            on = tx.one("""SELECT count(*) AS n FROM bill_line_items
+                            WHERE student_bill_id = %s AND source_template_id = %s
+                              AND charge_type = 'extra'""", (b["id"], template_id))["n"]
+            if on:
+                skipped += 1
+                continue
+            n = tx.one("""SELECT COALESCE(MAX(item_number), 0) AS n FROM bill_line_items
+                           WHERE student_bill_id = %s""", (b["id"],))["n"]
+            for it in items:
+                n += 1
+                tx.run("""INSERT INTO bill_line_items
+                            (student_bill_id, item_number, description, amount, is_arrear,
+                             charge_type, source_template_id, added_at, added_by)
+                          VALUES (%s,%s,%s,%s,0,'extra',%s,%s,%s)""",
+                       (b["id"], n, it.get("description"), round2(it.get("amount")),
+                        template_id, now, actor["user_id"]))
+                amount += round2(it.get("amount"))
+            billing.recompute_bill_totals(tx, b["id"])
+            applied += 1
+
+    security.audit(db, actor, "student_bill", None, "supplementary_applied",
+                   f'Applied "{tpl["name"]}" (GHS {round2(amount)}) to {applied} bill(s) '
+                   f'for {term["label"]}.', "high")
+    return {"ok": True, "applied": applied, "skipped": skipped,
+            "total_amount": round2(amount), "template_name": tpl["name"], "term": term["label"]}
+
+
+def remove_supplementary(db, actor, data):
+    """Take a supplementary charge back off every bill it was added to."""
+    if not security.is_elevated(actor):
+        return {"ok": False, "status": 403,
+                "error": "Only the Super Admin or the Proprietor may withdraw a supplementary charge."}
+    template_id = data.get("templateId") or data.get("template_id")
+    if not template_id:
+        return {"ok": False, "status": 400, "error": "Which charge?"}
+    bill_id = data.get("billId") or data.get("bill_id")
+    tid = data.get("termId") or data.get("term_id")
+    term = db.one("SELECT * FROM terms WHERE id = %s", (tid,)) if tid else current_term(db)
+
+    if bill_id:
+        targets = db.all("SELECT id FROM student_bills WHERE id = %s", (bill_id,))
+    else:
+        targets = db.all("""
+          SELECT DISTINCT b.id FROM student_bills b
+            JOIN bill_line_items li ON li.student_bill_id = b.id
+           WHERE (%(term)s IS NULL OR b.term_id = %(term)s)
+             AND li.source_template_id = %(tpl)s AND li.charge_type = 'extra'""",
+                         {"term": term["id"] if term else None, "tpl": template_id})
+
+    removed = 0
+    with db.tx() as tx:
+        for t in targets:
+            n = tx.run("""DELETE FROM bill_line_items
+                           WHERE student_bill_id = %s AND source_template_id = %s
+                             AND charge_type = 'extra'""", (t["id"], template_id))
+            if n:
+                billing.recompute_bill_totals(tx, t["id"])
+                removed += 1
+
+    security.audit(db, actor, "student_bill", bill_id, "supplementary_removed",
+                   f"Removed supplementary charge {template_id} from {removed} bill(s).", "high")
+    return {"ok": True, "removed": removed}
+
+
+# ── withdrawing a bill ──────────────────────────────────────────────────────
+#
+# A voided bill is hidden from the bills list, the debtors report and every
+# total, which is exactly what makes this worth serving: it is the only place
+# anybody can see what was withdrawn, by whom, and on what stated grounds —
+# and put it back if it should not have been.
+
+def voided_bills(db, actor, term_id=None, all_terms=False):
+    tid = None if all_terms else term_id
+    if tid is None and not all_terms:
+        term = current_term(db)
+        tid = term["id"] if term else None
+    rows = db.all("""
+      SELECT b.*, s.index_number, s.surname, s.first_name,
+             TRIM(COALESCE(s.surname,'') || ' ' || COALESCE(s.first_name,'')) AS student_name,
+             c.name AS class_name, t.label AS term_label, u.full_name AS voided_by_name
+        FROM student_bills b
+        JOIN students s ON s.id = b.student_id
+        LEFT JOIN class_groups c ON c.id = s.current_class_id
+        JOIN terms t ON t.id = b.term_id
+        LEFT JOIN users u ON u.id = b.voided_by
+       WHERE COALESCE(b.status,'active') = 'voided' AND (%(term)s IS NULL OR b.term_id = %(term)s)
+       ORDER BY b.voided_at DESC LIMIT 400""", {"term": tid})
+    return {"ok": True, "term_id": tid, "bills": rows,
+            "may_restore": security.is_elevated(actor)}
+
+
+def void_bill(db, actor, bill_id, reason):
+    if not security.is_elevated(actor):
+        return {"ok": False, "status": 403,
+                "error": "Only the Super Admin or the Proprietor may withdraw a bill."}
+    reason = str(reason or "").strip()
+    if len(reason) < 5:
+        return {"ok": False, "status": 400,
+                "error": "A reason is required, and it has to say something — "
+                         "this is written to the audit trail."}
+    bill = db.one("""SELECT b.*, s.index_number, s.surname, s.first_name
+                       FROM student_bills b JOIN students s ON s.id = b.student_id
+                      WHERE b.id = %s""", (bill_id,))
+    if not bill:
+        return {"ok": False, "status": 404, "error": "Bill not found."}
+    if (bill.get("status") or "active") == "voided":
+        return {"ok": False, "status": 400, "error": "That bill is already voided."}
+
+    db.run("""UPDATE student_bills
+                 SET status = 'voided', voided_at = %s, voided_by = %s, void_reason = %s
+               WHERE id = %s""",
+           (datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            actor["user_id"], reason, bill_id))
+    security.audit(db, actor, "student_bill", bill_id, "bill_voided",
+                   f'Voided bill #{bill_id} for {bill["index_number"]} '
+                   f'({bill["surname"]} {bill["first_name"]}), '
+                   f'GHS {round2(bill["total_billed"])} billed / '
+                   f'GHS {round2(bill["total_paid"])} paid. Reason: {reason}', "high")
+    paid = round2(bill["total_paid"] or 0)
+    # Voiding does not un-receive money. Saying so plainly beats a silent
+    # discrepancy between the bill list and the finance ledger.
+    return {"ok": True, "retained_payments": paid,
+            "warning": (f"GHS {paid} already received against this bill stays recorded in "
+                        "Finance. Reverse those payments separately if the money is being "
+                        "refunded.") if paid > 0 else None}
+
+
+def restore_bill(db, actor, bill_id):
+    if not security.is_elevated(actor):
+        return {"ok": False, "status": 403,
+                "error": "Only the Super Admin or the Proprietor may restore a withdrawn bill."}
+    bill = db.one("SELECT * FROM student_bills WHERE id = %s", (bill_id,))
+    if not bill:
+        return {"ok": False, "status": 404, "error": "Bill not found."}
+    if (bill.get("status") or "active") != "voided":
+        return {"ok": False, "status": 400, "error": "That bill is not voided."}
+    with db.tx() as tx:
+        tx.run("""UPDATE student_bills
+                     SET status = 'active', voided_at = NULL, voided_by = NULL, void_reason = NULL
+                   WHERE id = %s""", (bill_id,))
+        billing.recompute_bill_totals(tx, bill_id)
+    security.audit(db, actor, "student_bill", bill_id, "bill_restored",
+                   f"Restored voided bill #{bill_id}.", "high")
+    return {"ok": True}
 
 
 def template(db, actor, template_id):

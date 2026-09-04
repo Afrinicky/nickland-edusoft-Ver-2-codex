@@ -13,7 +13,7 @@ const {
 } = require('../utils/idgen');
 
 // The class ids the signed-in user may see, or null when they are not
-// restricted (Proprietor, Administrator, Head Teacher). Applied in the main
+// restricted (Proprietor, Super Admin, Head Teacher). Applied in the main
 // process, so the roll cannot be read by calling the channel directly.
 function scopedClassIds(db) {
   const security = require('./_security');

@@ -188,6 +188,17 @@ function enqueueSchoolProfile(db) {
         },
         logo: media.logoUri(db, getSetting),
         currency: getSetting(db, 'payment_currency', 'GHS'),
+        // The school's chosen colours travel with its crest, so the hosted
+        // portal draws the same school the desktop does rather than a stock
+        // violet page carrying somebody's badge.
+        theme: {
+          school_color_primary:    getSetting(db, 'school_color_primary', ''),
+          school_color_accent:     getSetting(db, 'school_color_accent', ''),
+          school_color_background: getSetting(db, 'school_color_background', ''),
+          school_color_foreground: getSetting(db, 'school_color_foreground', ''),
+          ui_font_family:          getSetting(db, 'ui_font_family', ''),
+          ui_font_size_base:       getSetting(db, 'ui_font_size_base', ''),
+        },
       },
     });
   } catch (_) { return null; }

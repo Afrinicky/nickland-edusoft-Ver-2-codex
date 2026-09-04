@@ -23,9 +23,18 @@ const PORTALS = [
 // A designation, not a permission tick. Not the Proprietor — they own the
 // school and are elevated over its money, but running the system is a
 // different job on purpose. See electron/ipc/_portals.js.
-const SUPER_ADMIN = 'Administrator';
+// Renamed from "Administrator" in v2.1. The old name is still accepted — a
+// projection pushed up before a school upgraded still carries it, and a
+// designation is not worth locking a head teacher out over.
+const SUPER_ADMIN = 'Super Admin';
+const SUPER_ADMIN_LEGACY = 'Administrator';
+const normaliseRole = (name) => String(name || '').trim().toLowerCase().replace(/\s+/g, '');
+const SUPER_NAMES = new Set([SUPER_ADMIN, SUPER_ADMIN_LEGACY].map(normaliseRole));
+const isSuperAdminName = (name) => SUPER_NAMES.has(normaliseRole(name));
+const ELEVATED_NAMES = ['Proprietor', SUPER_ADMIN, SUPER_ADMIN_LEGACY];
+const isElevated = (name) => name === 'Proprietor' || isSuperAdminName(name);
 const isSuperAdmin = (profile) => !!profile && (
-  profile.is_super === true || profile.designation === SUPER_ADMIN
+  profile.is_super === true || isSuperAdminName(profile.designation)
 );
 
 const byKey = new Map(PORTALS.map(p => [p.key, p]));
@@ -72,4 +81,6 @@ function portalListFor(profile) {
 
 const hasPortal = (profile, key) => portalsFor(profile).includes(key);
 
-module.exports = { PORTALS, SUPER_ADMIN, allows, isSuperAdmin, portalsFor, portalListFor, homePortal, hasPortal };
+module.exports = { PORTALS, SUPER_ADMIN, SUPER_ADMIN_LEGACY, ELEVATED_NAMES,
+                   allows, isSuperAdmin, isSuperAdminName, isElevated,
+                   portalsFor, portalListFor, homePortal, hasPortal };

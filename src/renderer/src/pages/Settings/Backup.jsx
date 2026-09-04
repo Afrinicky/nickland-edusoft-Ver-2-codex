@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
+import { isElevated } from '../../lib/roles.js';
 
 // ── formatters ──────────────────────────────────────────────────────────────
 function formatBytes(n) {
@@ -78,7 +79,7 @@ export default function Backup() {
   const showToast = useStore(s => s.showToast);
   const can = useStore(s => s.can);
   const currentUser = useStore(s => s.currentUser);
-  const fullAccess = can('settings', 'edit') || ['Proprietor', 'Administrator'].includes(currentUser?.designation);
+  const fullAccess = can('settings', 'edit') || isElevated(currentUser?.designation);
 
   const [info, setInfo] = useState(null);
   const [status, setStatus] = useState(null);
@@ -194,7 +195,7 @@ export default function Backup() {
 
   if (!fullAccess) {
     return (<div className="card"><h3 className="card-title">Backup &amp; Restore</h3>
-      <p className="text-muted text-sm">Backup, restore and factory reset are restricted to Administrator / Proprietor accounts.</p></div>);
+      <p className="text-muted text-sm">Backup, restore and factory reset are restricted to the Super Admin and the Proprietor.</p></div>);
   }
 
   const v = VERDICT[status?.status?.verdict || 'gap'];

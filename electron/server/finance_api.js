@@ -227,12 +227,12 @@ function registerFinanceRoutes({ add, db, json, can, API, getSetting, audit }) {
   });
 
   // Reversing a payment rewrites what a parent was told they had paid, so it
-  // is held to the same bar the desktop holds it to: an Administrator or the
+  // is held to the same bar the desktop holds it to: the Super Admin or the
   // Proprietor, a reason in writing, and a row in the audit trail. A bursar
   // with fees:delete cannot do it here any more than they can there.
   add('POST', `${API}/finance/collections/:id/reverse`, async (ctx, req, res, params, body) => {
     if (!gate(ctx, res, 'fees', 'edit')) return undefined;
-    if (!ctx.is_admin) return deny(res, 'Only an Administrator or the Proprietor may reverse a payment.');
+    if (!ctx.is_admin) return deny(res, 'Only the Super Admin or the Proprietor may reverse a payment.');
     const reason = String(body.reason || '').trim();
     if (reason.length < 5) return bad(res, 'Give the reason the payment is being reversed.');
     const pay = db.prepare('SELECT * FROM payments WHERE id = ?').get(parseInt(params.id, 10));

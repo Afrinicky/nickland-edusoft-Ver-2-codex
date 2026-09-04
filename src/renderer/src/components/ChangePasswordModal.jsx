@@ -62,7 +62,7 @@ export default function ChangePasswordModal({ onClose }) {
       {error && <div className="auth-error">{error}</div>}
       <p className="text-sm text-muted" style={{ marginTop: 12, lineHeight: 1.6 }}>
         Forgotten it instead? Sign out and use <em>"Forgot your password?"</em> on the sign-in
-        screen — an Administrator or Proprietor approves the reset.
+        screen — the Super Admin or the Proprietor approves the reset.
       </p>
     </Modal>
   );

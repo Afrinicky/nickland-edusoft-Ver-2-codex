@@ -72,7 +72,7 @@ export default function Users() {
         <strong>About user accounts</strong>
         <div className="text-sm" style={{ marginTop: 6, lineHeight: 1.6 }}>
           Each person who logs into Nickland Edusoft needs an account. Choose a designation
-          (Proprietor, Head Teacher, Teacher, Bursar, Administrator, etc.) — this controls
+          (Proprietor, Head Teacher, Teacher, Bursar, Super Admin, etc.) — this controls
           which parts of the app they can access. Link the account to a staff record if applicable.
         </div>
       </div>

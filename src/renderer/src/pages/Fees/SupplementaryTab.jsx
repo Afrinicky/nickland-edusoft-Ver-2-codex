@@ -51,7 +51,7 @@ export default function SupplementaryTab({ overview, perms = {}, onChanged, onGo
 
       {!perms.can_manage_issued_bills && (
         <div className="text-sm text-muted" style={{ padding: '0 0 10px' }}>
-          Only the Proprietor or the Administrator can raise or withdraw an extra charge,
+          Only the Proprietor or the Super Admin can raise or withdraw an extra charge,
           because it changes bills parents have already been given.
         </div>
       )}

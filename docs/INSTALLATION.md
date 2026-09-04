@@ -15,10 +15,10 @@
 4. Click **Install** and wait for completion
 5. Launch from the desktop shortcut or Start Menu
 
-## First Launch — Administrator Bootstrap
+## First Launch — Super Admin Bootstrap
 
-On the very first launch, the **Create Administrator Account** screen appears:
-1. Enter the Administrator's full name
+On the very first launch, the **Create Super Admin Account** screen appears:
+1. Enter the Super Admin's full name
 2. Choose a username (e.g., `admin`)
 3. Set a password (minimum 6 characters)
 4. Confirm the password

@@ -45,12 +45,12 @@ export default function Bootstrap({ onDone }) {
 
         <div className="bootstrap-welcome">
           <h1>Welcome! Let's get started.</h1>
-          <p>Create the Administrator account for this installation. This only happens once.</p>
+          <p>Create the Super Admin account for this installation. This only happens once.</p>
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="form-group">
-            <label>Administrator Full Name</label>
+            <label>Super Admin Full Name</label>
             <input type="text" value={form.fullName ?? ''} onChange={update('fullName')}
               placeholder="e.g. John Mensah" autoFocus />
           </div>

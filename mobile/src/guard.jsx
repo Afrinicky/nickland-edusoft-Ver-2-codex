@@ -39,6 +39,6 @@ export function RequireModule({ modules, children }) {
 
   if (!ready) return <Loading label="Starting…" />;
   if (!token || !profile) return <Redirect href="/" />;
-  if (!canAny(profile, pairs)) return <Redirect href="/staff" />;
+  if (!canAny(profile, pairs)) return <Redirect href="/app" />;
   return children;
 }
