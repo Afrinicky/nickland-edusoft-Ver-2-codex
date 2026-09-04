@@ -775,10 +775,39 @@ export const api = {
   // and book charges that adjust it. None of this existed in the app at all,
   // which is why a school could take a payment from a phone and could not tell
   // the phone what the payment was against.
-  feeTemplates: (token) =>
-    MODE === 'online' ? school.feeTemplates(token)
+  feeTemplates: (token, billType = 'school_fees') =>
+    MODE === 'online' ? school.feeTemplates(token, billType)
       : MODE === 'cloud' ? hostOnly('Fee templates')()
-                         : request('/fees/templates', { token }),
+                         : request(`/fees/templates${qs({ billType })}`, { token }),
+
+  // ── extra charges, and withdrawing a bill ──
+  // Both elevated on every server: raising what every family in a class is
+  // asked to pay, and taking a bill out of the school's totals, are not the
+  // same question as "may this person take a payment".
+  supplementary: (token, termId) =>
+    MODE === 'online' ? school.supplementary(token, termId)
+      : MODE === 'cloud' ? hostOnly('Extra charges')()
+                         : request(`/fees/supplementary${qs({ termId })}`, { token }),
+  applySupplementary: (token, body) =>
+    MODE === 'online' ? school.applySupplementary(token, body)
+      : MODE === 'cloud' ? hostOnly('Applying an extra charge')()
+                         : request('/fees/supplementary', { method: 'POST', token, body }),
+  removeSupplementary: (token, body) =>
+    MODE === 'online' ? school.removeSupplementary(token, body)
+      : MODE === 'cloud' ? hostOnly('Withdrawing an extra charge')()
+                         : request('/fees/supplementary/remove', { method: 'POST', token, body }),
+  voidedBills: (token, q = {}) =>
+    MODE === 'online' ? school.voidedBills(token, q)
+      : MODE === 'cloud' ? hostOnly('Withdrawn bills')()
+                         : request(`/fees/bills/voided${qs(q)}`, { token }),
+  voidBill: (token, id, reason) =>
+    MODE === 'online' ? school.voidBill(token, id, reason)
+      : MODE === 'cloud' ? hostOnly('Withdrawing a bill')()
+                         : request(`/fees/bills/${id}/void`, { method: 'POST', token, body: { reason } }),
+  restoreBill: (token, id) =>
+    MODE === 'online' ? school.restoreBill(token, id)
+      : MODE === 'cloud' ? hostOnly('Restoring a bill')()
+                         : request(`/fees/bills/${id}/restore`, { method: 'POST', token }),
   feeTemplate: (token, id) =>
     MODE === 'online' ? school.feeTemplate(token, id)
       : MODE === 'cloud' ? hostOnly('A fee template')()
@@ -1120,6 +1149,11 @@ export const api = {
     MODE === 'online' ? school.saveStaff(token, body)
       : MODE === 'cloud' ? hostOnly('Changing a staff record')()
                          : request('/admin/staff', { method: 'POST', token, body }),
+  adminSetAssignments: (token, id, assignments) =>
+    MODE === 'online' ? school.setAssignments(token, id, assignments)
+      : MODE === 'cloud' ? hostOnly('Setting what somebody teaches')()
+                         : request(`/admin/staff/${id}/assignments`,
+                                   { method: 'POST', token, body: { assignments } }),
   adminStaffRegister: (token, date) =>
     MODE === 'online' ? school.staffRegister(token, date)
       : MODE === 'cloud' ? hostOnly('The staff attendance register')()
@@ -1320,7 +1354,16 @@ export const school = {
   studentAccount: (token, id, termId) =>
     schoolRequest(`/fees/students/${id}`, { token, query: { termId } }),
   debtors: (token, query) => schoolRequest('/fees/debtors', { token, query }),
-  feeTemplates: (token) => schoolRequest('/fees/templates', { token }),
+  feeTemplates: (token, billType) => schoolRequest('/fees/templates', { token, query: { billType } }),
+  supplementary: (token, termId) => schoolRequest('/fees/supplementary', { token, query: { termId } }),
+  applySupplementary: (token, body) =>
+    schoolRequest('/fees/supplementary', { method: 'POST', token, body }),
+  removeSupplementary: (token, body) =>
+    schoolRequest('/fees/supplementary/remove', { method: 'POST', token, body }),
+  voidedBills: (token, query) => schoolRequest('/fees/bills/voided', { token, query }),
+  voidBill: (token, id, reason) =>
+    schoolRequest(`/fees/bills/${id}/void`, { method: 'POST', token, body: { reason } }),
+  restoreBill: (token, id) => schoolRequest(`/fees/bills/${id}/restore`, { method: 'POST', token }),
   saveFeeTemplate: (token, body) => schoolRequest('/fees/templates', { method: 'POST', token, body }),
   raiseBills: (token, body) => schoolRequest('/fees/bills', { method: 'POST', token, body }),
   onlinePayments: (token, status) => schoolRequest('/fees/online', { token, query: { status } }),

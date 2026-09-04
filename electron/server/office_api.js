@@ -53,8 +53,13 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
 
   // ══ Billing ════════════════════════════════════════════════════════════════
 
-  add('GET', `${API}/fees/templates`, async (ctx, req, res) => {
+  add('GET', `${API}/fees/templates`, async (ctx, req, res, params, body, ip, tokenId, query) => {
     if (!gate(ctx, res, 'fees')) return undefined;
+    // School fees by default. The extra charges a term throws up are a
+    // different list on a different screen, and mixing them was how a class
+    // ended up billed for the excursion twice.
+    const billType = (query && query.billType) === 'supplementary' ? 'supplementary'
+      : (query && query.billType) === 'all' ? null : 'school_fees';
     return json(res, 200, {
       ok: true,
       templates: db.prepare(`
@@ -65,8 +70,9 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
         LEFT JOIN class_groups c ON c.id = ft.class_group_id
         LEFT JOIN terms t ON t.id = ft.term_id
         WHERE COALESCE(ft.is_active, 1) = 1
+          AND (? IS NULL OR COALESCE(ft.bill_type, 'school_fees') = ?)
         ORDER BY c.name, t.label, ft.id
-      `).all(),
+      `).all(billType, billType),
     });
   });
 
@@ -99,9 +105,11 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
 
     const classId = body.class_group_id ? int(body.class_group_id) : null;
     const termId = body.term_id ? int(body.term_id) : null;
+    const billType = (body.bill_type || body.billType) === 'supplementary'
+      ? 'supplementary' : 'school_fees';
     let id = body.id ? int(body.id) : null;
 
-    if ((body.bill_type || 'school_fees') === 'school_fees' && termId) {
+    if (billType === 'school_fees' && termId) {
       const clash = db.prepare(`
         SELECT ft.id, ft.name FROM fee_templates ft
         WHERE COALESCE(ft.is_active,1) = 1 AND ft.term_id = ?
@@ -113,13 +121,14 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
 
     const tx = db.transaction(() => {
       if (id) {
-        db.prepare('UPDATE fee_templates SET name = ?, class_group_id = ?, term_id = ? WHERE id = ?')
-          .run(name, classId, termId, id);
+        db.prepare(`UPDATE fee_templates
+                       SET name = ?, class_group_id = ?, term_id = ?, bill_type = ?
+                     WHERE id = ?`).run(name, classId, termId, billType, id);
         db.prepare('DELETE FROM fee_line_items WHERE fee_template_id = ?').run(id);
       } else {
-        const r = db.prepare(
-          'INSERT INTO fee_templates (name, class_group_id, term_id, is_active) VALUES (?, ?, ?, 1)'
-        ).run(name, classId, termId);
+        const r = db.prepare(`
+          INSERT INTO fee_templates (name, class_group_id, term_id, bill_type, is_active)
+          VALUES (?, ?, ?, ?, 1)`).run(name, classId, termId, billType);
         id = r.lastInsertRowid;
       }
       let n = 0;
@@ -270,6 +279,247 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
     audit(db, ctx, 'discount', r.lastInsertRowid, 'grant_discount',
       `${type} ${value} — ${reason}`, 'high');
     return json(res, 200, { ok: true, id: r.lastInsertRowid });
+  });
+
+  // ══ Extra charges, and withdrawing a bill ═════════════════════════════════
+  //
+  // School fees are billed once a term. Everything else a Ghanaian school asks
+  // for mid-term — excursion, sports week, mock exams, BECE registration,
+  // speech day — is raised as a SUPPLEMENTARY charge and lands on the pupil's
+  // existing term bill as extra lines, so a parent still has one bill and one
+  // balance to settle rather than three pieces of paper.
+  //
+  // Both of these, and voiding a bill, are ELEVATED. Raising what a family is
+  // asked to pay, and removing a bill from every total in the school, are not
+  // the same question as "may this person take a payment".
+
+  const billing = require('../ipc/_billing');
+
+  const elevated = (ctx, res, what) => {
+    if (!ctx.is_admin) { deny(res, `Only the Super Admin or the Proprietor may ${what}.`); return false; }
+    return true;
+  };
+
+  add('GET', `${API}/fees/supplementary`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const term = (query && query.termId) ? db.prepare('SELECT * FROM terms WHERE id = ?').get(int(query.termId))
+                                         : currentTerm();
+    const rows = db.prepare(`
+      SELECT ft.*, c.name AS class_name,
+             (SELECT COALESCE(SUM(amount),0) FROM fee_line_items WHERE fee_template_id = ft.id) AS total,
+             (SELECT COUNT(*) FROM fee_line_items WHERE fee_template_id = ft.id) AS items
+      FROM fee_templates ft
+      LEFT JOIN class_groups c ON c.id = ft.class_group_id
+      WHERE COALESCE(ft.is_active, 1) = 1 AND ft.bill_type = 'supplementary'
+      ORDER BY ft.id DESC`).all();
+
+    // How many of this term's bills each charge is already on — the number the
+    // office actually asks about, and the one that makes applying it twice
+    // obviously unnecessary rather than merely harmless.
+    const appliedTo = db.prepare(`
+      SELECT COUNT(DISTINCT li.student_bill_id) AS n
+      FROM bill_line_items li JOIN student_bills b ON b.id = li.student_bill_id
+      WHERE li.source_template_id = ? AND li.charge_type = 'extra'
+        AND (? IS NULL OR b.term_id = ?)`);
+
+    return json(res, 200, {
+      ok: true,
+      term: term ? { id: term.id, label: term.label } : null,
+      may_apply: !!ctx.is_admin,
+      templates: rows.map(t => ({ ...t,
+        applied_to: appliedTo.get(t.id, term ? term.id : null, term ? term.id : null).n })),
+    });
+  });
+
+  /**
+   * Add a supplementary charge to bills that already exist.
+   *
+   * Idempotent per (bill, template): applying twice does not charge twice, and
+   * says how many it skipped rather than pretending it did nothing.
+   */
+  add('POST', `${API}/fees/supplementary`, async (ctx, req, res, params, body) => {
+    if (!gate(ctx, res, 'fees', 'edit')) return undefined;
+    if (!elevated(ctx, res, 'apply a supplementary charge')) return undefined;
+
+    const templateId = int(body.templateId ?? body.template_id);
+    const tpl = templateId && db.prepare('SELECT * FROM fee_templates WHERE id = ?').get(templateId);
+    if (!tpl) return bad(res, 'That supplementary bill no longer exists.');
+    if ((tpl.bill_type || 'school_fees') !== 'supplementary') {
+      return bad(res, 'Only a supplementary bill can be added on top of a term bill. '
+                    + 'School fees are billed once per term through Generate Bills.');
+    }
+    const items = billing.templateItems(db, templateId)
+      .filter(i => (i.amount || 0) !== 0 || i.description);
+    if (!items.length) return bad(res, 'That supplementary bill has no line items.');
+
+    const term = body.termId ? db.prepare('SELECT * FROM terms WHERE id = ?').get(int(body.termId))
+                             : currentTerm();
+    if (!term) return bad(res, 'No term is running, so there is nothing to add the charge to.');
+
+    const scope = body.scope === 'class' || body.scope === 'selected' ? body.scope : 'all';
+    const ids = Array.isArray(body.studentIds) ? body.studentIds.map(int).filter(Boolean) : [];
+    let bills;
+    if (scope === 'class' && int(body.classId)) {
+      bills = db.prepare(`
+        SELECT b.id FROM student_bills b JOIN students s ON s.id = b.student_id
+        WHERE b.term_id = ? AND s.current_class_id = ? AND COALESCE(b.status,'active') = 'active'`)
+        .all(term.id, int(body.classId));
+    } else if (scope === 'selected' && ids.length) {
+      const marks = ids.map(() => '?').join(',');
+      bills = db.prepare(`
+        SELECT id FROM student_bills
+        WHERE term_id = ? AND COALESCE(status,'active') = 'active' AND student_id IN (${marks})`)
+        .all(term.id, ...ids);
+    } else {
+      bills = db.prepare(`
+        SELECT b.id FROM student_bills b JOIN students s ON s.id = b.student_id
+        WHERE b.term_id = ? AND s.status = 'Active' AND COALESCE(b.status,'active') = 'active'`)
+        .all(term.id);
+    }
+    if (!bills.length) {
+      return bad(res, 'No term bills matched. Generate the term bills first, then add the extra charge.');
+    }
+
+    const now = new Date().toISOString();
+    const alreadyOn = db.prepare(`
+      SELECT COUNT(*) AS n FROM bill_line_items
+      WHERE student_bill_id = ? AND source_template_id = ? AND charge_type = 'extra'`);
+    const nextNo = db.prepare(
+      'SELECT COALESCE(MAX(item_number), 0) AS n FROM bill_line_items WHERE student_bill_id = ?');
+    const ins = db.prepare(`
+      INSERT INTO bill_line_items
+        (student_bill_id, item_number, description, amount, is_arrear, arrear_from_term_id,
+         charge_type, source_template_id, added_at, added_by)
+      VALUES (?, ?, ?, ?, 0, NULL, 'extra', ?, ?, ?)`);
+
+    let applied = 0; let skipped = 0; let amount = 0;
+    const tx = db.transaction(() => {
+      for (const b of bills) {
+        if (alreadyOn.get(b.id, templateId).n > 0) { skipped += 1; continue; }
+        let n = nextNo.get(b.id).n;
+        for (const it of items) {
+          n += 1;
+          ins.run(b.id, n, it.description, num(it.amount), templateId, now, ctx.user.id);
+          amount += num(it.amount);
+        }
+        billing.recomputeBillTotals(db, b.id);
+        applied += 1;
+      }
+    });
+    tx();
+
+    audit(db, ctx, 'student_bill', null, 'supplementary_applied',
+      `Applied "${tpl.name}" (GHS ${num(amount)}) to ${applied} bill(s) for ${term.label}.`, 'high');
+    return json(res, 200, { ok: true, applied, skipped,
+      total_amount: num(amount), template_name: tpl.name, term: term.label });
+  });
+
+  /** Take a supplementary charge back off every bill it was added to. */
+  add('POST', `${API}/fees/supplementary/remove`, async (ctx, req, res, params, body) => {
+    if (!gate(ctx, res, 'fees', 'edit')) return undefined;
+    if (!elevated(ctx, res, 'withdraw a supplementary charge')) return undefined;
+    const templateId = int(body.templateId ?? body.template_id);
+    if (!templateId) return bad(res, 'Which charge?');
+    const billId = body.billId ? int(body.billId) : null;
+    const term = body.termId ? db.prepare('SELECT * FROM terms WHERE id = ?').get(int(body.termId))
+                             : currentTerm();
+
+    const targets = billId
+      ? db.prepare('SELECT id FROM student_bills WHERE id = ?').all(billId)
+      : db.prepare(`
+          SELECT DISTINCT b.id FROM student_bills b
+          JOIN bill_line_items li ON li.student_bill_id = b.id
+          WHERE (? IS NULL OR b.term_id = ?) AND li.source_template_id = ?
+            AND li.charge_type = 'extra'`)
+          .all(term ? term.id : null, term ? term.id : null, templateId);
+
+    const del = db.prepare(
+      "DELETE FROM bill_line_items WHERE student_bill_id = ? AND source_template_id = ? AND charge_type = 'extra'");
+    let removed = 0;
+    const tx = db.transaction(() => {
+      for (const t of targets) {
+        if (del.run(t.id, templateId).changes > 0) { billing.recomputeBillTotals(db, t.id); removed += 1; }
+      }
+    });
+    tx();
+    audit(db, ctx, 'student_bill', billId, 'supplementary_removed',
+      `Removed supplementary charge ${templateId} from ${removed} bill(s).`, 'high');
+    return json(res, 200, { ok: true, removed });
+  });
+
+  // ── Withdrawing a bill ─────────────────────────────────────────────────────
+  //
+  // A voided bill is hidden from the bills list, the debtors report and every
+  // total, which is exactly what makes this worth serving: it is the only place
+  // anybody can see what was withdrawn, by whom, and on what stated grounds —
+  // and put it back if it should not have been.
+
+  add('GET', `${API}/fees/bills/voided`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const all = String((query && query.all) || '') === '1';
+    const term = currentTerm();
+    const termId = all ? null : (int(query && query.termId) || (term ? term.id : null));
+    return json(res, 200, {
+      ok: true, term_id: termId, may_restore: !!ctx.is_admin,
+      bills: db.prepare(`
+        SELECT b.*, s.index_number, s.surname, s.first_name,
+               TRIM(COALESCE(s.surname,'') || ' ' || COALESCE(s.first_name,'')) AS student_name,
+               c.name AS class_name, t.label AS term_label, u.full_name AS voided_by_name
+        FROM student_bills b
+        JOIN students s ON s.id = b.student_id
+        LEFT JOIN class_groups c ON c.id = s.current_class_id
+        JOIN terms t ON t.id = b.term_id
+        LEFT JOIN users u ON u.id = b.voided_by
+        WHERE COALESCE(b.status,'active') = 'voided' AND (? IS NULL OR b.term_id = ?)
+        ORDER BY b.voided_at DESC LIMIT 400`).all(termId, termId),
+    });
+  });
+
+  add('POST', `${API}/fees/bills/:id/void`, async (ctx, req, res, params, body) => {
+    if (!gate(ctx, res, 'fees', 'edit')) return undefined;
+    if (!elevated(ctx, res, 'withdraw a bill')) return undefined;
+    const reason = String(body.reason || '').trim();
+    if (reason.length < 5) {
+      return bad(res, 'A reason is required, and it has to say something — this is written to the audit trail.');
+    }
+    const id = int(params.id);
+    const bill = db.prepare(`
+      SELECT b.*, s.index_number, s.surname, s.first_name
+      FROM student_bills b JOIN students s ON s.id = b.student_id WHERE b.id = ?`).get(id);
+    if (!bill) return missing(res, 'Bill not found.');
+    if ((bill.status || 'active') === 'voided') return bad(res, 'That bill is already voided.');
+
+    db.prepare(`UPDATE student_bills
+                   SET status = 'voided', voided_at = ?, voided_by = ?, void_reason = ?
+                 WHERE id = ?`)
+      .run(new Date().toISOString(), ctx.user.id, reason, id);
+
+    audit(db, ctx, 'student_bill', id, 'bill_voided',
+      `Voided bill #${id} for ${bill.index_number} (${bill.surname} ${bill.first_name}), `
+      + `GHS ${num(bill.total_billed)} billed / GHS ${num(bill.total_paid)} paid. Reason: ${reason}`, 'high');
+
+    // Voiding does not un-receive money. Saying so plainly beats a silent
+    // discrepancy between the bill list and the finance ledger.
+    return json(res, 200, { ok: true, retained_payments: num(bill.total_paid),
+      warning: Number(bill.total_paid || 0) > 0
+        ? `GHS ${num(bill.total_paid)} already received against this bill stays recorded in Finance. `
+          + 'Reverse those payments separately if the money is being refunded.'
+        : null });
+  });
+
+  add('POST', `${API}/fees/bills/:id/restore`, async (ctx, req, res, params) => {
+    if (!gate(ctx, res, 'fees', 'edit')) return undefined;
+    if (!elevated(ctx, res, 'restore a withdrawn bill')) return undefined;
+    const id = int(params.id);
+    const bill = db.prepare('SELECT * FROM student_bills WHERE id = ?').get(id);
+    if (!bill) return missing(res, 'Bill not found.');
+    if ((bill.status || 'active') !== 'voided') return bad(res, 'That bill is not voided.');
+    db.prepare(`UPDATE student_bills
+                   SET status = 'active', voided_at = NULL, voided_by = NULL, void_reason = NULL
+                 WHERE id = ?`).run(id);
+    billing.recomputeBillTotals(db, id);
+    audit(db, ctx, 'student_bill', id, 'bill_restored', `Restored voided bill #${id}.`, 'high');
+    return json(res, 200, { ok: true });
   });
 
   // ══ Books ══════════════════════════════════════════════════════════════════

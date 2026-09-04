@@ -303,21 +303,33 @@ export function PageHead({ title, subtitle, actions, children }) {
  * beneath it — the same mark the installed app uses.
  */
 export function TabStrip({ tabs, value, onChange }) {
+  const layout = useLayout();
   if (!tabs || tabs.length < 2) return null;
+
+  const items = tabs.map((t) => {
+    const on = t.id === value;
+    return (
+      <Pressable key={t.id} onPress={() => onChange(t.id)}
+                 accessibilityRole="tab" accessibilityState={{ selected: on }}
+                 style={[styles.tab, on && styles.tabOn]}>
+        <Text numberOfLines={1} style={[styles.tabText, on && styles.tabTextOn]}>{t.label}</Text>
+      </Pressable>
+    );
+  });
+
+  // On a wide screen the strip WRAPS rather than scrolls. Fees has eleven
+  // sections for an elevated account and the last two fell off the right-hand
+  // edge of a 1440-pixel window: a tab you cannot see is a tab that does not
+  // exist, and nobody drags a tab strip sideways with a mouse. A phone keeps
+  // the scroller, where sideways is the natural gesture.
+  if (layout.isDesktop) {
+    return <View style={[styles.tabsWrap, styles.tabsWide]}>{items}</View>;
+  }
   return (
     <View style={styles.tabsWrap}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.tabs}>
-        {tabs.map((t) => {
-          const on = t.id === value;
-          return (
-            <Pressable key={t.id} onPress={() => onChange(t.id)}
-                       accessibilityRole="tab" accessibilityState={{ selected: on }}
-                       style={[styles.tab, on && styles.tabOn]}>
-              <Text numberOfLines={1} style={[styles.tabText, on && styles.tabTextOn]}>{t.label}</Text>
-            </Pressable>
-          );
-        })}
+        {items}
       </ScrollView>
     </View>
   );
@@ -514,6 +526,7 @@ const styles = StyleSheet.create({
 
   tabsWrap: { borderBottomWidth: 1, borderBottomColor: colors.border, marginBottom: spacing.lg },
   tabs: { flexDirection: 'row', gap: 2, paddingRight: spacing.lg },
+  tabsWide: { flexDirection: 'row', flexWrap: 'wrap', gap: 2, rowGap: 0 },
   tab: {
     paddingHorizontal: 14, paddingVertical: 11,
     borderBottomWidth: 2, borderBottomColor: 'transparent',

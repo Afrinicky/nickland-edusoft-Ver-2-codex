@@ -214,6 +214,105 @@ function req(base, method, p, { token, body } = {}) {
   ck('the granted discount is listed with who granted it',
     (r.json.discounts || []).some(d => d.student_name === 'BOATENG Kwame' && d.granted_by_name === 'NICK'));
 
+  // ══ Extra charges ════════════════════════════════════════════════════════
+  //
+  // Excursion, sports week, mock exams. Raised onto bills that already exist,
+  // so a parent keeps one bill and one balance.
+
+  r = await req(base, 'POST', '/api/v1/fees/templates', { token: bursar, body: {
+    name: 'Excursion to Kumasi', term_id: 3, bill_type: 'supplementary',
+    items: [{ description: 'Transport', amount: 30 }, { description: 'Entry', amount: 10 }],
+  } });
+  ck('an extra charge is written like any other template', r.status === 200);
+  const extraId = r.json.id;
+
+  r = await req(base, 'GET', '/api/v1/fees/templates', { token: bursar });
+  ck('...and does not appear among the school fees',
+    !(r.json.templates || []).some(t => t.id === extraId));
+  r = await req(base, 'GET', '/api/v1/fees/templates?billType=all', { token: bursar });
+  ck('...but is there when the office asks for every kind',
+    (r.json.templates || []).some(t => t.id === extraId));
+
+  r = await req(base, 'GET', '/api/v1/fees/supplementary', { token: bursar });
+  ck('the extra charges are listed with what each costs',
+    r.status === 200 && (r.json.templates || []).some(t => t.id === extraId && Number(t.total) === 40));
+  ck('...and a bursar is told plainly that applying one is not theirs',
+    r.json.may_apply === false);
+
+  r = await req(base, 'POST', '/api/v1/fees/supplementary', { token: bursar, body: {
+    templateId: extraId, termId: 3, scope: 'all',
+  } });
+  ck('a bursar with fees-edit cannot raise a charge against every family', r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/fees/supplementary', { token: admin, body: {
+    templateId: extraId, termId: 3, scope: 'class', classId: 1,
+  } });
+  ck('the Super Admin can', r.status === 200 && r.json.applied === 2);
+  ck('...and it is added to what the class already owed', r.json.total_amount === 80);
+
+  ck('...so the pupil has ONE bill, with extra lines on it — not a second bill',
+    db.prepare('SELECT COUNT(*) c FROM student_bills WHERE student_id = ? AND term_id = 3').get(p1).c === 1
+    && db.prepare(`SELECT COUNT(*) c FROM bill_line_items
+                    WHERE student_bill_id = (SELECT id FROM student_bills WHERE student_id = ? AND term_id = 3)
+                      AND charge_type = 'extra'`).get(p1).c === 2);
+
+  r = await req(base, 'POST', '/api/v1/fees/supplementary', { token: admin, body: {
+    templateId: extraId, termId: 3, scope: 'class', classId: 1,
+  } });
+  ck('adding the same charge twice charges nobody twice',
+    r.status === 200 && r.json.applied === 0 && r.json.skipped === 2);
+
+  r = await req(base, 'GET', '/api/v1/fees/supplementary', { token: admin });
+  ck('...and the office is told how many bills it is on',
+    (r.json.templates || []).find(t => t.id === extraId).applied_to === 2);
+
+  const billedAfter = db.prepare(
+    'SELECT total_billed FROM student_bills WHERE student_id = ? AND term_id = 3').get(p1).total_billed;
+
+  r = await req(base, 'POST', '/api/v1/fees/supplementary/remove', { token: admin, body: {
+    templateId: extraId, termId: 3,
+  } });
+  ck('the charge can be withdrawn from every bill it was added to',
+    r.status === 200 && r.json.removed === 2);
+  ck('...and each bill goes back to what it was',
+    db.prepare('SELECT total_billed FROM student_bills WHERE student_id = ? AND term_id = 3')
+      .get(p1).total_billed === billedAfter - 40);
+
+  // ══ Withdrawing a bill ═══════════════════════════════════════════════════
+
+  const billId = db.prepare('SELECT id FROM student_bills WHERE student_id = ? AND term_id = 3').get(p2).id;
+
+  r = await req(base, 'POST', `/api/v1/fees/bills/${billId}/void`, { token: admin, body: { reason: 'oops' } });
+  ck('a bill cannot be withdrawn on a reason that says nothing', r.status === 400);
+
+  r = await req(base, 'POST', `/api/v1/fees/bills/${billId}/void`,
+    { token: bursar, body: { reason: 'The pupil never enrolled after all.' } });
+  ck('a bursar cannot withdraw a bill', r.status === 403);
+
+  r = await req(base, 'POST', `/api/v1/fees/bills/${billId}/void`,
+    { token: admin, body: { reason: 'The pupil never enrolled after all.' } });
+  ck('the Super Admin can, with a reason in writing', r.status === 200);
+  ck('...and it is off the books',
+    db.prepare('SELECT status FROM student_bills WHERE id = ?').get(billId).status === 'voided');
+  ck('...and withdrawing it twice is refused',
+    (await req(base, 'POST', `/api/v1/fees/bills/${billId}/void`,
+      { token: admin, body: { reason: 'The pupil never enrolled after all.' } })).status === 400);
+
+  r = await req(base, 'GET', '/api/v1/fees/bills/voided?all=1', { token: bursar });
+  ck('a bursar may SEE what was withdrawn — that is the point of the screen',
+    r.status === 200 && (r.json.bills || []).some(b => b.id === billId));
+  ck('...with who withdrew it and on what stated grounds',
+    (r.json.bills || []).find(b => b.id === billId).voided_by_name === 'NICK'
+    && /never enrolled/.test((r.json.bills || []).find(b => b.id === billId).void_reason));
+  ck('...and is told they may not put it back', r.json.may_restore === false);
+
+  r = await req(base, 'POST', `/api/v1/fees/bills/${billId}/restore`, { token: bursar });
+  ck('...and cannot', r.status === 403);
+
+  r = await req(base, 'POST', `/api/v1/fees/bills/${billId}/restore`, { token: admin });
+  ck('the Super Admin puts it back', r.status === 200
+    && db.prepare("SELECT COALESCE(status,'active') s FROM student_bills WHERE id = ?").get(billId).s === 'active');
+
   // ══ Books ════════════════════════════════════════════════════════════════
 
   r = await req(base, 'POST', `/api/v1/books/${p1}`, { token: bursar, body: {
@@ -507,6 +606,79 @@ function req(base, method, p, { token, body } = {}) {
   ck('the staff register is served', r.status === 200 && (r.json.staff || []).length === 2);
   r = await req(base, 'GET', '/api/v1/admin/staff-register', { token: teacher });
   ck('...and a class teacher cannot read it', r.status === 403);
+
+  // ══ Staff records, and what somebody teaches ═════════════════════════════
+  //
+  // The web app has to be able to put a new teacher on the roll and say which
+  // class is theirs. The second one is the most consequential write in the
+  // module: the teaching scope is built from it, so it decides whose marks a
+  // person can touch.
+
+  r = await req(base, 'POST', '/api/v1/admin/staff', { token: teacher, body: {
+    surname: 'MENSAH', first_name: 'Yaa',
+  } });
+  ck('a class teacher cannot put somebody on the staff roll', r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/admin/staff', { token: admin, body: { surname: 'MENSAH' } });
+  ck('a staff record needs both names', r.status === 400);
+
+  r = await req(base, 'POST', '/api/v1/admin/staff', { token: admin, body: {
+    surname: 'MENSAH', first_name: 'Yaa', role: 'Teaching', phone: '0244777888',
+    base_salary: 1400, ssnit_number: 'SS-3',
+  } });
+  ck('the Super Admin adds a member of staff', r.status === 200 && !!r.json.id);
+  const newStaff = r.json.id;
+  ck('...and a staff number is issued rather than asked for', /^STAFF\/\d{4}$/.test(r.json.staff_number));
+  ck('...with the pay they were given, because this account holds payroll',
+    db.prepare('SELECT base_salary FROM staff WHERE id = ?').get(newStaff).base_salary === 1400);
+
+  r = await req(base, 'GET', '/api/v1/admin/staff', { token: bursar });
+  ck('the roll carries the school\'s own list of jobs, for the form',
+    (r.json.designations || []).some(d => d.name === 'Class Teacher'));
+
+  // A bursar holds staff at View only (see the seed): they may read the roll
+  // and may not write it.
+  r = await req(base, 'POST', '/api/v1/admin/staff', { token: bursar, body: {
+    id: newStaff, phone: '0000000000',
+  } });
+  ck('an account that may only read the roll cannot amend it', r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/admin/staff', { token: admin, body: {
+    id: newStaff, qualification: 'Diploma in Basic Education',
+  } });
+  ck('a record can be amended', r.status === 200
+    && db.prepare('SELECT qualification FROM staff WHERE id = ?').get(newStaff).qualification
+       === 'Diploma in Basic Education');
+
+  r = await req(base, 'POST', `/api/v1/admin/staff/${newStaff}/assignments`, { token: admin, body: {
+    assignments: [{ class_group_id: 2, is_class_teacher: true },
+                  { class_group_id: 1, subject_id: null }],
+  } });
+  ck('what somebody teaches can be set from a browser', r.status === 200 && r.json.assignments === 2);
+  ck('...and it is what the screen showed, not a patch on top of it',
+    db.prepare('SELECT COUNT(*) c FROM staff_assignments WHERE staff_id = ?').get(newStaff).c === 2);
+
+  // The one rule that matters here: a class has ONE class teacher, because the
+  // register and the report cards belong to one person.
+  r = await req(base, 'POST', '/api/v1/admin/staff/1/assignments', { token: admin, body: {
+    assignments: [{ class_group_id: 2, is_class_teacher: true }],
+  } });
+  ck('giving a class a new class teacher takes it off the old one',
+    r.status === 200
+    && db.prepare('SELECT COUNT(*) c FROM staff_assignments WHERE class_group_id = 2 AND is_class_teacher = 1')
+         .get().c === 1
+    && db.prepare('SELECT COUNT(*) c FROM staff_assignments WHERE staff_id = ? AND is_class_teacher = 1')
+         .get(newStaff).c === 0);
+
+  r = await req(base, 'POST', `/api/v1/admin/staff/${newStaff}/assignments`, { token: teacher, body: {
+    assignments: [{ class_group_id: 1 }],
+  } });
+  ck('a class teacher cannot decide what anybody teaches', r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/admin/staff/9999/assignments', { token: admin, body: {
+    assignments: [],
+  } });
+  ck('...and nobody can assign a member of staff who does not exist', r.status === 404);
 
   server.close();
   console.log(`\n${pass} passed, ${fail} failed`);

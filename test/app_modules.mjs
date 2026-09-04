@@ -112,6 +112,19 @@ ck('...nor the admissions form', !tabsFor(students, bursar).includes('admissions
 ck('a module opens on the first tab its holder may actually open',
   firstTab(students, bursar) === 'dashboard');
 
+// Elevation, which is over and above a module. A bursar with Fees at Full may
+// take money; they may not forgive it, raise a new charge against every family
+// in the school, or take a bill off the books.
+const fees = moduleByKey('fees');
+ck('a bursar with Fees at Full is not shown the extra charges',
+  !tabsFor(fees, staff('Accountant', { fees: lvl(3) })).includes('supplementary'));
+ck('...nor the withdrawn bills',
+  !tabsFor(fees, staff('Accountant', { fees: lvl(3) })).includes('voided'));
+ck('the Proprietor is shown both',
+  tabsFor(fees, proprietor).includes('supplementary') && tabsFor(fees, proprietor).includes('voided'));
+ck('...and so is the Super Admin',
+  tabsFor(fees, superAdmin).includes('supplementary') && tabsFor(fees, superAdmin).includes('voided'));
+
 const settings = moduleByKey('settings');
 ck('the audit trail is the Super Admin\'s alone',
   tabsFor(settings, superAdmin).includes('audit')

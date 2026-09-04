@@ -57,6 +57,26 @@ of modules under it, rather than a menu first and the work second. A teacher at
 ten past seven wants the register; somebody at a desk with a mouse wants the
 menu.
 
+### What is still done on the office computer
+
+Four things, and each for the same reason: they are about that machine, not
+about the school.
+
+* **Backups**, and where they are written to.
+* **Cloud sync** — the keys and the schedule for the school's own projection.
+* **The mobile server** — starting it, and the devices allowed onto it. It is
+  the thing serving the browser app in the first place.
+* **The finance workbook**, which exists so a school whose computer has died
+  can keep trading in Excel and import the result back. Both halves are files
+  on that machine. The tab is there and says so rather than drawing nothing.
+
+Receipt layouts and the signatures printed on report cards are also set on the
+desktop. Everything else a school does — billing, the extra charges a term
+throws up, withdrawing a bill and putting it back, discounts, book charges, the
+store room, the buses, the payroll run and its statutory schedules, staff
+records and what each person teaches, the timetable, question papers, notices
+and the audit trail — is in the browser.
+
 ### The colours are the school's
 
 `Settings → Appearance` writes the school's primary and accent colours, and

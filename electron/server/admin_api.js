@@ -349,6 +349,12 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     `).all(todayISO(), status);
     return json(res, 200, {
       ok: true, status,
+      may_edit: can(ctx, 'staff', 'edit'),
+      may_add: can(ctx, 'staff', 'create'),
+      // The designations, with the roll: a form that asks what somebody's job
+      // is needs the school's own list of jobs, and fetching it from the user
+      // table would put a Super Admin's screen behind a staff screen.
+      designations: db.prepare('SELECT id, name FROM designations ORDER BY name').all(),
       staff: rows.map(r => ({ ...r, name: `${r.surname || ''} ${r.first_name || ''}`.trim() })),
     });
   });
@@ -391,6 +397,112 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
       },
       assignments, attendance, leave, may_see_pay: showPay,
     });
+  });
+
+  /**
+   * Create or amend a staff record.
+   *
+   * The pay columns are only written by an account that may SEE them. Without
+   * that check an account with `staff: edit` and no payroll could set anybody's
+   * salary — including their own — without ever being able to read it back,
+   * which is worse than being able to read it.
+   */
+  add('POST', `${API}/admin/staff`, async (ctx, req, res, params, body) => {
+    const isNew = !body.id;
+    if (!adminGate(ctx, res, 'staff', isNew ? 'create' : 'edit')) return undefined;
+
+    const FIELDS = ['surname', 'first_name', 'other_names', 'gender', 'date_of_birth', 'phone',
+                    'email', 'address', 'role', 'designation_id', 'status', 'qualification',
+                    'specialization', 'hire_date', 'stop_date', 'notes', 'staff_number'];
+    const PAY = ['base_salary', 'bank_account', 'bank_name', 'ssnit_number', 'ssnit_enrolled'];
+    const allowed = can(ctx, 'payroll', 'edit') ? [...FIELDS, ...PAY] : FIELDS;
+
+    const patch = {};
+    for (const k of allowed) if (Object.prototype.hasOwnProperty.call(body, k)) patch[k] = body[k];
+
+    if (isNew) {
+      if (!String(patch.surname || '').trim() || !String(patch.first_name || '').trim()) {
+        return bad(res, 'A surname and a first name are required.');
+      }
+      if (!patch.role) patch.role = 'Teaching';
+      if (!patch.status) patch.status = 'Active';
+      if (!patch.staff_number) {
+        const n = db.prepare('SELECT COUNT(*) c FROM staff').get().c || 0;
+        patch.staff_number = `STAFF/${String(n + 1).padStart(4, '0')}`;
+      }
+      if (db.prepare('SELECT id FROM staff WHERE staff_number = ?').get(patch.staff_number)) {
+        return bad(res, 'That staff number is already in use.');
+      }
+      const cols = Object.keys(patch);
+      const r = db.prepare(`INSERT INTO staff (${cols.join(', ')})
+                            VALUES (${cols.map(() => '?').join(', ')})`)
+        .run(...cols.map(k => patch[k]));
+      audit(db, ctx, 'staff', r.lastInsertRowid, 'create_staff',
+        `${patch.surname} ${patch.first_name}`, 'high');
+      return json(res, 200, { ok: true, id: r.lastInsertRowid, staff_number: patch.staff_number });
+    }
+
+    const id = parseInt(body.id, 10);
+    if (!db.prepare('SELECT id FROM staff WHERE id = ?').get(id)) {
+      return missing(res, 'No such member of staff.');
+    }
+    const cols = Object.keys(patch);
+    if (!cols.length) return bad(res, 'Nothing to change.');
+    db.prepare(`UPDATE staff SET ${cols.map(k => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...cols.map(k => patch[k]), id);
+    audit(db, ctx, 'staff', id, 'update_staff', cols.join(', '));
+    try {
+      const owner = db.prepare('SELECT id FROM users WHERE staff_id = ?').get(id);
+      if (owner) require('./sync/staff_projection').enqueueStaffProfile(db, owner.id);
+    } catch (_) {}
+    return json(res, 200, { ok: true, id });
+  });
+
+  /**
+   * Which classes and subjects somebody teaches.
+   *
+   * The single most consequential write in the staff module: the teaching
+   * scope is built from this, so it decides whose marks a teacher can touch.
+   * Replaced wholesale rather than patched, so what is stored always matches
+   * what the screen showed.
+   */
+  add('POST', `${API}/admin/staff/:id/assignments`, async (ctx, req, res, params, body) => {
+    if (!adminGate(ctx, res, 'staff', 'edit')) return undefined;
+    const id = parseInt(params.id, 10);
+    if (!db.prepare('SELECT id FROM staff WHERE id = ?').get(id)) {
+      return missing(res, 'No such member of staff.');
+    }
+    const rows = [];
+    for (const a of (Array.isArray(body.assignments) ? body.assignments : [])) {
+      const classId = a.class_group_id ?? a.classId ?? null;
+      const subjectId = a.subject_id ?? a.subjectId ?? null;
+      if (!classId && !subjectId) continue;
+      rows.push([classId || null, subjectId || null, a.is_class_teacher ? 1 : 0]);
+    }
+
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM staff_assignments WHERE staff_id = ?').run(id);
+      for (const [classId, subjectId, isCt] of rows) {
+        // One class has one class teacher. Setting a second silently would give
+        // two people the register and the report cards.
+        if (isCt && classId) {
+          db.prepare('UPDATE staff_assignments SET is_class_teacher = 0 WHERE class_group_id = ? AND is_class_teacher = 1')
+            .run(classId);
+        }
+        db.prepare(`INSERT INTO staff_assignments (staff_id, class_group_id, subject_id, is_class_teacher)
+                    VALUES (?, ?, ?, ?)`).run(id, classId, subjectId, isCt);
+      }
+    });
+    tx();
+
+    audit(db, ctx, 'staff', id, 'set_assignments', `${rows.length} assignment(s)`, 'high');
+    // Every session that member of staff holds is now resolving a scope that
+    // has changed; the next request re-reads it, so nothing needs revoking.
+    try {
+      const owner = db.prepare('SELECT id FROM users WHERE staff_id = ?').get(id);
+      if (owner) require('./sync/staff_projection').enqueueStaffProfile(db, owner.id);
+    } catch (_) {}
+    return json(res, 200, { ok: true, assignments: rows.length });
   });
 
   // ── Approvals: leave ──────────────────────────────────────────────────────

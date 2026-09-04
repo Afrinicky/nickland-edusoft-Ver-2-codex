@@ -37,7 +37,8 @@
 // desktop's labels, so somebody who learns one has learned the other. A tab can
 // carry its own `need` (an action stronger than view), its own `module` (the
 // canteen configuration is a canteen concern, not a settings one), a `feature`
-// flag, or `super: true` for the Super Admin alone.
+// flag, `elevated: true` for the Proprietor and the Super Admin, or
+// `super: true` for the Super Admin alone.
 
 // ── The action a permission level is checked against ────────────────────────
 const ACTION_KEY = { view: 'canView', create: 'canCreate', edit: 'canEdit', delete: 'canDelete' };
@@ -55,6 +56,18 @@ export function allows(profile, module, action = 'view') {
   if (profile.is_admin) return true;
   const p = (profile.permissions || {})[module];
   return !!(p && p[ACTION_KEY[action] || 'canView']);
+}
+
+/**
+ * Elevated: the Proprietor and the Super Admin.
+ *
+ * The two designations held back nowhere, and the ones the server means by
+ * `is_admin`. It is over and above a module: a bursar with Fees at Full may
+ * take money and may not forgive it, withdraw a bill, or raise a new charge
+ * against every family in the school.
+ */
+export function isElevated(profile) {
+  return !!profile && (profile.is_admin === true || isSuperAdmin(profile));
 }
 
 /** The Super Admin: the one account with overall authority over the system. */
@@ -123,10 +136,12 @@ export const MODULES = [
       { id: 'templates', label: 'Fee Templates',  need: 'edit' },
       { id: 'payments',  label: 'Payments' },
       { id: 'bulk',      label: 'Bulk Pay Sheet', need: 'create' },
+      { id: 'supplementary', label: 'Extra Charges', need: 'edit', elevated: true },
       { id: 'discounts', label: 'Discounts' },
       { id: 'books',     label: 'Books' },
       { id: 'online',    label: 'Online Payments' },
       { id: 'debtors',   label: 'Debtors' },
+      { id: 'voided',    label: 'Withdrawn Bills', need: 'edit', elevated: true },
     ],
   },
   {
@@ -296,6 +311,7 @@ export function visibleTabs(mod, profile, features = {}) {
   return mod.tabs.filter((t) => {
     if (!featureOn(features, t.feature)) return false;
     if (t.super && !isSuperAdmin(profile)) return false;
+    if (t.elevated && !isElevated(profile)) return false;
     return allows(profile, t.module || mod.module, t.need || 'view');
   });
 }
@@ -441,7 +457,7 @@ export function groupModules(items) {
 
 export default {
   MODULES, PERSONAL, ALL_ITEMS, QUICK_ACTIONS,
-  allows, isSuperAdmin, featureOn,
+  allows, isSuperAdmin, isElevated, featureOn,
   visibleModules, visibleTabs, firstTab, activeModule,
   landingHref, bottomBar, quickActions, groupModules, moduleByKey,
 };

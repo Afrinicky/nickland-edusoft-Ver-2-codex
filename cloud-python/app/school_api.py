@@ -526,8 +526,49 @@ async def fees_debtors(db, actor, classId: int = None, minimum: float = None):
 
 @router.get("/fees/templates")
 @guarded(module="fees")
-async def fee_templates(db, actor):
-    return fees.templates(db, actor)
+async def fee_templates(db, actor, billType: str = "school_fees"):
+    return fees.templates(db, actor, billType)
+
+
+# ── extra charges, and withdrawing a bill ───────────────────────────────────
+# Both are elevated inside fees.py: raising what every family in a class is
+# asked to pay, and removing a bill from every total in the school, are not the
+# same question as "may this person take a payment".
+
+@router.get("/fees/supplementary")
+@guarded(module="fees")
+async def supplementary_templates(db, actor, termId: int = None):
+    return fees.supplementary_templates(db, actor, termId)
+
+
+@router.post("/fees/supplementary")
+@guarded(module="fees", action="edit")
+async def apply_supplementary(db, actor, request: Request):
+    return fees.apply_supplementary(db, actor, await _json(request))
+
+
+@router.post("/fees/supplementary/remove")
+@guarded(module="fees", action="edit")
+async def remove_supplementary(db, actor, request: Request):
+    return fees.remove_supplementary(db, actor, await _json(request))
+
+
+@router.get("/fees/bills/voided")
+@guarded(module="fees")
+async def voided_bills(db, actor, termId: int = None, all: str = None):
+    return fees.voided_bills(db, actor, termId, str(all or "") == "1")
+
+
+@router.post("/fees/bills/{bill_id}/void")
+@guarded(module="fees", action="edit")
+async def void_bill(db, actor, bill_id: int, request: Request):
+    return fees.void_bill(db, actor, bill_id, (await _json(request)).get("reason"))
+
+
+@router.post("/fees/bills/{bill_id}/restore")
+@guarded(module="fees", action="edit")
+async def restore_bill(db, actor, bill_id: int):
+    return fees.restore_bill(db, actor, bill_id)
 
 
 @router.get("/fees/templates/{template_id}")

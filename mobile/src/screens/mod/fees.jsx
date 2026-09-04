@@ -120,7 +120,9 @@ export function FeeTemplates() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await api.feeTemplates(token);
+      // Every kind, school fees and extra charges alike: a template saved as
+      // an extra charge must not vanish from the list somebody just saved it in.
+      const r = await api.feeTemplates(token, 'all');
       setTemplates(r.templates || []);
     } catch (e) { setError(e.message); setTemplates([]); }
   }, [token]);
@@ -577,5 +579,236 @@ function StudentPicker({ token, value, onChange }) {
     <Select label="Pupil" value={String(value || '')} onChange={onChange}
             placeholder="Which pupil?" searchable
             options={students.map(s => ({ label: s.name, value: String(s.id), note: s.class_name }))} />
+  );
+}
+
+
+// ── Extra charges ───────────────────────────────────────────────────────────
+//
+// School fees are billed once a term. Everything else a school asks for
+// mid-term — excursion, sports week, mock exams, BECE registration, speech day
+// — is raised here and lands on each pupil's EXISTING term bill as extra lines,
+// so a parent still has one bill and one balance to settle rather than three
+// pieces of paper and an argument at the gate.
+//
+// Elevated, on every server. This raises what every family in a class is asked
+// to pay, and that is not the same question as "may this person take a payment".
+
+export function Supplementary() {
+  const { token } = useAuth();
+  const { classes } = useClasses(token);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [note, setNote] = useState(null);
+  const [applying, setApplying] = useState(null);
+  const [scope, setScope] = useState('all');
+  const [classId, setClassId] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try { setData(await api.supplementary(token)); }
+    catch (e) { setError(e.message); setData({ templates: [] }); }
+  }, [token]);
+  useEffect(() => { load(); }, [load]);
+
+  async function apply() {
+    setBusy(true); setError(null);
+    try {
+      const r = await api.applySupplementary(token, {
+        templateId: applying.id,
+        termId: data?.term?.id,
+        scope,
+        classId: scope === 'class' && classId ? Number(classId) : undefined,
+      });
+      setNote(`“${r.template_name || applying.name}” added to ${r.applied} bill(s)`
+        + (r.skipped ? `, ${r.skipped} already had it` : '')
+        + ` — ${cedis(r.total_amount)} in all.`);
+      setApplying(null);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function withdraw(tpl) {
+    setBusy(true); setError(null);
+    try {
+      const r = await api.removeSupplementary(token, { templateId: tpl.id, termId: data?.term?.id });
+      setNote(`Withdrawn from ${r.removed} bill(s). Each one is back to what it was.`);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  const rows = data?.templates || [];
+
+  return (
+    <View style={{ gap: spacing.md }}>
+      <ErrorNote message={error} />
+      {note ? <SuccessNote message={note} /> : null}
+
+      <Bar left={<Muted>
+        {data?.term
+          ? `Added to the bills already raised for ${data.term.label}. A parent still has one bill.`
+          : 'Added to the bills already raised for the running term.'}
+      </Muted>} />
+
+      {data === null ? <Loading label="Reading the charges…" />
+        : rows.length === 0 ? (
+          <EmptyState icon="layers" title="No extra charges yet"
+                      message={'Write one under Fee Templates — choose "An extra charge" as the kind — '
+                             + 'then add it to the term\'s bills here.'} />
+        ) : (
+          <Panel padded={false} title="Extra charges"
+                 subtitle="What each one costs, and how many of this term's bills it is already on">
+            <View style={{ padding: spacing.lg }}>
+              <DataTable
+                keyExtractor={(r) => String(r.id)}
+                columns={[
+                  { key: 'name', label: 'Charge', render: (r) => (
+                    <View style={{ minWidth: 0 }}>
+                      <Text numberOfLines={1} style={{ ...type.small, fontWeight: '700', color: colors.text }}>{r.name}</Text>
+                      <Muted numberOfLines={1}>{r.class_name || 'Every class'}</Muted>
+                    </View>
+                  ) },
+                  { key: 'items', label: 'Lines', align: 'right', width: 80 },
+                  { key: 'total', label: 'Per pupil', align: 'right', width: 130,
+                    render: (r) => cedis(r.total) },
+                  { key: 'applied_to', label: 'On bills', align: 'right', width: 110,
+                    render: (r) => (r.applied_to
+                      ? <Badge tone="success" label={`${r.applied_to}`} />
+                      : <Muted>—</Muted>) },
+                  { key: 'act', label: '', align: 'right', width: 210, render: (r) => (
+                    <View style={{ flexDirection: 'row', gap: spacing.sm, justifyContent: 'flex-end' }}>
+                      <Button title="Add to bills" size="sm" full={false} disabled={busy}
+                              onPress={() => { setScope('all'); setClassId(''); setApplying(r); }} />
+                      {r.applied_to ? (
+                        <Button title="Withdraw" size="sm" variant="ghost" full={false} disabled={busy}
+                                onPress={() => withdraw(r)} />
+                      ) : null}
+                    </View>
+                  ) },
+                ]}
+                rows={rows} />
+            </View>
+          </Panel>
+        )}
+
+      <Sheet visible={!!applying} onClose={() => setApplying(null)}
+             title={applying ? `Add “${applying.name}” to bills` : ''}>
+        {applying ? (
+          <>
+            <Muted>
+              {cedis(applying.total)} a pupil, added as extra lines to bills that already exist.
+              Doing this twice does not charge twice.
+            </Muted>
+            <Divider />
+            <SegmentedControl value={scope} onChange={setScope}
+                              options={[{ label: 'Every pupil', value: 'all' },
+                                        { label: 'One class', value: 'class' }]} />
+            {scope === 'class' ? (
+              <Select label="Class" value={classId} onChange={setClassId} placeholder="Pick a class"
+                      options={(classes || []).map(c => ({ label: c.name, value: String(c.id) }))} />
+            ) : null}
+            <Button title={busy ? 'Adding…' : 'Add the charge'} busy={busy}
+                    disabled={busy || (scope === 'class' && !classId)} onPress={apply} />
+          </>
+        ) : null}
+      </Sheet>
+    </View>
+  );
+}
+
+// ── Withdrawn bills ─────────────────────────────────────────────────────────
+//
+// A voided bill is hidden from the bills list, the debtors report and every
+// total — which is exactly what makes this screen worth having. It is the only
+// place anybody can see what was withdrawn, by whom, and on what stated
+// grounds, and put it back if it should not have been.
+
+export function VoidedBills() {
+  const { token } = useAuth();
+  const [allTerms, setAllTerms] = useState(false);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [note, setNote] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try { setData(await api.voidedBills(token, allTerms ? { all: '1' } : {})); }
+    catch (e) { setError(e.message); setData({ bills: [] }); }
+  }, [token, allTerms]);
+  useEffect(() => { load(); }, [load]);
+
+  async function restore(row) {
+    setBusy(true); setError(null);
+    try {
+      await api.restoreBill(token, row.id);
+      setNote(`${row.student_name}'s bill is back on the list and counting towards the term.`);
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  const rows = data?.bills || [];
+
+  return (
+    <View style={{ gap: spacing.md }}>
+      <ErrorNote message={error} />
+      {note ? <SuccessNote message={note} /> : null}
+
+      <Bar left={<SegmentedControl value={allTerms ? 'all' : 'term'}
+                                   onChange={(v) => setAllTerms(v === 'all')}
+                                   options={[{ label: 'This term', value: 'term' },
+                                             { label: 'Every term', value: 'all' }]} />}
+           right={<Muted>Money already received against a withdrawn bill stays in Finance.</Muted>} />
+
+      {data === null ? <Loading label="Reading the withdrawn bills…" />
+        : rows.length === 0 ? (
+          <EmptyState icon="tick" title="No bills have been withdrawn"
+                      message="A withdrawn bill is hidden from the bills list, the arrears and every total. There are none." />
+        ) : (
+          <Panel padded={false} title="Withdrawn bills"
+                 subtitle="What was taken off the books, by whom, and why">
+            <View style={{ padding: spacing.lg }}>
+              <DataTable
+                keyExtractor={(r) => String(r.id)}
+                columns={[
+                  { key: 'student_name', label: 'Pupil', render: (r) => (
+                    <View style={{ minWidth: 0 }}>
+                      <Text numberOfLines={1} style={{ ...type.small, fontWeight: '700', color: colors.text }}>
+                        {r.student_name || `${r.surname || ''} ${r.first_name || ''}`.trim()}
+                      </Text>
+                      <Muted numberOfLines={1}>{[r.class_name, r.index_number].filter(Boolean).join(' · ')}</Muted>
+                    </View>
+                  ) },
+                  { key: 'term_label', label: 'Term', width: 140 },
+                  { key: 'total_billed', label: 'Was billed', align: 'right', width: 130,
+                    render: (r) => cedis(r.total_billed) },
+                  { key: 'total_paid', label: 'Paid', align: 'right', width: 120,
+                    render: (r) => (Number(r.total_paid) > 0
+                      ? <Badge tone="warning" label={cedis(r.total_paid)} />
+                      : <Muted>—</Muted>) },
+                  { key: 'void_reason', label: 'Why, and who', render: (r) => (
+                    <View style={{ minWidth: 0 }}>
+                      <Text numberOfLines={2} style={{ ...type.small, color: colors.text }}>{r.void_reason || '—'}</Text>
+                      <Muted numberOfLines={1}>
+                        {[r.voided_by_name, shortDate(r.voided_at)].filter(Boolean).join(' · ')}
+                      </Muted>
+                    </View>
+                  ) },
+                  { key: 'act', label: '', align: 'right', width: 130, render: (r) => (
+                    data?.may_restore
+                      ? <Button title="Put it back" size="sm" variant="outline" full={false}
+                                disabled={busy} onPress={() => restore(r)} />
+                      : null
+                  ) },
+                ]}
+                rows={rows} />
+            </View>
+          </Panel>
+        )}
+    </View>
   );
 }

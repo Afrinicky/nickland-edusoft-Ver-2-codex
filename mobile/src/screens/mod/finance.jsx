@@ -387,3 +387,33 @@ export function Budgets() {
     </OfficeScreen>
   );
 }
+
+// ── The workbook ────────────────────────────────────────────────────────────
+//
+// The one place in Finance that is not served here, and it is not a permission
+// matter — it is what the workbook IS. It exists so a school whose computer has
+// died can keep trading in Excel and import the result back: a file written to
+// that machine's disk and read from it again. There is nothing for a browser to
+// do with it, and a tab that silently drew nothing would read as broken.
+//
+// So the tab stays and says where the job is done. Somebody looking for the
+// workbook has a reason to be looking, and "it is on the office computer" is
+// the answer they need.
+export function Workbook() {
+  return (
+    <Panel title="The finance workbook"
+           subtitle="Built and read back on the school's own computer">
+      <EmptyState
+        icon="book"
+        title="The workbook is built on the office computer"
+        message={
+          'Finance → Workbook on the installed application writes the whole of the '
+          + "school's money — fees, canteen, books, transport, other income, expenses "
+          + 'and payroll — into one Excel file, and reads a filled-in copy back in. '
+          + 'Both halves are files on that machine, so the browser has nothing to '
+          + 'open. Everything else in Finance is here.'
+        }
+      />
+    </Panel>
+  );
+}

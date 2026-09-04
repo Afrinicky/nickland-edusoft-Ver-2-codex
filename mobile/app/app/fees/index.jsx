@@ -8,7 +8,7 @@ import Payments from '../../../src/screens/finance/collections';
 import OnlinePayments from '../../../src/screens/finance/online';
 import Debtors from '../../../src/screens/finance/debtors';
 import {
-  FeesDashboard, FeeTemplates, Discounts, Books, BulkPaySheet,
+  FeesDashboard, FeeTemplates, Discounts, Books, BulkPaySheet, Supplementary, VoidedBills,
 } from '../../../src/screens/mod/fees';
 
 export default function Fees() {
@@ -22,10 +22,12 @@ export default function Fees() {
             case 'templates': return <FeeTemplates />;
             case 'payments':  return <Payments />;
             case 'bulk':      return <BulkPaySheet />;
+            case 'supplementary': return <Supplementary />;
             case 'discounts': return <Discounts />;
             case 'books':     return <Books />;
             case 'online':    return <OnlinePayments />;
             case 'debtors':   return <Debtors />;
+            case 'voided':    return <VoidedBills />;
             default:          return null;
           }
         }}
