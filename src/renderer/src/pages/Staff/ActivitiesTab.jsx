@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { sanitizeForForm } from '../../lib/formSafe.js';
+import { isSupervisor as isSupervisorRole } from '../../lib/roles.js';
 
 const ACTIVITY_TYPES = [
   'Staff Meeting', 'Department Meeting', 'Parent-Teacher Meeting',
@@ -23,7 +24,7 @@ export default function ActivitiesTab() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
 
-  const isSupervisor = ['Administrator', 'Proprietor', 'Head Teacher'].includes(currentUser?.designation);
+  const isSupervisor = isSupervisorRole(currentUser?.designation);
 
   async function refresh() {
     setLoading(true);

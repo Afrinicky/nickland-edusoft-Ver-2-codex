@@ -26,7 +26,7 @@ import Backup from './Backup.jsx';
 // Settings grouped into logical sections.
 //
 // Reaching Settings at all needs the `settings` module, which in practice
-// means an Administrator or Proprietor. Some pages here configure a module of
+// means the Super Admin or the Proprietor. Some pages here configure a module of
 // their own, though, and an account allowed into Settings without payroll has
 // no business seeing the payroll configuration — so those carry a `module` and
 // are hidden the same way the main sidebar hides a section.

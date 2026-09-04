@@ -268,7 +268,7 @@ def reverse_payment(db, actor, payment_id, reason):
     """
     if not security.is_elevated(actor):
         return {"ok": False, "status": 403,
-                "error": "Only an Administrator or the Proprietor may reverse a payment."}
+                "error": "Only the Super Admin or the Proprietor may reverse a payment."}
     reason = str(reason or "").strip()
     if len(reason) < 5:
         return {"ok": False, "status": 400, "error": "Give the reason the payment is being reversed."}

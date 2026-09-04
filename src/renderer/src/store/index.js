@@ -1,5 +1,6 @@
 // Nickland Edusoft — Global Store (Zustand)
 import { create } from 'zustand';
+import { isElevated, isSupervisor } from '../lib/roles.js';
 
 export const useStore = create((set, get) => ({
   // ── Auth ─────────────────────────────────────────────
@@ -47,12 +48,12 @@ export const useStore = create((set, get) => ({
   // can('payroll', 'view') | can('finance', 'edit')
   // Levels: view < create < edit < delete (each implies all lower? No — they are independent)
   can: (module, action = 'view') => {
-    // An administrator or proprietor runs the school and is held back nowhere.
+    // The Proprietor and the Super Admin run the school and are held back nowhere.
     // Checked before the map is consulted, so a permission set that came back
     // empty — a failed load, an account whose designation row went missing —
     // cannot hide the app from the person who owns it.
     const designation = get().currentUser?.designation;
-    if (['Proprietor', 'Administrator'].includes(designation)) return true;
+    if (isElevated(designation)) return true;
     const perms = get().permissions || {};
     const p = perms[module];
     if (!p) return false;
@@ -77,11 +78,11 @@ export const useStore = create((set, get) => ({
   // and they combine, because a teacher can hold a class AND take a subject
   // in two others.
   //
-  // Proprietor, Administrator and Head Teacher are unrestricted: a head who
+  // Proprietor, Super Admin and Head Teacher are unrestricted: a head who
   // could see only their own class could not check anybody's marks.
   isUnrestricted: () => {
     const d = get().currentUser?.designation;
-    return ['Proprietor', 'Administrator', 'Head Teacher'].includes(d);
+    return isSupervisor(d);
   },
 
   // Has this teacher been assigned to this class — as its teacher, or by

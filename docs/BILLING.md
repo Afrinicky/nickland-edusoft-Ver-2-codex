@@ -71,7 +71,7 @@ template covers their class, which the Bills hub also flags in red.
 
 ## Withdrawing or correcting an issued bill
 
-Restricted to the **Proprietor** and the **Administrator**, enforced on the Node
+Restricted to the **Proprietor** and the **Super Admin**, enforced on the Node
 side (`electron/ipc/fees_billing.js` → `requireElevated`), not in the UI. An
 Accountant with `fees.delete` still cannot do it: a bill is what a parent was
 told they owe.
@@ -115,7 +115,7 @@ Fees
 │   ├── Fee Templates         school-fees schedules + extra-charge definitions
 │   ├── Extra Charges         raise/withdraw an extra onto existing term bills
 │   ├── Books
-│   └── Voided                Proprietor / Administrator only
+│   └── Voided                Proprietor / Super Admin only
 ├── Payments
 │   ├── Bulk Payment Sheet
 │   └── Mobile Payments

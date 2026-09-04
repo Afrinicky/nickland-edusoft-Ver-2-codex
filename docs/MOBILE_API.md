@@ -20,7 +20,7 @@ database itself.
 |------|-----|-------|
 | `parent` | Guardians | Only their own children (fees, canteen, attendance, reports, notices). |
 | `staff` | Teachers & other staff | Exactly what their **designation permissions** allow (same matrix as desktop). |
-| `staff` + admin | Proprietor / Administrator | All staff modules; structural config stays desktop-only. |
+| `staff` + admin | Proprietor / Super Admin | All staff modules; structural config stays desktop-only. |
 
 Parents are a **separate identity** (`parents` table) linked to `students` via
 `parent_students`. A parent self-registers only if their phone/email matches a
@@ -136,7 +136,7 @@ every staff route above.
 
 The register, the canteen sheet and the end-of-term remarks belong to the one
 teacher answerable for the class (`is_class_teacher`), not to everyone who
-takes a subject in it. Proprietors, Administrators and Head Teachers are
+takes a subject in it. Proprietors, Super Admins and Head Teachers are
 unrestricted as to *which* class; money and system modules are still theirs
 only if the school granted them.
 

@@ -7,7 +7,7 @@
 //   3. Books (billed once per academic year, carried into T2/T3 as Arrears)
 //
 // Correcting or withdrawing an issued bill is restricted to the Proprietor and
-// the Administrator. A bill is what a parent was told they owe, so changing one
+// the Super Admin. A bill is what a parent was told they owe, so changing one
 // after the fact is a decision with consequences; the controls are hidden from
 // everyone else and the Node side refuses the call regardless.
 import React, { useEffect, useState } from 'react';

@@ -135,7 +135,7 @@ mobile server is already serving it. Full guide:
 | CI | GitHub Actions |
 
 ## First Run
-On first launch the app shows a one-time **Create Administrator Account** screen. Fill in the admin name, username, and password. After that, the standard login screen appears on every launch. Create accounts for all other staff in **Settings → Users & Access**.
+On first launch the app shows a one-time **Create Super Admin Account** screen. Fill in the admin name, username, and password. After that, the standard login screen appears on every launch. Create accounts for all other staff in **Settings → Users & Access**.
 
 ## Project Structure
 ```

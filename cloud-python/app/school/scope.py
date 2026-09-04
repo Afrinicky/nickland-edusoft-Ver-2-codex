@@ -22,7 +22,9 @@ only see their own class could not check anybody else's marks, which is most of
 the job.
 """
 
-UNRESTRICTED_DESIGNATIONS = ["Proprietor", "Administrator", "Head Teacher"]
+from ..portals import ELEVATED_NAMES
+
+UNRESTRICTED_DESIGNATIONS = [*ELEVATED_NAMES, "Head Teacher"]
 
 
 def _empty():

@@ -64,7 +64,8 @@ const MODULE_KEYS = MODULES.map(m => m.key);
 // Designations that are always granted everything, regardless of stored rows.
 // Mirrors the safety net in resolveEffectivePermissions and _security.isElevated
 // — surfaced here so the UI can show them as locked "Full" rather than editable.
-const ALWAYS_FULL = ['Proprietor', 'Administrator'];
+const { ELEVATED_NAMES } = require('./_portals');
+const ALWAYS_FULL = ELEVATED_NAMES;
 
 // level → the four canonical booleans.
 function levelToPerms(level) {

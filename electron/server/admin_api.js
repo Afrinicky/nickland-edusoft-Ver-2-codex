@@ -21,7 +21,7 @@
 // Three things are deliberately NOT here, and should not be added:
 //
 //   • Approving a password reset. That happens on the desktop, face to face,
-//     because the whole point of the code an Administrator reads out is that
+//     because the whole point of the code the Super Admin reads out is that
 //     the person asking is standing in front of them. Raising and redeeming a
 //     request are already reachable remotely; approval is the human step.
 //   • Any read of a stored gateway secret. Settings answer whether a key is
@@ -475,7 +475,7 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     return json(res, 200, {
       ok: true, counts, sync,
       // Requests raised from a phone or a browser, waiting for somebody to
-      // approve them at the desktop. Shown here so an Administrator knows to
+      // approve them at the desktop. Shown here so the Super Admin knows to
       // go and do it — never approved here.
       password_requests: db.prepare(
         "SELECT COUNT(*) c FROM password_reset_requests WHERE status = 'pending'"
@@ -555,7 +555,7 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     if (!active) {
       const admins = db.prepare(`
         SELECT COUNT(*) c FROM users u JOIN designations d ON d.id = u.designation_id
-        WHERE u.is_active = 1 AND d.name IN ('Proprietor','Administrator') AND u.id <> ?
+        WHERE u.is_active = 1 AND d.name IN ('Proprietor','Super Admin','Administrator') AND u.id <> ?
       `).get(id).c;
       if (admins === 0) return bad(res, 'That is the last administrator account. The school would be locked out.');
     }
@@ -579,7 +579,7 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     if (!u) return missing(res, 'No such account.');
     const d = db.prepare('SELECT id, name FROM designations WHERE id = ?').get(designationId);
     if (!d) return bad(res, 'That role does not exist.');
-    if (id === ctx.user.id && !['Proprietor', 'Administrator'].includes(d.name)) {
+    if (id === ctx.user.id && !portals.isElevated(d.name)) {
       return bad(res, 'You cannot take the administrator role off the account you are signed in with.');
     }
     db.prepare('UPDATE users SET designation_id = ? WHERE id = ?').run(designationId, id);

@@ -1049,7 +1049,7 @@ function seedDefaults(db) {
     const ins = db.prepare('INSERT INTO designations (name, description, is_system) VALUES (?, ?, ?)');
     const desigs = [
       ['Proprietor', 'Overall owner/director of the school. Full access to all modules.', 1],
-      ['Administrator', 'System administrator. Manages users, settings, and all modules.', 1],
+      ['Super Admin', 'Overall authority over the system. Manages users, access, settings and every module.', 1],
       ['Head Teacher', 'Academic and administrative head. Full access except user management.', 1],
       ['Class Teacher', 'Assigned to a specific class. Access to Academics and Canteen.', 1],
       ['Subject Teacher', 'Teaches specific subjects. Access to Academics and Canteen.', 1],
@@ -1065,7 +1065,7 @@ function seedDefaults(db) {
     ];
     const permMap = {
       'Proprietor':    { dashboard:3, students:3, academics:3, fees:3, canteen:3, staff:3, payroll:3, finance:3, notifications:3, settings:3 },
-      'Administrator': { dashboard:3, students:3, academics:3, fees:3, canteen:3, staff:3, payroll:3, finance:3, notifications:3, settings:3 },
+      'Super Admin':   { dashboard:3, students:3, academics:3, fees:3, canteen:3, staff:3, payroll:3, finance:3, notifications:3, settings:3 },
       'Head Teacher':  { dashboard:3, students:3, academics:3, fees:3, canteen:3, staff:3, payroll:1, finance:1, notifications:3, settings:1 },
       'Class Teacher': { dashboard:1, students:1, academics:3, fees:0, canteen:3, staff:0, payroll:0, finance:0, notifications:1, settings:0 },
       'Subject Teacher':{ dashboard:1, students:1, academics:3, fees:0, canteen:3, staff:0, payroll:0, finance:0, notifications:1, settings:0 },
@@ -2068,6 +2068,30 @@ function runMigrations(db) {
     db.prepare(`
       UPDATE settings SET value = 'arkesel'
       WHERE key = 'sms_provider' AND value IS NOT 'arkesel'
+    `).run();
+  });
+
+  //  Rename the "Administrator" designation to "Super Admin".
+  //
+  //  Every school has administrators — the secretary who keeps the roll, the
+  //  bursar's assistant — so naming the ONE account with total authority the
+  //  same thing meant a user list could not be read. The row is renamed rather
+  //  than replaced, so every user pointing at it, every permission row keyed to
+  //  it and every audit entry naming it stay exactly where they are: this is a
+  //  label change and nothing else.
+  //
+  //  Skipped if the school has already made a designation called "Super Admin"
+  //  by hand, because merging two rows would move accounts between roles, which
+  //  is not a thing a migration may quietly do. Such a school keeps both, and
+  //  both are recognised — see _portals.isSuperAdminName.
+  safe(() => {
+    const taken = db.prepare("SELECT id FROM designations WHERE name = 'Super Admin'").get();
+    if (taken) return;
+    db.prepare(`
+      UPDATE designations
+         SET name = 'Super Admin',
+             description = 'Overall authority over the system. Manages users, access, settings and every module.'
+       WHERE name = 'Administrator'
     `).run();
   });
 }

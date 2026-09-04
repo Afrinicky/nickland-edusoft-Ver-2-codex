@@ -108,7 +108,7 @@ function subjectContext(db, subject) {
   `).get(subject.subject_id);
   if (!u) return null;
   const perms = resolveEffectivePermissions(db, u.id);
-  const isAdmin = ['Proprietor', 'Administrator'].includes(u.designation);
+  const isAdmin = portals.isElevated(u.designation);
   return { role: 'staff', user: u, designation: u.designation, is_admin: isAdmin, permissions: perms };
 }
 
@@ -334,6 +334,21 @@ function createApiServer(db, opts = {}) {
       },
       logo: media.logoUri(db, getSetting),
       currency: getSetting(db, 'payment_currency', 'GHS'),
+      // What the school chose in Settings -> Appearance. The desktop has
+      // written these into its own CSS custom properties since the first
+      // release; the app reads the same keys and derives the same shades, so a
+      // school that matched its crest sees it on the phone and in the browser
+      // rather than on one screen out of three. Sent unauthenticated with the
+      // rest of the identity: a colour is not a secret, and the login screen is
+      // the first place a parent should recognise their own school.
+      theme: {
+        school_color_primary:    getSetting(db, 'school_color_primary', ''),
+        school_color_accent:     getSetting(db, 'school_color_accent', ''),
+        school_color_background: getSetting(db, 'school_color_background', ''),
+        school_color_foreground: getSetting(db, 'school_color_foreground', ''),
+        ui_font_family:          getSetting(db, 'ui_font_family', ''),
+        ui_font_size_base:       getSetting(db, 'ui_font_size_base', ''),
+      },
     });
   }, { public: true });
 
@@ -356,7 +371,7 @@ function createApiServer(db, opts = {}) {
   // own screens use (electron/server/passwords.js), so a rule cannot hold in
   // one place and not the other. Raising a request and redeeming a code both
   // happen before sign-in, so neither can require a token; approving is not
-  // here at all, because an Administrator does that on the desktop.
+  // here at all, because the Super Admin does that on the desktop.
   add('POST', `${API}/auth/password-reset/request`, async (ctx, req, res, params, body, ip) => {
     if (rateLimited(ip, body.username)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
     return json(res, 200, passwords.requestReset(db, {
@@ -477,6 +492,19 @@ function createApiServer(db, opts = {}) {
       // headed a teacher's screen "Nickland Edusoft" rather than their own
       // school, which the cloud's /staff/me has always returned.
       school: { name: getSetting(db, 'school_name', 'School') },
+      // Which parts of the system this school runs. The desktop's own sidebar
+      // hides the canteen outright for a school that has switched it off,
+      // rather than offering an empty module; the app reads the same switches
+      // so both draw the same school.
+      features: {
+        feature_canteen_enabled:          getSetting(db, 'feature_canteen_enabled', ''),
+        feature_notifications_enabled:    getSetting(db, 'feature_notifications_enabled', ''),
+        feature_leave_management_enabled: getSetting(db, 'feature_leave_management_enabled', ''),
+        feature_transport_enabled:        getSetting(db, 'feature_transport_enabled', ''),
+        feature_ssnit_enabled:            getSetting(db, 'feature_ssnit_enabled', ''),
+        feature_paye_enabled:             getSetting(db, 'feature_paye_enabled', ''),
+        staff_clockin_enabled:            getSetting(db, 'staff_clockin_enabled', ''),
+      },
       // So the phone insists on a new password before anything else, the same
       // way the desktop's login screen does.
       must_change_password: !!ctx.user.must_change_password,

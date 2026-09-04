@@ -28,9 +28,19 @@ export const PORTALS = [
 // The Super Admin: the one account with overall control of the system itself.
 // A designation, not a permission tick — and not the Proprietor, who owns the
 // school and is elevated over its money but does not run the system.
-export const SUPER_ADMIN = 'Administrator';
+// Renamed from "Administrator" in v2.1: every school has administrators, and
+// naming the one account with total authority the same thing made a user list
+// unreadable. The old name is still accepted, everywhere and always — a host a
+// release behind still sends it.
+export const SUPER_ADMIN = 'Super Admin';
+export const SUPER_ADMIN_LEGACY = 'Administrator';
+
+const normaliseRole = (name) => String(name || '').trim().toLowerCase().replace(/\s+/g, '');
+const SUPER_NAMES = new Set([SUPER_ADMIN, SUPER_ADMIN_LEGACY].map(normaliseRole));
+export const isSuperAdminName = (name) => SUPER_NAMES.has(normaliseRole(name));
+
 export const isSuperAdmin = (profile) => !!profile && (
-  profile.is_super === true || profile.designation === SUPER_ADMIN
+  profile.is_super === true || isSuperAdminName(profile.designation)
 );
 
 const BY_KEY = new Map(PORTALS.map(p => [p.key, p]));

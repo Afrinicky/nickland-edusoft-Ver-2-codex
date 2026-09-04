@@ -35,10 +35,10 @@ small marker (•) so they are granted deliberately.
 
 ## Roles
 
-- The built-in roles (Proprietor, Administrator, Head Teacher, Class/Subject
+- The built-in roles (Proprietor, Super Admin, Head Teacher, Class/Subject
   Teacher, Accountant, Secretary, Cook, Security, Cleaner) can be re-levelled and
   re-described, but not deleted.
-- **Proprietor** and **Administrator** are always Full and cannot be reduced —
+- **Proprietor** and **Super Admin** are always Full and cannot be reduced —
   every school needs at least one account that can never be locked out.
 - Custom roles can be created, optionally copied from an existing role, and
   deleted. Deleting a role leaves its users with **no role** (no access) rather
@@ -57,7 +57,7 @@ The seeds match how a Ghanaian school is actually staffed:
 
 ## Rules
 
-- Only an Administrator or Proprietor (anyone with **settings → Manage**) can
+- Only the Super Admin or the Proprietor (anyone with **settings → Manage**) can
   change roles or overrides. Every change is written to the audit trail with who
   and what.
 - Backend handlers live in `electron/ipc/access.js`; the shared model

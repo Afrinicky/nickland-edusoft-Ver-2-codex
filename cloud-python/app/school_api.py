@@ -152,6 +152,50 @@ async def schools():
         return {"ok": True, "online": True, "schools": []}
 
 
+@router.get("/branding")
+async def branding(school_id: str = ""):
+    """One school's identity, before anybody signs in.
+
+    Public, and it has to be: the first screen a parent or a teacher sees should
+    be their own school — its crest, its name, its colours — not a generic page
+    that could belong to anybody. Nothing here is a secret; it is what the
+    school prints on its own letterhead.
+    """
+    school_id = str(school_id or "").strip()
+    if not school_id:
+        return _err(400, "school_id is required")
+    try:
+        db = sdb.SchoolDb(school_id)
+        get = db.get_setting
+    except Exception:
+        return _err(404, "Unknown school")
+    phone = get("school_phone_1", "")
+    return {
+        "ok": True,
+        "school": {
+            "name": get("school_name", "School"),
+            "short_name": get("school_abbreviation", ""),
+            "motto": get("school_motto", ""),
+            "type": get("school_type", ""),
+            "address": get("school_address", "") or get("school_location", ""),
+            "digital_address": get("school_digital_address", ""),
+            "website": get("school_website", ""),
+        },
+        "contact": {
+            "phone": phone,
+            "phone_alt": get("school_phone_2", ""),
+            "email": get("school_email", ""),
+            "whatsapp": get("school_whatsapp", "") or phone,
+        },
+        "logo": None,
+        "currency": get("payment_currency", "GHS"),
+        "theme": {k: get(k, "") for k in (
+            "school_color_primary", "school_color_accent",
+            "school_color_background", "school_color_foreground",
+            "ui_font_family", "ui_font_size_base")},
+    }
+
+
 @router.post("/signin")
 async def signin(request: Request):
     body = await _json(request)
@@ -215,7 +259,19 @@ async def me(authorization: str = Header(None)):
         "portals": portals.portal_list_for(actor),
         "home_portal": portals.home_portal(actor),
         "school": {"id": db.school_id, "name": db.get_setting("school_name", "School")},
+        # Which parts of the system this school actually runs. The desktop hides
+        # the canteen outright for a school that does not have one, rather than
+        # showing an empty module; the app reads the same switches from here so
+        # the two draw the same school.
+        "features": _features(db),
     }
+
+
+def _features(db):
+    keys = ["feature_canteen_enabled", "feature_notifications_enabled",
+            "feature_leave_management_enabled", "feature_transport_enabled",
+            "feature_ssnit_enabled", "feature_paye_enabled", "staff_clockin_enabled"]
+    return {k: db.get_setting(k, "") for k in keys}
 
 
 @router.post("/password")

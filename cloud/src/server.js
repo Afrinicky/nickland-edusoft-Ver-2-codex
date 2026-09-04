@@ -198,7 +198,7 @@ function createServer(store) {
       // ── Staff password reset (public) ──
       // Raising a request and redeeming an approved code both happen before
       // sign-in, so neither can require a token. Approval itself is not here
-      // and never will be: an Administrator does that on the school's desktop,
+      // and never will be: the Super Admin does that on the school's desktop,
       // face to face, and only the hash of the code they hand over is
       // projected up for this to check against.
       if (p === '/api/v1/staff/password-reset/request' && req.method === 'POST') {

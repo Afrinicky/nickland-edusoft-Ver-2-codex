@@ -75,7 +75,7 @@ could open and not use — which is the exact failure the product is written
 against.
 
 **System is a designation, not a permission tick.** A `settings` tick can be
-granted by mistake; being the Administrator is a decision somebody made about a
+granted by mistake; being the Super Admin is a decision somebody made about a
 person. The **Proprietor is deliberately not the Super Admin**: they own the
 school and stay elevated over its money — they may reverse a payment and void a
 bill — but the person who signs the cheques should not also be the one who can

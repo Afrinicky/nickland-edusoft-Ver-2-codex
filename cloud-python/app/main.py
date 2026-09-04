@@ -141,7 +141,8 @@ def create_app(store=None) -> FastAPI:
         rec = next((s["payload"] for s in S().list_snapshots(school_id, "school_profile")
                     if s.get("payload")), None)
         if not rec:
-            return {"ok": True, "school": {"name": name}, "contact": {}, "logo": None, "currency": "GHS"}
+            return {"ok": True, "school": {"name": name}, "contact": {}, "logo": None,
+                    "currency": "GHS", "theme": {}}
         school = dict(rec.get("school") or {})
         school.setdefault("name", name)
         return {
@@ -150,6 +151,10 @@ def create_app(store=None) -> FastAPI:
             "contact": rec.get("contact") or {},
             "logo": rec.get("logo"),
             "currency": rec.get("currency") or "GHS",
+            # The colours the school chose on its own desktop, projected up with
+            # the crest. A portal that draws the school's badge in somebody
+            # else's violet is a portal parents do not trust.
+            "theme": rec.get("theme") or {},
         }
 
     @app.post("/api/v1/portal/login")

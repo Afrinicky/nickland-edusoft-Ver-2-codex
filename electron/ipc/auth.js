@@ -9,6 +9,7 @@ let _bcrypt = null;
 function bcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
 const passwords = require('../server/passwords');
 const security = require('./_security');
+const { SUPER_ADMIN } = require('./_portals');
 const { setSetting } = require('../utils/idgen');
 
 // ── Failed-login throttling ─────────────────────────────
@@ -56,7 +57,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   });
 
   // ── Create first admin account (bootstrap) ────────────
-  // Runs exactly once, on a brand-new database. It creates an Administrator
+  // Runs exactly once, on a brand-new database. It creates the Super Admin
   // without asking for any credentials, so it must refuse to run again once
   // setup is complete — otherwise anyone able to reach this channel could mint
   // themselves a full-access account on a live school database.
@@ -75,7 +76,14 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     if (existing) return { ok: false, error: 'Username already exists.' };
 
     const hash = bcrypt().hashSync(password, 10);
-    const adminDesig = db.prepare("SELECT id FROM designations WHERE name = 'Administrator'").get();
+    // The designation was renamed from "Administrator" to "Super Admin"; a
+    // database restored from an older backup may still carry the old name, and
+    // a bootstrap that cannot find the row would create the school's first
+    // account with no designation at all — an owner locked out of their own
+    // system on the first screen.
+    const adminDesig = db.prepare(
+      "SELECT id FROM designations WHERE name IN ('Super Admin', 'Administrator') ORDER BY name = 'Super Admin' DESC"
+    ).get();
     db.prepare(`
       INSERT INTO users (username, password_hash, full_name, designation_id, is_active, must_change_password)
       VALUES (?, ?, ?, ?, 1, 0)
@@ -141,7 +149,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
         id: user.id,
         username: user.username,
         fullName: user.full_name,
-        designation: user.designation_name || 'Administrator',
+        designation: user.designation_name || SUPER_ADMIN,
         mustChangePassword: !!user.must_change_password,
         permissions: permMap,
       }
@@ -177,7 +185,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // ── Create user ───────────────────────────────────────
   ipcMain.handle('auth:create-user', (_e, { username, fullName, password, designationId, staffId }) => {
     if (!security.checkPermission(db, 'settings', 'create')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+      return { ok: false, error: 'Access denied. Only the Super Admin or the Proprietor can manage users.' };
     }
 
     if (!username || !String(username).trim()) return { ok: false, error: 'Username is required.' };
@@ -199,7 +207,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // ── Update user ───────────────────────────────────────
   ipcMain.handle('auth:update-user', (_e, { id, fullName, designationId, isActive, newPassword }) => {
     if (!security.checkPermission(db, 'settings', 'edit')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+      return { ok: false, error: 'Access denied. Only the Super Admin or the Proprietor can manage users.' };
     }
 
     if (newPassword) {
@@ -259,7 +267,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // ── Set permission override ───────────────────────────
   ipcMain.handle('auth:set-permission-override', (_e, { userId, module, canView, canCreate, canEdit, canDelete }) => {
     if (!security.checkPermission(db, 'settings', 'edit')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+      return { ok: false, error: 'Access denied. Only the Super Admin or the Proprietor can manage users.' };
     }
 
     db.prepare(`
@@ -284,7 +292,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 
   ipcMain.handle('auth:update-designation-permission', (_e, { designationId, module, canView, canCreate, canEdit, canDelete }) => {
     if (!security.checkPermission(db, 'settings', 'edit')) {
-      return { ok: false, error: 'Access denied. Only Administrators/Proprietors can manage users.' };
+      return { ok: false, error: 'Access denied. Only the Super Admin or the Proprietor can manage users.' };
     }
 
     db.prepare(`
@@ -579,6 +587,7 @@ function resolveEffectivePermissions(db, userId) {
   if (!designation) {
     try {
       const security = require('./_security');
+const { SUPER_ADMIN } = require('./_portals');
       if (security.getCurrentUserId() === userId) designation = security.getCurrentDesignation();
     } catch (_) { /* the session is a fallback, never a requirement */ }
   }

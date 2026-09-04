@@ -66,7 +66,7 @@ npm run build:win` (needs Node 20, Python, and VS Build Tools).
 ### 1B. Install and do first-run setup
 
 1. Run the `.exe` on the office PC and install.
-2. On first launch you'll see **Create Administrator Account** — set the admin
+2. On first launch you'll see **Create Super Admin Account** — set the admin
    name, username, and password. (This one-time screen never appears again.)
 3. Sign in, then configure the school in **Settings**:
    - **School Identity** (name, logo, motto, contacts) and **Branding**.

@@ -34,7 +34,7 @@ let BASE = null;
 let MODE = 'host';          // 'host' | 'cloud' | 'online'
 let SCHOOL_ID = null;       // required in cloud mode (chosen at connect time)
 let ROLE = null;            // 'parent' | 'staff' — which surface this session is on
-// Stamped on password requests so the Administrator approving one can see
+// Stamped on password requests so the Super Admin approving one can see
 // whether it came from a phone or a browser.
 const SOURCE = (typeof navigator !== 'undefined' && navigator.product !== 'ReactNative') ? 'web' : 'mobile';
 
@@ -284,7 +284,15 @@ export const api = {
   },
   // The school's crest, name and contact details. Public: the sign-in screen
   // should show the parent their own school before they have typed anything.
-  branding: () => request(MODE === 'cloud' ? `/portal/branding?school_id=${encodeURIComponent(SCHOOL_ID || '')}` : '/branding'),
+  branding: () => {
+    // Three modes, three places the same answer lives. `online` was reaching
+    // for the desktop's route, which that service does not serve, so every
+    // browser on the online school fell through to /info and drew a school
+    // with no crest and no colours.
+    if (MODE === 'cloud') return request(`/portal/branding?school_id=${encodeURIComponent(SCHOOL_ID || '')}`);
+    if (MODE === 'online') return request(`/school/branding?school_id=${encodeURIComponent(SCHOOL_ID || '')}`);
+    return request('/branding');
+  },
   health: () => request('/health'),
   schools: () => request('/portal/schools'),          // cloud: list tenants to pick from
   staffLogin: (username, password, device) =>
@@ -341,7 +349,7 @@ export const api = {
 
   // ── Passwords ──
   // Available on both connections. Approving a reset is on neither: an
-  // Administrator does that at the school, face to face, and hands over a
+  // Super Admin does that at the school, face to face, and hands over a
   // six-digit code. Everything here either raises a request or spends one.
   requestPasswordReset: ({ username, reason }) =>
     MODE === 'cloud'

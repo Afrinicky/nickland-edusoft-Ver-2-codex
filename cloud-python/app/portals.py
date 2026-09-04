@@ -18,12 +18,40 @@ PORTALS = [
 # A designation, not a permission tick. Not the Proprietor — they own the
 # school and are elevated over its money, but running the system is a different
 # job on purpose. See electron/ipc/_portals.js.
-SUPER_ADMIN = "Administrator"
+#
+# It was called "Administrator" for the first two releases, which was the wrong
+# word: every school has administrators, and naming the one account with total
+# authority the same thing made a user list unreadable. The old name is still
+# ACCEPTED and always will be — a projection pushed up before a school upgraded,
+# a database restored from an older backup, a phone a release behind.
+SUPER_ADMIN = "Super Admin"
+SUPER_ADMIN_LEGACY = "Administrator"
+
+
+def _norm(name):
+    """Case- and space-insensitive: a school that typed "superadmin" by hand
+    meant this, and a missing space is not a rule worth defending."""
+    return "".join(str(name or "").split()).lower()
+
+
+_SUPER_NAMES = {_norm(SUPER_ADMIN), _norm(SUPER_ADMIN_LEGACY)}
+
+# The designations held back nowhere. One list, imported by access, scope and
+# security, so "who is unrestricted" cannot be answered three different ways.
+ELEVATED_NAMES = ["Proprietor", SUPER_ADMIN, SUPER_ADMIN_LEGACY]
+
+
+def is_super_admin_name(name):
+    return _norm(name) in _SUPER_NAMES
+
+
+def is_elevated(name):
+    return name == "Proprietor" or is_super_admin_name(name)
 
 
 def is_super_admin(profile):
     return bool(profile) and (
-        profile.get("is_super") is True or profile.get("designation") == SUPER_ADMIN
+        profile.get("is_super") is True or is_super_admin_name(profile.get("designation"))
     )
 
 

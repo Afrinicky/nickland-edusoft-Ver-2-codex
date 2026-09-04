@@ -20,7 +20,7 @@ After signing in, you are taken to the **Homepage** — a grid of feature cards 
 Every module page also has a left sidebar for quick switching between modules.
 
 ## Roles & Permissions
-Nickland Edusoft uses a role-based access control system with 10 default roles: Proprietor, Administrator, Head Teacher, Class Teacher, Subject Teacher, Accountant, Secretary, Cook, Security, Cleaner.
+Nickland Edusoft uses a role-based access control system with 10 default roles: Proprietor, Super Admin, Head Teacher, Class Teacher, Subject Teacher, Accountant, Secretary, Cook, Security, Cleaner.
 
 Each role has default permissions that can be customised in **Settings → Designations**. Individual users can also be given extra access via permission overrides in **Settings → Users & Access**.
 
