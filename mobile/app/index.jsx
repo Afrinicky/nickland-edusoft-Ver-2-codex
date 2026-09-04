@@ -15,7 +15,7 @@ import { View, Text, Animated, Platform, Easing } from 'react-native';
 import { Redirect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '../src/auth';
-import { homeHref } from '../src/portals';
+import { landingHref } from '../src/modules';
 import { useBranding } from '../src/brand';
 import { Crest } from '../src/ui';
 import { useReducedMotion, EASE_OUT } from '../src/motion';
@@ -45,10 +45,10 @@ export default function Index() {
   // A portal connection is only usable once a school has been chosen.
   if (mode === 'cloud' && !schoolId) return <Redirect href="/connect" />;
   if (!token || !profile) return <Redirect href="/login" />;
-  // Where this account belongs: the most capable portal it holds, so a bursar
-  // opens on the office and a head teacher on the school rather than on a
-  // register neither of them takes.
-  return <Redirect href={homeHref(profile)} />;
+  // Home — the grid of what this account can open. There is no longer a "most
+  // capable portal" to land on: the app is one menu, and Home IS the menu. A
+  // parent has their own app inside this one and goes there.
+  return <Redirect href={landingHref(profile)} />;
 }
 
 /**

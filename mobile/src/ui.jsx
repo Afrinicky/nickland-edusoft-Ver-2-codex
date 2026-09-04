@@ -24,7 +24,7 @@
 //   • gradients behind body text,
 //   • cards nested inside cards.
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import {
   View, Text as RNText, TextInput, TouchableOpacity,
   StyleSheet, ScrollView, Platform, Modal as RNModal, Pressable, Image, Animated, Easing,
@@ -92,6 +92,15 @@ export function figureSize(value, base = 24) {
 }
 
 // ── page frame ──────────────────────────────────────────────────────────────
+// Set by a module page around the tab it is showing. See Screen, below, for
+// what it changes and why.
+const EmbeddedCtx = createContext(false);
+
+/** Mark everything inside as a tab within a page rather than a page itself. */
+export function Embedded({ children }) {
+  return <EmbeddedCtx.Provider value>{children}</EmbeddedCtx.Provider>;
+}
+
 /**
  * The body of a screen.
  *
@@ -102,6 +111,24 @@ export function figureSize(value, base = 24) {
  */
 export function Screen({ children, scroll = true, refreshControl, variant = 'page', padded = true, style, footer }) {
   const layout = useLayout();
+  const embedded = useContext(EmbeddedCtx);
+  // Embedded: this screen is a TAB inside a module page, which already has a
+  // heading, a tab strip, a scroller and a gutter around it. Left as-is it
+  // would nest a second scroller inside the first — two scroll bars, a mouse
+  // wheel that stops working halfway down the page, and a gutter applied twice.
+  //
+  // So an embedded screen becomes a plain box and lets the page own the
+  // scrolling and the margins. Nothing else about it changes, which is what
+  // makes it possible for one screen to be both a phone route and a desktop
+  // tab without being written twice.
+  if (embedded) {
+    return (
+      <View style={[styles.screenBody, { width: '100%', gap: spacing.md }, style]}>
+        {children}
+        {footer}
+      </View>
+    );
+  }
   const width = variant === 'full' ? { width: '100%' } : pageWidth(layout, variant);
   const pad = padded ? { padding: layout.gutter, gap: spacing.md } : null;
   const Body = scroll ? ScrollView : View;
@@ -223,11 +250,24 @@ const BUTTON_TONES = {
   chrome:  { bg: 'rgba(255,255,255,0.14)', fg: '#fff',     border: 'rgba(255,255,255,0.22)' },
 };
 
+/**
+ * `label`/`tone` are accepted alongside `title`/`variant`.
+ *
+ * Not a nicety. The kit settled on `title` and `variant`; thirty-six calls
+ * across the office screens were written with `label` and `tone` and nobody
+ * noticed, because a Button with no `title` renders as an empty primary
+ * button rather than as an error. A row of blank buttons on the collections
+ * screen is a thing a school reports as "the app is broken" — correctly.
+ *
+ * Accepting both is one line here against thirty-six edits that would go
+ * stale the next time somebody writes the other one from memory.
+ */
 export function Button({
-  title, onPress, disabled, busy, variant = 'primary', size = 'md',
+  title, label, onPress, disabled, busy, variant, tone, size = 'md',
   icon, iconRight, full = true, style, accessibilityLabel,
 }) {
-  const t = BUTTON_TONES[variant] || BUTTON_TONES.primary;
+  const text = title ?? label;
+  const t = BUTTON_TONES[variant || tone] || BUTTON_TONES.primary;
   const dims = size === 'sm'
     ? { pv: 9,  ph: 14, fs: 13,   icon: 15, r: radius.sm }
     : size === 'lg'
@@ -240,7 +280,7 @@ export function Button({
       onPress={off ? undefined : onPress}
       disabled={off}
       accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel || title}
+      accessibilityLabel={accessibilityLabel || text}
       accessibilityState={{ disabled: !!off, busy: !!busy }}
       style={{ alignSelf: full ? 'stretch' : 'flex-start' }}
     >
@@ -256,15 +296,15 @@ export function Button({
             borderRadius: dims.r,
             opacity: off ? 0.45 : 1,
           },
-          variant === 'primary' && !off ? shadow.rest : null,
+          (variant || tone || 'primary') === 'primary' && !off ? shadow.rest : null,
           style,
         ]}
       >
         {busy
-          ? <Spinner size={dims.icon} color={t.fg} track={variant === 'primary' ? 'rgba(255,255,255,0.32)' : colors.border} />
+          ? <Spinner size={dims.icon} color={t.fg} track={(variant || tone || 'primary') === 'primary' ? 'rgba(255,255,255,0.32)' : colors.border} />
           : (icon ? <Icon name={icon} size={dims.icon} color={t.fg} /> : null)}
         <RNText numberOfLines={1} style={{ ...type.body, color: t.fg, fontWeight: '700', fontSize: dims.fs, letterSpacing: -0.1 }}>
-          {title}
+          {text}
         </RNText>
         {iconRight ? <Icon name={iconRight} size={dims.icon} color={t.fg} /> : null}
       </View>

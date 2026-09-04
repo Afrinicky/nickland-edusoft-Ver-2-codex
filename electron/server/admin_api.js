@@ -242,6 +242,54 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     return json(res, 200, { ok: true, id: r.lastInsertRowid, index_number: indexNumber });
   });
 
+  // Correcting a pupil's record.
+  //
+  // The web app's Students Sheet is the desktop's spreadsheet view: a whole
+  // class on screen, corrected in place, the way an office actually works
+  // through a pile of admission forms. Without this route it could show the
+  // sheet and not save it.
+  //
+  // The editable list is the same one the online school allows
+  // (cloud-python/app/school/students.py EDITABLE) so a correction made in a
+  // browser on the school Wi-Fi and the same correction made over the internet
+  // change the same set of columns. Everything else about a pupil — the
+  // admission number, the photograph, the audit trail — is not editable from
+  // here at all.
+  add('POST', `${API}/admin/students/:id`, async (ctx, req, res, params, body) => {
+    if (!adminGate(ctx, res, 'students', 'edit')) return undefined;
+    const id = parseInt(params.id, 10);
+    const existing = db.prepare('SELECT id, surname, first_name, current_class_id FROM students WHERE id = ?').get(id);
+    if (!existing) return json(res, 404, { ok: false, error: 'That pupil is not on the roll.' });
+
+    const EDITABLE = [
+      'surname', 'first_name', 'other_names', 'gender', 'denomination', 'date_of_birth',
+      'place_of_birth', 'place_of_residence', 'street_address', 'house_number',
+      'digital_address', 'nhis_number', 'father_name', 'father_contact', 'father_email',
+      'mother_name', 'mother_contact', 'mother_email', 'guardian_name', 'guardian_contact',
+      'guardian_email', 'current_class_id', 'admission_date', 'notes',
+    ];
+    const patch = {};
+    for (const k of EDITABLE) if (Object.prototype.hasOwnProperty.call(body, k)) patch[k] = body[k];
+    if (!Object.keys(patch).length) return bad(res, 'Nothing to change.');
+
+    if (patch.current_class_id
+        && Number(patch.current_class_id) !== Number(existing.current_class_id)
+        && !db.prepare('SELECT id FROM class_groups WHERE id = ?').get(patch.current_class_id)) {
+      return bad(res, 'That class does not exist.');
+    }
+    if ('surname' in patch && !String(patch.surname || '').trim()) return bad(res, 'A surname is required.');
+    if ('first_name' in patch && !String(patch.first_name || '').trim()) return bad(res, 'A first name is required.');
+
+    const cols = Object.keys(patch);
+    db.prepare(`UPDATE students SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ?`)
+      .run(...cols.map(c => (patch[c] === '' ? null : patch[c])), id);
+
+    try { require('./sync/outbox').enqueueStudentSnapshot(db, id); } catch (_) {}
+    audit(db, ctx, 'student', id, 'update_student',
+      `${existing.surname} ${existing.first_name}: ${cols.join(', ')}`);
+    return json(res, 200, { ok: true });
+  });
+
   // Withdrawing, graduating or readmitting. A status change is what a parent
   // notices first — the app stops showing their child — so it is audited with
   // the reason, and the reason is required.

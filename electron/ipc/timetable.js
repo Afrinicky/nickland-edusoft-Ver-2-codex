@@ -80,6 +80,81 @@ function getTeacherTimetable(db, staffId) {
   return { days: byDay };
 }
 
+/**
+ * Replace the school's bell schedule.
+ *
+ * Written as a set rather than a row at a time, because that is what the
+ * editor sends and because a schedule half-applied has a Period 4 that starts
+ * before Period 3 finishes. Periods that are no longer in the list are deleted,
+ * and their timetable entries with them — a lesson in a period the school no
+ * longer rings a bell for is a lesson nobody attends.
+ */
+function savePeriods(db, periods) {
+  const rows = (periods || []).map((p, i) => ({
+    id: p.id ? parseInt(p.id, 10) : null,
+    label: String(p.label || '').trim().slice(0, 60),
+    start_time: String(p.start_time || '').slice(0, 5),
+    end_time: String(p.end_time || '').slice(0, 5),
+    display_order: Number.isFinite(Number(p.display_order)) ? Number(p.display_order) : i,
+    is_break: p.is_break ? 1 : 0,
+  })).filter(p => p.label && p.start_time && p.end_time);
+
+  if (!rows.length) return { ok: false, error: 'A timetable needs at least one period.' };
+
+  const keep = rows.filter(r => r.id).map(r => r.id);
+  const tx = db.transaction(() => {
+    const existing = db.prepare('SELECT id FROM timetable_periods').all().map(r => r.id);
+    for (const id of existing) {
+      if (keep.includes(id)) continue;
+      db.prepare('DELETE FROM timetable_entries WHERE period_id = ?').run(id);
+      db.prepare('DELETE FROM timetable_periods WHERE id = ?').run(id);
+    }
+    for (const r of rows) {
+      if (r.id) {
+        db.prepare(`UPDATE timetable_periods
+                       SET label = ?, start_time = ?, end_time = ?, display_order = ?, is_break = ?
+                     WHERE id = ?`)
+          .run(r.label, r.start_time, r.end_time, r.display_order, r.is_break, r.id);
+      } else {
+        db.prepare(`INSERT INTO timetable_periods (label, start_time, end_time, display_order, is_break)
+                    VALUES (?, ?, ?, ?, ?)`)
+          .run(r.label, r.start_time, r.end_time, r.display_order, r.is_break);
+      }
+    }
+  });
+  tx();
+  return { ok: true, written: rows.length, periods: listPeriods(db) };
+}
+
+/**
+ * Replace one class's week.
+ *
+ * The same wholesale contract as cloud-python/app/school/timetable.py, so a
+ * timetable set on the school Wi-Fi and one set over the internet behave
+ * identically. A cell with no subject is simply absent from the list, which is
+ * how the editor clears one.
+ */
+function saveClassWeek(db, classId, entries) {
+  let written = 0;
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM timetable_entries WHERE class_group_id = ?').run(classId);
+    for (const e of entries || []) {
+      const day = parseInt(e.day_of_week ?? e.day, 10);
+      const periodId = parseInt(e.period_id ?? e.periodId, 10);
+      const subjectId = e.subject_id ?? e.subjectId;
+      if (!day || day < 1 || day > 5 || !periodId || !subjectId) continue;
+      db.prepare(`INSERT INTO timetable_entries
+                    (class_group_id, day_of_week, period_id, subject_id, teacher_id, notes)
+                  VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(classId, day, periodId, subjectId,
+             e.teacher_id ?? e.teacherId ?? null, e.notes || null);
+      written += 1;
+    }
+  });
+  tx();
+  return { ok: true, entries: written };
+}
+
 function registerTimetableHandlers(ipcMain, db) {
   ipcMain.handle('timetable:list-periods', () => listPeriods(db));
 
@@ -274,4 +349,6 @@ module.exports = registerTimetableHandlers;
 module.exports.getClassTimetable = getClassTimetable;
 module.exports.getTeacherTimetable = getTeacherTimetable;
 module.exports.listPeriods = listPeriods;
+module.exports.savePeriods = savePeriods;
+module.exports.saveClassWeek = saveClassWeek;
 module.exports.DAYS = DAYS;

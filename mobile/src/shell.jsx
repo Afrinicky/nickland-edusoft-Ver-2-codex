@@ -46,8 +46,7 @@ import { useLayout } from './responsive';
 import { Icon } from './icons';
 import { Avatar, Badge, Crest, Gradient, IconButton, Sheet, Heading, Muted, Micro } from './ui';
 import { Appear, Press, ScreenTransition, useReducedMotion, EASE_OUT } from './motion';
-import { visibleNav, groupNav, quickActions } from './nav';
-import { portalChoices, portalMeta } from './portals';
+import { groupModules } from './modules';
 import { useAuth } from './auth';
 import { useBranding } from './brand';
 import { ContactSheet } from './actions';
@@ -65,57 +64,6 @@ export function useScreenTitle(title) {
     set(title || null);
     return () => set(null);
   }, [set, title]);
-}
-
-/**
- * Moving between the parts of the school an account holds.
- *
- * Only drawn when there is more than one, which is the common case for exactly
- * the people it matters to: a head teacher who teaches, a proprietor who also
- * keeps the books. A class teacher has one portal and is never shown a control
- * that would only ever take them back where they are.
- *
- * A portal the server marked unavailable — the system area, over the internet
- * — is shown and disabled with the reason on it. That is not the same as
- * hiding it: this account MAY do that work, just not from here, and being told
- * so is the difference between a limit and a fault.
- */
-function PortalSwitch({ profile, current, onGo, compact }) {
-  const choices = portalChoices(profile);
-  if (choices.length < 2) return null;
-
-  const sent = new Map((profile?.portals || [])
-    .filter(p => p && typeof p === 'object')
-    .map(p => [p.key, p]));
-
-  return (
-    <View style={compact ? styles.switchRail : styles.switchRow}>
-      {choices.map((p) => {
-        const meta = sent.get(p.key) || {};
-        const off = meta.available === false;
-        const on = p.key === current;
-        return (
-          <Press key={p.key} disabled={off || on} onPress={() => onGo(p.home)}>
-            <View
-              accessibilityRole="button"
-              accessibilityLabel={off ? `${p.label} — ${meta.reason || 'not available here'}` : p.label}
-              style={[
-                styles.switchChip,
-                on && styles.switchChipOn,
-                off && styles.switchChipOff,
-              ]}
-            >
-              <Text numberOfLines={1} style={[
-                styles.switchChipText,
-                on && { color: '#fff' },
-                off && { color: colors.faint },
-              ]}>{p.label}</Text>
-            </View>
-          </Press>
-        );
-      })}
-    </View>
-  );
 }
 
 // The active item is the longest href that prefixes the current path, so
@@ -145,7 +93,10 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
   const [quickOpen, setQuickOpen] = useState(false);
   const [screenTitle, setScreenTitle] = useState(null);
 
-  const items = visibleNav(nav.items, profile);
+  // Already filtered by the layout against this account's permissions. A shell
+  // that filters is a shell that has to know about access, and the moment two
+  // places know, they disagree.
+  const items = nav.items;
   const active = activeKey(items, pathname || '');
   const current = items.find(i => i.key === active);
   const go = useCallback((href) => {
@@ -158,7 +109,7 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
   const role = profile?.designation || (profile?.role === 'parent' ? 'Parent' : 'Staff');
   const photo = profile?.photo || profile?.staff?.photo;
   const contactChannels = channelsFor(brand.contact || {});
-  const actions = quickActions(nav.quick, items);
+  const actions = nav.quick || [];
 
   // The Android back button closes what is open before it leaves the screen.
   useEffect(() => {
@@ -210,8 +161,6 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
       onSignOut={signOut}
       onChat={contactChannels.length ? () => { setDrawerOpen(false); setChatOpen(true); } : null}
       areaLabel={nav.title}
-      portal={nav.portal}
-      profile={profile}
     />
   );
 
@@ -271,10 +220,8 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
           )}
         </View>
 
-        <PortalSwitch profile={profile} current={nav.portal} onGo={go} compact={!labelled} />
-
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.xl }} style={{ flex: 1 }}>
-          {groupNav(items).map(g => (
+          {groupModules(items).map(g => (
             <View key={g.group} style={{ marginTop: spacing.md }}>
               {labelled && <Text style={styles.sideGroup}>{g.group}</Text>}
               {g.items.map(i => (
@@ -326,7 +273,7 @@ function SideItem({ item, on, labelled, onPress }) {
 // already has. It is the whole app, grouped exactly as the desktop groups it.
 function NavDrawer({
   open, onClose, items, active, onGo, school, motto, logo,
-  person, role, photo, onSignOut, onChat, areaLabel, portal, profile,
+  person, role, photo, onSignOut, onChat, areaLabel,
 }) {
   const insets = useSafeAreaInsets();
   const layout = useLayout();
@@ -376,10 +323,8 @@ function NavDrawer({
           <IconButton name="close" size={34} tone="plain" color={colors.muted} onPress={onClose} label="Close the menu" />
         </View>
 
-        <PortalSwitch profile={profile} current={portal} onGo={onGo} />
-
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.md }}>
-          {groupNav(items).map(g => (
+          {groupModules(items).map(g => (
             <View key={g.group} style={{ marginTop: spacing.md }}>
               <Text style={styles.sideGroup}>{g.group}</Text>
               {g.items.map(i => (
@@ -494,24 +439,6 @@ function TopBar({ title, subtitle, logo, pending, person, photo, onAccount, onCh
 }
 
 const styles = StyleSheet.create({
-  // ── the portal switcher ──
-  // Chips rather than a dropdown: there are at most four, they are the whole
-  // of what this person is, and a menu that has to be opened to find out what
-  // is behind it is a menu somebody stops opening.
-  switchRow: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: 6,
-    paddingTop: spacing.md, paddingBottom: 2,
-    borderBottomWidth: 1, borderBottomColor: colors.borderSoft, paddingBottom: spacing.md,
-  },
-  switchRail: { flexDirection: 'column', gap: 6, paddingTop: spacing.md },
-  switchChip: {
-    paddingHorizontal: 11, paddingVertical: 6, borderRadius: radius.pill,
-    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
-  },
-  switchChipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
-  switchChipOff: { backgroundColor: 'transparent', borderStyle: 'dashed' },
-  switchChipText: { ...type.micro, fontWeight: '800', color: colors.text, fontSize: 11 },
-
   topBar: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingBottom: 14,
     backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border,

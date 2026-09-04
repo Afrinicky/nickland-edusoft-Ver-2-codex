@@ -29,7 +29,8 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
 from . import portals, ratelimit
-from .school import (academics, admin, canteen, communications, db as sdb, fees,
+from .school import (academics, admin, canteen, communications, db as sdb, exams, fees,
+                     office,
                      finance, homework, payments, payroll, security, session,
                      staff, stores, students, timetable)
 
@@ -909,6 +910,142 @@ async def system_save_settings(request: Request, authorization: str = Header(Non
         return d.response
     body = await _json(request)
     return _send(admin.save_settings(db, actor, body.get("settings") or body))
+
+
+# ══ staff activities, budgets and the cashbook ══════════════════════════════
+
+@router.get("/activities")
+async def staff_activities(authorization: str = Header(None), staffId: int = None,
+                           dateFrom: str = None, dateTo: str = None):
+    """Deliberately not module-guarded: a person may always read and file their
+    OWN activities, and app/school/office.py narrows the query to them when the
+    account has no staff module. Reading a colleague's is what needs the module."""
+    try:
+        db, actor = require(authorization)
+    except Denied as d:
+        return d.response
+    return _send(office.activities(db, actor, staffId, dateFrom, dateTo))
+
+
+@router.post("/activities")
+async def save_activity(request: Request, authorization: str = Header(None)):
+    try:
+        db, actor = require(authorization)
+    except Denied as d:
+        return d.response
+    return _send(office.save_activity(db, actor, await _json(request)))
+
+
+@router.post("/activities/{activity_id}/acknowledge")
+@guarded(module="staff", action="edit")
+async def acknowledge_activity(db, actor, activity_id: int):
+    return office.acknowledge_activity(db, actor, activity_id)
+
+
+@router.post("/activities/{activity_id}/delete")
+async def delete_activity(activity_id: int, authorization: str = Header(None)):
+    try:
+        db, actor = require(authorization)
+    except Denied as d:
+        return d.response
+    return _send(office.delete_activity(db, actor, activity_id))
+
+
+@router.get("/budgets")
+@guarded(portal="finance", module="finance")
+async def budgets(db, actor, id: int = None):
+    return office.budgets(db, actor, id)
+
+
+@router.post("/budgets")
+@guarded(portal="finance", module="finance", action="edit")
+async def save_budget(db, actor, request: Request):
+    return office.save_budget(db, actor, await _json(request))
+
+
+@router.post("/budgets/{budget_id}/delete")
+@guarded(portal="finance", module="finance", action="delete")
+async def delete_budget(db, actor, budget_id: int):
+    return office.delete_budget(db, actor, budget_id)
+
+
+@router.get("/finance/cashbook")
+@guarded(portal="finance", module="finance")
+async def cashbook(db, actor, dateFrom: str = None, dateTo: str = None):
+    return office.cashbook(db, actor, dateFrom, dateTo)
+
+
+# ══ examinations ════════════════════════════════════════════════════════════
+#
+# Papers, their sections, and the question bank. A teacher writes an
+# end-of-term paper on a Sunday evening, not at the one PC in the office on a
+# Friday afternoon; and a question bank that can only be reached from that PC
+# is a resource the school builds and cannot use.
+
+@router.get("/exams/papers")
+@guarded(module="academics")
+async def exam_papers(db, actor, classId: int = None, subjectId: int = None,
+                      termId: int = None, status: str = None):
+    return exams.list_papers(db, actor, classId, subjectId, termId, status)
+
+
+@router.get("/exams/papers/{paper_id}")
+@guarded(module="academics")
+async def exam_paper(db, actor, paper_id: int):
+    return exams.get_paper(db, actor, paper_id)
+
+
+@router.post("/exams/papers")
+@guarded(module="academics", action="create")
+async def save_exam_paper(db, actor, request: Request):
+    return exams.save_paper(db, actor, await _json(request))
+
+
+@router.post("/exams/papers/{paper_id}/delete")
+@guarded(module="academics", action="delete")
+async def delete_exam_paper(db, actor, paper_id: int):
+    return exams.delete_paper(db, actor, paper_id)
+
+
+@router.post("/exams/sections")
+@guarded(module="academics", action="create")
+async def save_exam_section(db, actor, request: Request):
+    return exams.save_section(db, actor, await _json(request))
+
+
+@router.post("/exams/sections/{section_id}/delete")
+@guarded(module="academics", action="delete")
+async def delete_exam_section(db, actor, section_id: int):
+    return exams.delete_section(db, actor, section_id)
+
+
+@router.get("/exams/questions")
+@guarded(module="academics")
+async def exam_questions(db, actor, paperId: int = None, classId: int = None,
+                         subjectId: int = None, questionType: str = None,
+                         difficulty: str = None, inBank: int = None, search: str = None):
+    return exams.list_questions(db, actor, paperId, classId, subjectId,
+                                questionType, difficulty, inBank, search)
+
+
+@router.post("/exams/questions")
+@guarded(module="academics", action="create")
+async def save_exam_question(db, actor, request: Request):
+    return exams.save_question(db, actor, await _json(request))
+
+
+@router.post("/exams/questions/{question_id}/delete")
+@guarded(module="academics", action="delete")
+async def delete_exam_question(db, actor, question_id: int):
+    return exams.delete_question(db, actor, question_id)
+
+
+@router.post("/exams/papers/{paper_id}/from-bank")
+@guarded(module="academics", action="create")
+async def copy_from_bank(db, actor, paper_id: int, request: Request):
+    body = await _json(request)
+    return exams.copy_from_bank(db, actor, paper_id, body.get("sectionId"),
+                                body.get("questionIds") or [])
 
 
 # ══ the timetable ═══════════════════════════════════════════════════════════

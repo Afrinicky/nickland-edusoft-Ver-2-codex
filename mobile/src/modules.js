@@ -96,7 +96,7 @@ export const MODULES = [
     ],
   },
   {
-    key: 'academics', href: '/app/academics', label: 'Academics', short: 'Academics', icon: 'award',
+    key: 'academics', href: '/app/academics', label: 'Academics', short: 'Academics', icon: 'cap',
     sub: 'Examinations, Scores and Reports',
     module: 'academics', match: ['/app/academics'],
     tabs: [
@@ -106,6 +106,7 @@ export const MODULES = [
       { id: 'homework',    label: 'Homework' },
       { id: 'classscores', label: 'Class Scores' },
       { id: 'examscores',  label: 'Exam Scores' },
+      { id: 'insight',     label: 'Class Insight' },
       { id: 'results',     label: 'End of Term Results' },
       { id: 'compilation', label: 'Assessment Compilation', need: 'edit' },
       { id: 'report',      label: 'End of Term Report' },
@@ -214,7 +215,7 @@ export const MODULES = [
   {
     key: 'messages', href: '/app/messages', label: 'Messages', short: 'Messages', icon: 'chat',
     sub: 'Conversations with parents and staff',
-    module: 'notifications', match: ['/app/messages', '/app/message'],
+    module: 'notifications', match: ['/app/messages'],
   },
   {
     key: 'settings', href: '/app/settings', label: 'Settings', short: 'Settings', icon: 'gear',

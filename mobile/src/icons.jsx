@@ -159,6 +159,24 @@ const DRAW = {
     <Bar {...p} x={0.20} y={0.76} w={0.26} rotate={-24} />
     <Bar {...p} x={0.54} y={0.76} w={0.26} rotate={24} />
   </>),
+  // A mortarboard: the flat board as a rotated square, the cap under it, and
+  // the tassel down the right. Academics is the module the desktop draws with
+  // one, and a rosette in its place reads as "prize giving" rather than "marks".
+  cap: (p) => (<>
+    {/* The board, seen from in front: two flat triangles making one wide
+        diamond. A rotated square reads as a blob at 19px; this does not. */}
+    <Tri {...p} x={0.03} y={0.14} w={0.94} h={0.21} />
+    <Tri {...p} x={0.03} y={0.35} w={0.94} h={0.21} rotate={180} />
+    {/* The cap under it, and the tassel down the right. */}
+    <View pointerEvents="none" style={{
+      position: 'absolute', left: 0.28 * p.size, top: 0.48 * p.size,
+      width: 0.44 * p.size, height: 0.26 * p.size,
+      borderWidth: S(p.size), borderTopWidth: 0, borderColor: p.color,
+      borderBottomLeftRadius: 0.14 * p.size, borderBottomRightRadius: 0.14 * p.size,
+    }} />
+    <Bar {...p} x={0.74} y={0.46} w={0.24} rotate={90} />
+    <Ring {...p} cx={0.855} cy={0.76} r={0.065} fill />
+  </>),
 
   // Work
   book: (p) => (<>
