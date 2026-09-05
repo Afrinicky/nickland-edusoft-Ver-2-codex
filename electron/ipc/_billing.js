@@ -107,6 +107,65 @@ function resolveFeeTemplate(db, classGroupId, termId) {
   );
 }
 
+// ── Naming a term so a human can tell two of them apart ────────────────
+// Every academic year has a "First Term". A schedule saved against 2026/2027's
+// First Term while the school is running 2025/2026's Third Term looks, in a
+// bare dropdown, exactly like the right one — and then bill generation fails
+// with "no template applies" and nobody can see why. Every term shown to a
+// user carries its academic year.
+function termLabel(term) {
+  if (!term) return '';
+  // Accepts a terms row (`label`) or a row that joined one in (`term_label`),
+  // so the same helper names a term wherever it is carried.
+  const label = term.label || term.term_label || '';
+  if (!label) return '';
+  const year = term.year_label || term.academic_year_label || '';
+  return year ? `${label} · ${year}` : label;
+}
+
+// Reads the term with its academic year attached, for messages and pickers.
+function termWithYear(db, termId) {
+  if (!termId) return null;
+  return db.prepare(`
+    SELECT t.*, y.label AS year_label
+    FROM terms t LEFT JOIN academic_years y ON y.id = t.academic_year_id
+    WHERE t.id = ?
+  `).get(termId) || null;
+}
+
+// The message a school can act on when nothing covers a pupil. It names the
+// term in full and reads back the school-fees schedules that DO exist, because
+// the answer is nearly always "you wrote it against the wrong term".
+function noTemplateMessage(db, student, termId) {
+  const term = termWithYear(db, termId);
+  const klass = student && student.current_class_id
+    ? db.prepare('SELECT name FROM class_groups WHERE id = ?').get(student.current_class_id)
+    : null;
+  const where = klass ? `${klass.name} in ${termLabel(term)}` : termLabel(term);
+
+  const others = db.prepare(`
+    SELECT ft.name, c.name AS class_name, t.label AS term_label, y.label AS year_label
+    FROM fee_templates ft
+    LEFT JOIN class_groups c ON c.id = ft.class_group_id
+    LEFT JOIN terms t ON t.id = ft.term_id
+    LEFT JOIN academic_years y ON y.id = t.academic_year_id
+    WHERE ft.is_active = 1 AND COALESCE(ft.bill_type, 'school_fees') = 'school_fees'
+    ORDER BY ft.id DESC LIMIT 4
+  `).all();
+
+  let msg = `No school fees schedule covers ${where}.`;
+  if (others.length) {
+    const list = others
+      .map(o => `“${o.name}” (${o.class_name || 'all classes'}, ${o.term_label ? termLabel(o) : 'all terms'})`)
+      .join('; ');
+    msg += ` The schedules you have are: ${list}.`
+         + ` Check the term each one is written against — every academic year has a term by the same name.`;
+  } else {
+    msg += ' Create one under Fees → Bills → School Fees.';
+  }
+  return msg;
+}
+
 function templateItems(db, templateId) {
   return db.prepare(
     'SELECT * FROM fee_line_items WHERE fee_template_id = ? ORDER BY item_number, id'
@@ -135,10 +194,11 @@ function round2(n) {
 function findConflictingSchoolFeesTemplate(db, { id, classGroupId, termId }) {
   if (!termId) return null; // an "all terms" template is a standing default, not a clash
   const rows = db.prepare(`
-    SELECT ft.*, cg.name AS class_name, t.label AS term_label
+    SELECT ft.*, cg.name AS class_name, t.label AS term_label, y.label AS year_label
     FROM fee_templates ft
     LEFT JOIN class_groups cg ON cg.id = ft.class_group_id
     LEFT JOIN terms t ON t.id = ft.term_id
+    LEFT JOIN academic_years y ON y.id = t.academic_year_id
     WHERE ft.is_active = 1
       AND COALESCE(ft.bill_type, 'school_fees') = 'school_fees'
       AND ft.term_id = ?
@@ -185,6 +245,27 @@ function recomputeBillTotals(db, billId) {
     round2(sums.arrears), round2(sums.extra), billId);
 
   return { totalBilled, totalPaid, balance: round2(totalBilled - totalPaid), extra: round2(sums.extra) };
+}
+
+// ── What has been received against a bill ──────────────────────────────
+// Narrower than recomputeBillTotals on purpose. Taking a payment must not
+// touch what a pupil was BILLED — that is decided by the schedule and the line
+// items, and re-deriving it here would rewrite the figure a parent was given
+// from whatever happens to be in bill_line_items. What a payment changes is
+// how much has been received, and that is always re-derived from the payments
+// table rather than incremented, so a reversal or a correction cannot leave a
+// balance drifting behind the money.
+function recomputeBillPaid(db, billId) {
+  const bill = db.prepare('SELECT * FROM student_bills WHERE id = ?').get(billId);
+  if (!bill) return null;
+  const paid = round2(db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS t FROM payments
+    WHERE student_id = ? AND term_id = ? AND COALESCE(is_reversed, 0) = 0
+  `).get(bill.student_id, bill.term_id).t || 0);
+  const balance = round2((bill.total_billed || 0) - paid);
+  db.prepare('UPDATE student_bills SET total_paid = ?, balance = ? WHERE id = ?')
+    .run(paid, balance, billId);
+  return { totalBilled: round2(bill.total_billed || 0), totalPaid: paid, balance };
 }
 
 // ── Projected income ───────────────────────────────────────────────────
@@ -245,10 +326,14 @@ module.exports = {
   CHARGE_TYPES,
   FEE_ITEM_PRESETS,
   resolveFeeTemplate,
+  termLabel,
+  termWithYear,
+  noTemplateMessage,
   templateItems,
   templateTotal,
   findConflictingSchoolFeesTemplate,
   recomputeBillTotals,
+  recomputeBillPaid,
   projectedIncomeForTerm,
   round2,
 };

@@ -1,28 +1,41 @@
 // Nickland Edusoft — Fees Management Module.
 //
-// Five tabs, in the order the work happens: see where the term stands, decide
-// what pupils owe, take the money, apply concessions, chase what is left.
-// Templates, extra charges, books and withdrawn bills all live under Bills,
-// because they are all part of deciding what a parent owes — as separate
-// top-level tabs they gave no hint that a template is the thing a bill is made
-// from, and schools were generating bills before writing a schedule.
+// Four tabs, in the order the work happens on a school morning:
+//
+//   Dashboard   where the term stands
+//   Payments    taking money in — the counter's screen, and the busiest one
+//   Bills       deciding what a family owes, of every kind
+//   Discounts   the concessions that change it
+//
+// ── Why Payments is second ──────────────────────────────────────────────────
+//
+// Bills are raised once a term. Payments are taken every morning of it. The
+// tab a bursar opens forty times a day was third in the strip behind the one
+// they open three times a year, which is backwards: the order should follow
+// how often a thing is done, not the order the data is created in.
+//
+// Debtors is gone as a top-level tab. "Who owes" is not a separate activity —
+// it is the second half of "what have we billed", and it now sits under those
+// totals on the Bills home, where the figures that raise the question are.
 import React, { useEffect, useState } from 'react';
 import FeesDashboard from './Dashboard.jsx';
 import BillsHub from './BillsHub.jsx';
 import PaymentsHub from './PaymentsHub.jsx';
-import DebtorsTab from './DebtorsTab.jsx';
 import DiscountsTab from './DiscountsTab.jsx';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
-  { id: 'bills',     label: 'Bills' },
   { id: 'payments',  label: 'Payments' },
+  { id: 'bills',     label: 'Bills' },
   { id: 'discounts', label: 'Discounts' },
-  { id: 'debtors',   label: 'Debtors' },
 ];
 
 export default function FeesIndex() {
   const [tab, setTab] = useState('dashboard');
+  // A tab can be opened on a particular sub-tab — the dashboard's "Take a
+  // payment" lands on the single-payment desk, not on whichever sub-tab was
+  // last used.
+  const [landing, setLanding] = useState(null);
   const [pending, setPending] = useState(0);
 
   useEffect(() => {
@@ -35,11 +48,23 @@ export default function FeesIndex() {
     return () => { live = false; clearInterval(id); };
   }, [tab]);
 
-  // The dashboard's cards deep-link into the sub-tabs, so a name it hands back
-  // is mapped to the tab that now contains it.
-  function switchTab(id) {
-    const moved = { templates: 'bills', books: 'bills', bulkpay: 'payments', mobilepay: 'payments' };
-    setTab(moved[id] || id);
+  // The dashboard's cards deep-link by name. Names that used to be their own
+  // tabs are mapped to the tab that now contains them, so an old link never
+  // lands nowhere.
+  function switchTab(id, sub) {
+    const moved = {
+      templates: ['bills', 'schoolfees'],
+      books: ['bills', 'books'],
+      debtors: ['bills', 'home'],
+      voided: ['bills', 'voided'],
+      canteen: ['bills', 'canteen'],
+      bulkpay: ['payments', 'sheet'],
+      mobilepay: ['payments', 'mobile'],
+      takepayment: ['payments', 'single'],
+    };
+    const [target, defaultSub] = moved[id] || [id, null];
+    setTab(target);
+    setLanding(sub || defaultSub);
   }
 
   return (
@@ -47,7 +72,7 @@ export default function FeesIndex() {
       <div className="page-header">
         <div>
           <div className="page-title">Fees Management</div>
-          <div className="page-subtitle">Bills and templates, payments, discounts, debtors</div>
+          <div className="page-subtitle">Payments, bills, discounts and arrears</div>
         </div>
       </div>
 
@@ -56,7 +81,7 @@ export default function FeesIndex() {
           <button
             key={t.id}
             className={'tab' + (tab === t.id ? ' active' : '')}
-            onClick={() => setTab(t.id)}
+            onClick={() => { setTab(t.id); setLanding(null); }}
           >
             {t.label}
             {t.id === 'payments' && pending > 0 && (
@@ -68,10 +93,9 @@ export default function FeesIndex() {
 
       <div className="tab-content">
         {tab === 'dashboard' && <FeesDashboard onSwitchTab={switchTab} />}
-        {tab === 'bills'     && <BillsHub />}
-        {tab === 'payments'  && <PaymentsHub pending={pending} />}
+        {tab === 'payments'  && <PaymentsHub pending={pending} initialTab={landing} />}
+        {tab === 'bills'     && <BillsHub initialTab={landing} />}
         {tab === 'discounts' && <DiscountsTab />}
-        {tab === 'debtors'   && <DebtorsTab />}
       </div>
     </div>
   );

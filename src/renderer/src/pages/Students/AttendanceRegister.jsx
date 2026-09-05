@@ -1,7 +1,17 @@
 // Nickland Edusoft — Attendance Register (classical Ghanaian weekly format)
-// Students × 5 weekdays + weekly total + absence-reason column.
+// Students × 5 weekdays + weekly total + a reason column.
+//
+// The register used to offer two marks, Present and Absent, and asked for a
+// reason only against an absence — while the same school's browser register
+// offered Late and asked for no reason at all. So a class marked in the
+// corridor came back with a hole in it, and a child marked Late anywhere lost
+// the story behind it.
+//
+// Both apps now write the same three marks from the same list, and both ask
+// why for the two that call for it.
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
+import { MARKS, needsReason, markGlyph, markClass } from '../../lib/attendance.js';
 
 // Get Monday of the week containing the given date
 function getWeekStart(dateStr) {
@@ -220,9 +230,9 @@ export default function AttendanceRegister() {
     }
   }
 
-  // For each student, find which dates they were absent (to show reason cell)
-  function studentAbsentDates(row) {
-    return dates.filter(d => row.attendance[d]?.status === 'absent');
+  // The days a mark calls for a reason — absences and late arrivals both.
+  function studentReasonDates(row) {
+    return dates.filter(d => needsReason(row.attendance[d]?.status));
   }
 
   return (
@@ -232,7 +242,7 @@ export default function AttendanceRegister() {
           <div>
             <div className="section-title">Attendance Register</div>
             <div className="text-sm text-muted">
-              Tick the day cells, then mark Present or Absent. Reasons for absence are kept on each student's profile.
+              Tick the day cells, then mark Present, Late or Absent. A late arrival and an absence both ask for a reason, and the reason is kept on the pupil's record.
             </div>
           </div>
         </div>
@@ -297,8 +307,16 @@ export default function AttendanceRegister() {
             <button className="btn btn-ghost btn-sm" onClick={selectAll}>Select All</button>
             <button className="btn btn-ghost btn-sm" onClick={deselectAll}>Deselect All</button>
             <div style={{ flex: 1 }} />
-            <button className="btn btn-success" onClick={() => markSelected('present')}>✓ Mark Present</button>
-            <button className="btn btn-danger" onClick={() => markSelected('absent')}>✗ Mark Absent</button>
+            {MARKS.map(m => (
+              <button
+                key={m.value}
+                className={'btn ' + (m.value === 'present' ? 'btn-success'
+                  : m.value === 'late' ? 'btn-warning' : 'btn-danger')}
+                onClick={() => markSelected(m.value)}
+              >
+                {m.glyph} Mark {m.label}
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -340,12 +358,12 @@ export default function AttendanceRegister() {
                           </th>
                         ))}
                         <th style={{ minWidth: 70 }} className="text-center">Total</th>
-                        <th style={{ minWidth: 240 }} className="no-print">Reason for Absence</th>
+                        <th style={{ minWidth: 240 }} className="no-print">Reason (absence or lateness)</th>
                       </tr>
                     </thead>
                     <tbody>
                       {rows.map((row, i) => {
-                        const absentDates = studentAbsentDates(row);
+                        const reasonDates = studentReasonDates(row);
                         return (
                           <tr key={row.student_id}>
                             <td className="sheet-row-num">
@@ -363,26 +381,33 @@ export default function AttendanceRegister() {
                               const rec = row.attendance[d];
                               const sel = isSelected(row.student_id, d);
                               const status = rec?.status;
+                              const cls = markClass(status);
                               return (
                                 <td key={d}
                                   className={'register-day-cell' +
                                     (sel ? ' register-selected' : '') +
-                                    (status === 'present' ? ' register-present' : '') +
-                                    (status === 'absent' ? ' register-absent' : '')}
+                                    (cls ? ` ${cls}` : '')}
                                   onClick={() => toggleDay(row.student_id, d)}
-                                  title={status ? `Marked ${status}` : 'Click to select'}
+                                  title={status
+                                    ? `Marked ${status}${rec?.notes ? ` — ${rec.notes}` : ''}`
+                                    : 'Click to select'}
                                 >
-                                  {status === 'present' ? '✓' : status === 'absent' ? '✗' : (sel ? '•' : '')}
+                                  {markGlyph(status) || (sel ? '•' : '')}
                                 </td>
                               );
                             })}
                             <td className="sheet-cell text-center" style={{ fontWeight: 700 }}>
                               {row.present_count}/5
+                              {row.late_count ? (
+                                <span className="text-xs" style={{ color: 'var(--warning)', fontWeight: 600 }}>
+                                  {' '}+{row.late_count}L
+                                </span>
+                              ) : null}
                             </td>
                             <td className="sheet-cell no-print">
-                              {absentDates.length === 0
+                              {reasonDates.length === 0
                                 ? <span className="text-xs text-muted">—</span>
-                                : absentDates.map(d => {
+                                : reasonDates.map(d => {
                                     const key = `${row.student_id}|${d}`;
                                     const existing = row.attendance[d]?.notes || '';
                                     const inputVal = reasonInputs[key] ?? '';
@@ -419,7 +444,7 @@ export default function AttendanceRegister() {
       </div>
 
       <div className="sheet-help no-print" style={{ marginTop: 12 }}>
-        <strong>How to use:</strong> Click day-cells to tick them (•) · Use <strong>Select All</strong> / <strong>Deselect All</strong> to work fast · Click <strong>Mark Present</strong> (green ✓) or <strong>Mark Absent</strong> (red ✗) · For absent students a reason box appears — type the reason and press Enter or 💾 · You can re-mark any cell at any time.
+        <strong>How to use:</strong> Click day-cells to tick them (•) · Use <strong>Select All</strong> / <strong>Deselect All</strong> to work fast · Click <strong>Mark Present</strong> (green ✓), <strong>Mark Late</strong> (amber L) or <strong>Mark Absent</strong> (red ✗) · For a pupil marked late or absent a reason box appears — type the reason and press Enter or 💾 · Saving a reason leaves the mark alone · You can re-mark any cell at any time.
       </div>
     </div>
   );

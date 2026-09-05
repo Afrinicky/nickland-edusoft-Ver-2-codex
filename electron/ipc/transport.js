@@ -180,11 +180,12 @@ function recordPayment(db, data) {
 
   const tx = db.transaction(() => {
     const r = db.prepare(`
-      INSERT INTO transport_payments (student_id, route_id, term_id, amount, payment_date, payment_method, received_by, notes, receipt_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transport_payments (student_id, route_id, term_id, amount, payment_date, payment_method, reference, received_by, notes, receipt_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       data.student_id, data.route_id || route?.route_id || null, termId, amount, payDate,
-      data.payment_method || 'Cash', data.received_by || null, data.notes || null, receiptNo
+      data.payment_method || 'Cash', data.reference || null,
+      data.received_by || null, data.notes || null, receiptNo
     );
     postIncome(db, {
       receipt_number: receiptNo,
@@ -192,6 +193,7 @@ function recordPayment(db, data) {
       amount,
       description: `Transport fee — ${receiptNo}`,
       payment_method: data.payment_method || 'Cash',
+      reference: data.reference || null,
       date: payDate,
       term_id: termId,
       source: 'transport_payment',

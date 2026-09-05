@@ -292,6 +292,19 @@ def attendance_sheet(db, actor, class_id, date):
     }
 
 
+# The marks that carry a written reason. Late is one of them: a child who
+# arrives at nine has a story, and it used to be thrown away because they
+# eventually turned up. Mirrors electron/ipc/_attendance.js.
+_REASON_MARKS = {"absent", "late", "excused"}
+
+
+def _reason_for(status, notes):
+    if status not in _REASON_MARKS:
+        return None
+    given = (notes or "").strip()
+    return given or None
+
+
 def mark_attendance(db, actor, class_id, date, marks):
     """Mark a register.
 
@@ -331,7 +344,7 @@ def mark_attendance(db, actor, class_id, date, marks):
                  SET status = EXCLUDED.status, marked_by = EXCLUDED.marked_by,
                      notes = EXCLUDED.notes""",
                    (sid, date, status, actor["user_id"], term_id,
-                    m.get("notes") if status == "absent" else None))
+                    _reason_for(status, m.get("notes"))))
             written += 1
 
     security.audit(db, actor, "attendance", class_id, "mark_attendance",

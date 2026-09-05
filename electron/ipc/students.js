@@ -103,14 +103,7 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
 
   ipcMain.handle('students:update', (_e, { id, data }) => {
     try {
-      const fields = [
-        'surname', 'first_name', 'other_names', 'gender', 'denomination', 'date_of_birth',
-        'age', 'place_of_birth', 'place_of_residence', 'street_address', 'house_number',
-        'digital_address', 'nhis_number', 'father_name', 'father_contact', 'father_email',
-        'mother_name', 'mother_contact', 'mother_email', 'guardian_name', 'guardian_contact',
-        'guardian_email', 'current_class_id',
-        'status', 'inactive_reason', 'admission_date', 'notes', 'index_number',
-      ];
+      const fields = [...EDITABLE_FIELDS, 'status', 'inactive_reason', 'index_number'];
       // Guard the UNIQUE index_number so a clash returns a friendly message
       // instead of a raw SQL constraint error.
       if (data.index_number !== undefined) {
@@ -205,6 +198,42 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
 
 // === Helpers ===
 
+// ── What an admission form asks for ─────────────────────────────────────────
+//
+// One list, used when a pupil is admitted and when their record is corrected.
+// It was two hand-written column lists, which is how a field ends up on the
+// form, saving on an edit, and silently dropped on an admission.
+//
+// The second half of it is what a Ghanaian admission form asks for and the
+// system had nowhere to put: the previous school, nationality and hometown,
+// who the child actually lives with, the guardian's relationship, an emergency
+// contact separate from the parents, and the medical facts that matter on the
+// one morning they matter.
+const EDITABLE_FIELDS = [
+  'surname', 'first_name', 'other_names', 'gender', 'denomination', 'date_of_birth',
+  'age', 'place_of_birth', 'place_of_residence', 'street_address', 'house_number',
+  'digital_address', 'nhis_number',
+  'father_name', 'father_contact', 'father_email',
+  'mother_name', 'mother_contact', 'mother_email',
+  'guardian_name', 'guardian_contact', 'guardian_email',
+  'current_class_id', 'admission_date', 'notes',
+  'nationality', 'hometown', 'previous_school', 'lives_with', 'guardian_relationship',
+  'emergency_contact_name', 'emergency_contact_phone',
+  'blood_group', 'allergies', 'medical_notes', 'special_needs',
+];
+
+/** A pupil's age today, from their date of birth. */
+function ageFromDob(dob) {
+  if (!dob) return null;
+  const d = new Date(dob);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age -= 1;
+  return age >= 0 && age < 120 ? age : null;
+}
+
 function createStudentInternal(db, data) {
   // Determine admission year & roll number
   const classRow = db.prepare('SELECT id, short_code FROM class_groups WHERE id = ?').get(data.current_class_id);
@@ -243,29 +272,32 @@ function createStudentInternal(db, data) {
     setNextRollNumber(db, rollNumber + 1);
   }
 
+  // Built from the SAME list the update path uses. Two hand-written column
+  // lists is how a field appears on the form, saves when a record is edited,
+  // and is silently dropped when one is admitted.
+  const values = {
+    index_number: indexNumber,
+    admission_year: admissionYear,
+    roll_number: rollNumber,
+    status: data.status || 'Active',
+    admission_date: data.admission_date || new Date().toISOString().slice(0, 10),
+    // The age the form computes from the date of birth. It was displayed and
+    // never sent, so `students.age` was NULL on every pupil ever admitted
+    // through the form, and anything reading the column rather than
+    // recomputing showed a blank.
+    age: data.age != null && data.age !== '' ? Number(data.age) : ageFromDob(data.date_of_birth),
+  };
+  for (const f of EDITABLE_FIELDS) {
+    if (f in values) continue;
+    values[f] = data[f] === undefined || data[f] === '' ? null : data[f];
+  }
+  values.current_class_id = data.current_class_id;
+
+  const cols = Object.keys(values);
   const result = db.prepare(`
-    INSERT INTO students (
-      index_number, admission_year, roll_number, surname, first_name, other_names,
-      gender, denomination, age, date_of_birth, place_of_birth, place_of_residence,
-      street_address, house_number, digital_address, nhis_number,
-      father_name, father_contact, father_email, mother_name, mother_contact, mother_email,
-      guardian_name, guardian_contact, guardian_email, current_class_id, status,
-      admission_date, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    indexNumber, admissionYear, rollNumber,
-    data.surname || '', data.first_name || '', data.other_names || '',
-    data.gender || '', data.denomination || '', data.age || null,
-    data.date_of_birth || null, data.place_of_birth || '', data.place_of_residence || '',
-    data.street_address || '', data.house_number || '', data.digital_address || '',
-    data.nhis_number || '',
-    data.father_name || '', data.father_contact || '', data.father_email || '',
-    data.mother_name || '', data.mother_contact || '', data.mother_email || '',
-    data.guardian_name || '', data.guardian_contact || '', data.guardian_email || '',
-    data.current_class_id, data.status || 'Active',
-    data.admission_date || new Date().toISOString().slice(0, 10),
-    data.notes || ''
-  );
+    INSERT INTO students (${cols.join(', ')})
+    VALUES (${cols.map(() => '?').join(', ')})
+  `).run(...cols.map(c => values[c]));
   return { ok: true, id: result.lastInsertRowid, index_number: indexNumber };
 }
 
@@ -878,3 +910,8 @@ async function bulkDownloadToExcel(db, filters, savePath) {
 }
 
 module.exports = registerStudentHandlers;
+// The one list of what an admission form asks for, so the HTTP server admits a
+// pupil with exactly the fields the desktop does rather than its own subset.
+module.exports.EDITABLE_FIELDS = EDITABLE_FIELDS;
+module.exports.createStudent = createStudentInternal;
+module.exports.ageFromDob = ageFromDob;

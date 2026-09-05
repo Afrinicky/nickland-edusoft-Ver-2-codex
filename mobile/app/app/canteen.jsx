@@ -5,19 +5,18 @@ import { ModulePage } from '../../src/module';
 import { RequireModule } from '../../src/appshell';
 import QuickPay from '../../src/screens/staff/canteen';
 import {
-  CanteenDashboard, CanteenSheet, CanteenDebtors, CanteenCalendar,
+  CanteenDashboard, CanteenSheet, CanteenDebtors,
 } from '../../src/screens/mod/canteen';
 
 export default function Canteen() {
   return (
     <RequireModule moduleKey="canteen">
-      <ModulePage moduleKey="canteen" subtitle="The daily collection, the sheet and what is owed">
+      <ModulePage moduleKey="canteen" subtitle="The daily collection, the sheet and what is owed · the term’s feeding calendar is under Fees → Bills → Canteen">
         {(tab) => {
           switch (tab) {
             case 'dashboard': return <CanteenDashboard />;
             case 'sheet':     return <CanteenSheet />;
             case 'quickpay':  return <QuickPay />;
-            case 'calendar':  return <CanteenCalendar />;
             case 'debtors':   return <CanteenDebtors />;
             default:          return null;
           }

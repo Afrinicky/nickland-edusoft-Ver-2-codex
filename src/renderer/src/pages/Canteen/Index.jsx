@@ -3,18 +3,19 @@ import React, { useState } from 'react';
 import CanteenDashboard from './Dashboard.jsx';
 import CanteenSheetTab from './CanteenSheetTab.jsx';
 import CanteenQuickPayTab from './QuickPayTab.jsx';
-import CalendarTab from './CalendarTab.jsx';
 import DebtorsTab from './DebtorsTab.jsx';
 import { useStore } from '../../store/index.js';
 
-// The term calendar is the school's, not a class teacher's: it decides which
-// days every class is charged for. Collecting the money is the class
-// teacher's job; deciding the days is not, so the tab is not theirs to open.
+// The term calendar has moved to Fees → Bills → Canteen.
+//
+// It was never really a canteen-module setting: the calendar IS the canteen
+// bill — the daily rate times the days the school actually opens — and it
+// belongs with the school's other bills, beside the school fees and the books.
+// What stays here is collecting the money, which is the class teacher's job.
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'sheet',     label: 'Canteen Sheet' },
   { id: 'quickpay',  label: 'Quick Pay (single day)' },
-  { id: 'calendar',  label: 'Calendar', need: ['settings', 'view'] },
   { id: 'debtors',   label: 'Debtors' },
 ];
 
@@ -31,7 +32,10 @@ export default function CanteenIndex() {
       <div className="page-header">
         <div>
           <div className="page-title">Canteen</div>
-          <div className="page-subtitle">Daily-rate canteen payments, attendance-linked exemptions, debtors</div>
+          <div className="page-subtitle">
+            Daily-rate canteen payments, attendance-linked exemptions, debtors
+            {' · '}the term's feeding calendar is under <b>Fees → Bills → Canteen</b>
+          </div>
         </div>
       </div>
 
@@ -51,7 +55,6 @@ export default function CanteenIndex() {
         {active === 'dashboard' && <CanteenDashboard onSwitchTab={setTab} />}
         {active === 'sheet'     && <CanteenSheetTab />}
         {active === 'quickpay'  && <CanteenQuickPayTab />}
-        {active === 'calendar'  && <CalendarTab />}
         {active === 'debtors'   && <DebtorsTab />}
       </div>
     </div>

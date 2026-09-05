@@ -174,10 +174,13 @@ function buildReceiptModel(db, type, paymentId) {
     const row = db.prepare(`
       SELECT cp.*, s.surname, s.first_name, s.other_names, s.index_number,
              s.father_contact, s.mother_contact, s.guardian_contact,
-             c.name AS class_name, u.full_name AS received_by_name
+             c.name AS class_name, u.full_name AS received_by_name,
+             t.label AS term_label, y.label AS year_label
       FROM canteen_payments cp
       JOIN students s ON s.id = cp.student_id
       LEFT JOIN class_groups c ON c.id = s.current_class_id
+      LEFT JOIN terms t ON t.id = cp.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
       LEFT JOIN users u ON u.id = cp.received_by
       WHERE cp.id = ?
     `).get(paymentId);
@@ -191,15 +194,68 @@ function buildReceiptModel(db, type, paymentId) {
       student_index: row.index_number,
       student_class: row.class_name || '',
       amount: Number(row.amount) || 0,
-      payment_method: 'Cash',
+      payment_method: row.payment_method || 'Cash',
+      reference: row.reference || '',
+      term: row.term_label || '',
+      academic_year: row.year_label || '',
       received_by: row.received_by_name || '',
       notes: row.notes || '',
       contact: row.father_contact || row.mother_contact || row.guardian_contact || '',
       lines: [
         ['Days Covered', row.days_covered],
+        ['Daily Rate', Number(row.daily_rate) || 0],
         ['Period', `${row.start_date || ''} → ${row.end_date || ''}`],
       ],
       status: 'RECORDED',
+    };
+  }
+
+  if (type === 'transport') {
+    const row = db.prepare(`
+      SELECT tp.*, s.surname, s.first_name, s.other_names, s.index_number,
+             s.father_contact, s.mother_contact, s.guardian_contact,
+             c.name AS class_name, r.name AS route_name,
+             t.label AS term_label, y.label AS year_label,
+             u.full_name AS received_by_name,
+             COALESCE(st.fee_override, r.fee_per_term) AS fare
+      FROM transport_payments tp
+      JOIN students s ON s.id = tp.student_id
+      LEFT JOIN class_groups c ON c.id = s.current_class_id
+      LEFT JOIN transport_routes r ON r.id = tp.route_id
+      LEFT JOIN student_transport st ON st.student_id = tp.student_id
+      LEFT JOIN terms t ON t.id = tp.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
+      LEFT JOIN users u ON u.id = tp.received_by
+      WHERE tp.id = ?
+    `).get(paymentId);
+    if (!row) return null;
+    const fare = Number(row.fare) || 0;
+    const paidToDate = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS t FROM transport_payments
+      WHERE student_id = ? AND term_id IS ?`).get(row.student_id, row.term_id).t || 0;
+    return {
+      ...base,
+      title: 'TRANSPORT PAYMENT RECEIPT',
+      receipt_number: row.receipt_number || '',
+      student_id: row.student_id,
+      student_name: `${row.surname} ${row.first_name} ${row.other_names || ''}`.trim(),
+      student_index: row.index_number,
+      student_class: row.class_name || '',
+      amount: Number(row.amount) || 0,
+      payment_method: row.payment_method || 'Cash',
+      reference: row.reference || '',
+      term: row.term_label || '',
+      academic_year: row.year_label || '',
+      received_by: row.received_by_name || '',
+      notes: row.notes || '',
+      contact: row.father_contact || row.mother_contact || row.guardian_contact || '',
+      lines: [
+        ['Route', row.route_name || ''],
+        ['Fare for the term', fare],
+        ['Paid to Date', paidToDate],
+        ['Balance', Math.max(0, fare - paidToDate)],
+      ],
+      status: (fare - paidToDate) <= 0 ? 'PAID IN FULL' : 'PART PAYMENT',
     };
   }
 
@@ -281,6 +337,7 @@ function renderReceiptHtml(school, m, paperSize) {
       <tr><td>Index No.</td><td class="r">${esc(m.student_index || '')}</td></tr>
       ${m.student_class ? `<tr><td>Class</td><td class="r">${esc(m.student_class)}</td></tr>` : ''}
       ${m.term ? `<tr><td>Term</td><td class="r">${esc(m.term)} ${esc(m.academic_year || '')}</td></tr>` : ''}
+      <tr><td>Paid For</td><td class="r"><b>${esc(m.purpose_label || m.title.replace(/ PAYMENT RECEIPT$/i, ''))}</b></td></tr>
     </table>
     <table class="amt">
       <tr><td>Amount Paid</td><td class="r big">${money(m.amount)}</td></tr>
@@ -290,7 +347,7 @@ function renderReceiptHtml(school, m, paperSize) {
     <div class="words">${esc(amountInWords(m.amount))}</div>
     ${detailLines ? `<table class="kv" style="margin-top:3mm">${detailLines}</table>` : ''}
     ${m.status ? `<div class="status">${esc(m.status)}</div>` : ''}
-    ${m.received_by ? `<div class="tiny" style="margin-top:3mm">Received by: ${esc(m.received_by)}</div>` : ''}
+    <div class="tiny" style="margin-top:3mm">Received by: ${esc(m.received_by || '—')}</div>
     ${roll ? '' : `<div class="sig">_______________________<br/>Authorised Signature</div>`}
     <div class="foot">${esc(school.footer)}</div>
   </body></html>`;

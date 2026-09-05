@@ -1184,7 +1184,18 @@ function createApiServer(db, opts = {}) {
         }
       }
     }
+    // One vocabulary, one rule about reasons — the same module the office PC's
+    // register uses. A mark the desktop would refuse is refused here, and the
+    // reason on a LATE pupil is kept rather than thrown away because they
+    // eventually turned up.
+    const attendanceLib = require('../ipc/_attendance');
+    for (const m of marks) {
+      if (m.status && !attendanceLib.isValid(m.status)) {
+        return json(res, 400, { ok: false, error: 'That is not a mark the register takes.' });
+      }
+    }
     const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
+    const prior = db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?');
     const up = db.prepare(`
       INSERT INTO student_attendance (student_id, date, status, marked_by, term_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -1195,7 +1206,8 @@ function createApiServer(db, opts = {}) {
     const tx = db.transaction(() => {
       for (const m of marks) {
         const status = m.status || 'present';
-        const notes = status === 'absent' ? (m.notes || null) : null;
+        const existing = prior.get(m.student_id, date);
+        const notes = attendanceLib.notesFor(status, m.notes, existing && existing.notes);
         up.run(m.student_id, date, status, ctx.user.id, term?.id || null, notes);
         n++;
       }
@@ -1606,7 +1618,7 @@ function createApiServer(db, opts = {}) {
   // Billing, discounts, books, the store room, the buses, payroll's schedules,
   // the notification log, activities, budgets and the cashbook — everything the
   // browser app needs on the school's own Wi-Fi that used to live behind IPC.
-  registerOfficeRoutes({ add, db, json, can, API, getSetting, audit });
+  registerOfficeRoutes({ add, db, json, html, can, API, getSetting, audit, getResourcePath });
 
   // The dashboards themselves — the installed application's own summary
   // screens, served to the browser so the two are one product rather than two
@@ -1647,11 +1659,23 @@ function createApiServer(db, opts = {}) {
     if (webapp.serveWebApp(req, res, parsed.pathname)) return;
 
     // find route
-    let route = null, routeParams = null;
+    //
+    // A literal beats a placeholder. Two patterns can both match one path —
+    // /students/sheet and /students/:id do — and the dispatcher used to take
+    // whichever module happened to register first, so a real route answered
+    // "Student not found" because a different file was loaded earlier. The
+    // path a request took should not depend on registration order, so of the
+    // patterns that match, the most specific one (fewest placeholders) wins.
+    let route = null, routeParams = null, routeSpecificity = Infinity;
     for (const r of routes) {
       if (r.method !== req.method) continue;
       const m = match(r.parts, reqParts);
-      if (m) { route = r; routeParams = m; break; }
+      if (!m) continue;
+      const placeholders = Object.keys(m).length;
+      if (placeholders < routeSpecificity) {
+        route = r; routeParams = m; routeSpecificity = placeholders;
+        if (placeholders === 0) break;
+      }
     }
     if (!route) return json(res, 404, { ok: false, error: 'Not found' });
 

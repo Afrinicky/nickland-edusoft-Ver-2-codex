@@ -39,7 +39,27 @@ import { Panel, Bar, StatRow, Stat } from '../../desk';
 import { useLayout } from '../../responsive';
 import { colors, spacing, type, radius } from '../../theme';
 
-const STATUSES = ['Active', 'Withdrawn', 'Graduated', 'Suspended'];
+// One vocabulary, shared with the installed application and with the server
+// that enforces it. There were two: the browser offered Active / Withdrawn /
+// Graduated / Suspended while the office PC offered Active / Inactive /
+// Graduated / Transferred, both writing the same column — so a pupil withdrawn
+// at the gate did not appear under the office's "Inactive" filter, a pupil
+// transferred at the office was not a status the browser could display, and
+// the two screens reported different roll sizes for the same school.
+const STATUSES = [
+  { value: 'Active', label: 'Active', note: 'On the roll, in class' },
+  { value: 'Suspended', label: 'Suspended', note: 'Temporarily out, still on the roll', needsReason: true },
+  { value: 'Withdrawn', label: 'Withdrawn', note: 'The parent took them out', needsReason: true },
+  { value: 'Transferred', label: 'Transferred', note: 'Left for another school', needsReason: true },
+  { value: 'Graduated', label: 'Graduated', note: 'Completed the school' },
+  { value: 'Inactive', label: 'Inactive', note: 'No longer attending — the older catch-all', needsReason: true },
+];
+
+const statusTone = (s) => (s === 'Active' ? 'success'
+  : s === 'Graduated' ? 'primary'
+    : s === 'Suspended' ? 'warning' : 'danger');
+
+const needsReason = (s) => !!(STATUSES.find(x => x.value === s) || {}).needsReason;
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
@@ -259,107 +279,17 @@ function filterPupils(list, q) {
 }
 
 // ── Admissions ──────────────────────────────────────────────────────────────
+//
+// The admission form is the installed application's, field for field, and it
+// is long enough to be worth its own file. It is re-exported here so the
+// route's imports do not have to know that.
+export { default as StudentsAdmissions } from './admissions';
 
-export function StudentsAdmissions() {
-  const { token, profile } = useAuth();
-  const { classes } = useOfficeClasses(token);
-  const state = useOffice((t) => api.adminStudents(t, { status: 'Active' }));
-  const [form, setForm] = useState(blankAdmission());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const [admitted, setAdmitted] = useState(null);
-  const may = can(profile, 'students', 'create');
-
-  const set = (k) => (v) => setForm(f => ({ ...f, [k]: v }));
-
-  const recent = useMemo(() => (state.data?.students || [])
-    .slice()
-    .sort((a, b) => String(b.admission_date || '').localeCompare(String(a.admission_date || '')))
-    .slice(0, 12), [state.data]);
-
-  async function admit() {
-    setError(null); setAdmitted(null);
-    if (!form.surname.trim() || !form.firstName.trim()) {
-      return setError('A surname and a first name are required.');
-    }
-    setBusy(true);
-    try {
-      const r = await api.adminAdmit(token, {
-        surname: form.surname.trim(),
-        firstName: form.firstName.trim(),
-        otherNames: form.otherNames.trim() || undefined,
-        gender: form.gender || undefined,
-        dateOfBirth: form.dateOfBirth || undefined,
-        classId: form.classId ? Number(form.classId) : undefined,
-        indexNumber: form.indexNumber.trim() || undefined,
-      });
-      setAdmitted(r.index_number);
-      setForm(blankAdmission());
-      state.reload();
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  }
-
-  if (!may) {
-    return <EmptyState icon="lock" title="Admissions are not yours to make"
-                       message="Your account can read the roll but not add to it." />;
-  }
-
-  return (
-    <OfficeScreen state={state} skeleton={3}>
-      <ErrorNote message={error} />
-      {admitted ? (
-        <SuccessNote message={`Admitted — admission number ${admitted}. Write it on the record.`} />
-      ) : null}
-
-      <Panel title="Admit a pupil"
-             subtitle="An admission number is issued automatically unless the school has its own.">
-        <View style={styles.formGrid}>
-          <View style={styles.formCell}><Field label="Surname" value={form.surname} onChangeText={set('surname')} /></View>
-          <View style={styles.formCell}><Field label="First name" value={form.firstName} onChangeText={set('firstName')} /></View>
-          <View style={styles.formCell}><Field label="Other names" value={form.otherNames} onChangeText={set('otherNames')} /></View>
-          <View style={styles.formCell}>
-            <Select label="Sex" value={form.gender} onChange={set('gender')}
-                    options={[{ label: 'Female', value: 'Female' }, { label: 'Male', value: 'Male' }]} />
-          </View>
-          <View style={styles.formCell}>
-            <Field label="Date of birth" value={form.dateOfBirth} onChangeText={set('dateOfBirth')}
-                   hint="YYYY-MM-DD" />
-          </View>
-          <View style={styles.formCell}>
-            <Select label="Class" value={form.classId} onChange={set('classId')}
-                    options={(classes || []).map(c => ({ label: c.name, value: String(c.id) }))} />
-          </View>
-          <View style={styles.formCell}>
-            <Field label="Admission number" value={form.indexNumber} onChangeText={set('indexNumber')}
-                   hint="Leave empty and one is issued" />
-          </View>
-        </View>
-        <Button title={busy ? 'Admitting…' : 'Admit the pupil'} busy={busy} disabled={busy}
-                icon="check" full={false} onPress={admit} />
-      </Panel>
-
-      <Panel title="Recently admitted" subtitle="The last twelve onto the roll">
-        <DataTable
-          keyExtractor={(r) => String(r.id)}
-          empty="Nobody has been admitted yet."
-          columns={[
-            { key: 'name', label: 'Pupil' },
-            { key: 'index_number', label: 'Admission no.', width: 150 },
-            { key: 'class_name', label: 'Class', width: 140 },
-            { key: 'admission_date', label: 'Admitted', align: 'right', width: 116,
-              render: (r) => shortDate(r.admission_date) },
-          ]}
-          rows={recent} />
-      </Panel>
-    </OfficeScreen>
-  );
-}
-
-const blankAdmission = () => ({
-  surname: '', firstName: '', otherNames: '', gender: '',
-  dateOfBirth: '', classId: '', indexNumber: '',
-});
+// ── The Students Sheet ──────────────────────────────────────────────────────
+//
+// A whole class on one screen, corrected in place — thirty-nine columns and
+// the server's own column rules. Also its own file, for the same reason.
+export { default as StudentsSheet } from './students-sheet';
 
 // ── Status ──────────────────────────────────────────────────────────────────
 //
@@ -372,7 +302,7 @@ export function StudentsStatus() {
   const { token, profile } = useAuth();
   const [status, setStatus] = useState('Active');
   const [q, setQ] = useState('');
-  const state = useOffice((t) => api.adminStudents(t, { status }), [status]);
+  const state = useOffice((t) => api.adminStudents(t, { status: status || undefined }), [status]);
   const [changing, setChanging] = useState(null);
   const [newStatus, setNewStatus] = useState('Withdrawn');
   const [reason, setReason] = useState('');
@@ -383,7 +313,7 @@ export function StudentsStatus() {
 
   async function change() {
     setError(null);
-    if (newStatus !== 'Active' && reason.trim().length < 3) return setError('Give the reason.');
+    if (needsReason(newStatus) && reason.trim().length < 3) return setError('Give the reason.');
     setBusy(true);
     try {
       await api.adminStudentStatus(token, changing.id, newStatus, reason.trim());
@@ -398,30 +328,41 @@ export function StudentsStatus() {
       <ErrorNote message={error} />
       <Bar
         left={<>
-          <View style={{ minWidth: 320 }}>
-            <SegmentedControl value={status} onChange={setStatus}
-                              options={STATUSES.map(s => ({ label: s, value: s }))} />
+          <View style={{ minWidth: 200 }}>
+            <Select label="" value={status} onChange={setStatus}
+                    options={[{ label: 'Every status', value: '' },
+                              ...STATUSES.map(s => ({ label: s.label, value: s.value }))]} />
           </View>
           <View style={{ minWidth: 220, flex: 1 }}>
             <SearchField value={q} onChangeText={setQ} placeholder="Find a pupil" />
           </View>
         </>}
-        right={<Badge tone={status === 'Active' ? 'success' : 'neutral'} label={`${rows.length} ${status.toLowerCase()}`} />}
+        right={<Badge tone={statusTone(status)}
+                      label={`${rows.length} ${status ? status.toLowerCase() : 'on record'}`} />}
       />
 
       <Panel padded={false}>
         <View style={{ padding: spacing.lg }}>
           <DataTable
             keyExtractor={(r) => String(r.id)}
-            empty={`Nobody is ${status.toLowerCase()}.`}
+            empty={status ? `Nobody is ${status.toLowerCase()}.` : 'Nobody is on the roll.'}
             onRowPress={may ? (r) => {
               setError(null); setChanging(r);
               setNewStatus(r.status === 'Active' ? 'Withdrawn' : 'Active'); setReason('');
             } : undefined}
             columns={[
               ...pupilColumns().slice(0, 2),
-              { key: 'status', label: 'Status', width: 120,
-                render: (r) => <Badge tone={r.status === 'Active' ? 'success' : 'neutral'} label={r.status} /> },
+              { key: 'status', label: 'Status', width: 150,
+                render: (r) => (
+                  <View style={{ minWidth: 0 }}>
+                    <Badge tone={statusTone(r.status)} label={r.status || 'Active'} />
+                    {/* Why they are off the roll, on the row. It used to live
+                        only in the audit log, so this column was blank beside
+                        every withdrawn pupil and nobody could see the reason. */}
+                    {r.status !== 'Active' && r.inactive_reason
+                      ? <Muted numberOfLines={1}>{r.inactive_reason}</Muted> : null}
+                  </View>
+                ) },
               { key: 'go', label: '', width: 110, align: 'right',
                 render: () => (may ? <Muted>Change →</Muted> : null) },
             ]}
@@ -438,9 +379,10 @@ export function StudentsStatus() {
               {`Currently ${changing.status}. A parent notices this first — the app stops showing their child.`}
             </Muted>
             <Select label="New status" value={newStatus} onChange={setNewStatus}
-                    options={STATUSES.map(s => ({ label: s, value: s }))} />
-            {newStatus !== 'Active' ? (
-              <Field label="Why" value={reason} onChangeText={setReason}
+                    hint={(STATUSES.find(s => s.value === newStatus) || {}).note}
+                    options={STATUSES.map(s => ({ label: s.label, value: s.value, note: s.note }))} />
+            {needsReason(newStatus) ? (
+              <Field label="Why (required)" value={reason} onChangeText={setReason}
                      hint="Recorded against the pupil, and in the audit trail." />
             ) : null}
             <Button title={busy ? 'Saving…' : 'Change it'} busy={busy} disabled={busy}
@@ -449,159 +391,6 @@ export function StudentsStatus() {
         ) : null}
       </Sheet>
     </OfficeScreen>
-  );
-}
-
-// ── The sheet ───────────────────────────────────────────────────────────────
-
-const SHEET_COLUMNS = [
-  { key: 'surname',         label: 'Surname',      width: 150 },
-  { key: 'first_name',      label: 'First name',   width: 150 },
-  { key: 'other_names',     label: 'Other names',  width: 150 },
-  { key: 'gender',          label: 'Sex',          width: 90, choices: ['Female', 'Male'] },
-  { key: 'date_of_birth',   label: 'Born',         width: 130, hint: 'YYYY-MM-DD' },
-  { key: 'father_name',     label: "Father",       width: 170 },
-  { key: 'father_contact',  label: "Father's phone", width: 150 },
-  { key: 'mother_name',     label: 'Mother',       width: 170 },
-  { key: 'mother_contact',  label: "Mother's phone", width: 150 },
-  { key: 'guardian_name',   label: 'Guardian',     width: 170 },
-  { key: 'guardian_contact',label: "Guardian's phone", width: 150 },
-  { key: 'place_of_residence', label: 'Residence', width: 170 },
-];
-
-export function StudentsSheet() {
-  const { token, profile } = useAuth();
-  const layout = useLayout();
-  const { classes } = useOfficeClasses(token);
-  const [classId, setClassId] = useState('');
-  const state = useOffice(
-    (t) => (classId ? api.adminStudents(t, { status: 'Active', classId }) : Promise.resolve({ ok: true, students: [] })),
-    [classId]);
-
-  // id → { column: value }. Only what has been TOUCHED, so a save sends the
-  // corrections and not four hundred unchanged rows.
-  const [edits, setEdits] = useState({});
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const [saved, setSaved] = useState(0);
-  const may = can(profile, 'students', 'edit');
-
-  const rows = state.data?.students || [];
-  const dirtyIds = Object.keys(edits).filter(id => Object.keys(edits[id] || {}).length);
-
-  const edit = useCallback((id, key, value) => {
-    setEdits(e => ({ ...e, [id]: { ...(e[id] || {}), [key]: value } }));
-  }, []);
-
-  async function save() {
-    setError(null); setBusy(true);
-    let done = 0;
-    try {
-      // One request per corrected pupil, in order. A batch endpoint would be
-      // faster and would also mean a single bad row rejecting thirty good ones.
-      for (const id of dirtyIds) {
-        await api.adminUpdateStudent(token, id, edits[id]);
-        done += 1;
-      }
-      setEdits({});
-      setSaved(done);
-      state.reload();
-    } catch (e) {
-      setError(`${e.message}${done ? ` — ${done} pupil${done === 1 ? '' : 's'} saved before it stopped.` : ''}`);
-    } finally { setBusy(false); }
-  }
-
-  if (!may) {
-    return <EmptyState icon="lock" title="The sheet is read-only for your account"
-                       message="You can see the roll under All Students. Correcting a record needs edit access to Students." />;
-  }
-
-  return (
-    <OfficeScreen state={state} skeleton={6}>
-      <ErrorNote message={error} />
-      {saved ? <SuccessNote message={`${saved} pupil${saved === 1 ? '' : 's'} corrected.`} /> : null}
-
-      <Bar
-        left={<View style={{ minWidth: 240 }}>
-          <Select label="Class" value={classId} onChange={(v) => { setEdits({}); setSaved(0); setClassId(v); }}
-                  placeholder="Choose a class to open its sheet"
-                  options={(classes || []).map(c => ({ label: c.name, value: String(c.id) }))} />
-        </View>}
-        right={<>
-          {dirtyIds.length ? <Badge tone="warning" label={`${dirtyIds.length} unsaved`} /> : null}
-          <Button title={busy ? 'Saving…' : 'Save changes'} busy={busy}
-                  disabled={busy || !dirtyIds.length} icon="check" full={false} onPress={save} />
-          {dirtyIds.length ? (
-            <Button title="Discard" variant="ghost" full={false} disabled={busy}
-                    onPress={() => setEdits({})} />
-          ) : null}
-        </>}
-      />
-
-      {!classId ? (
-        <EmptyState icon="layers" title="Pick a class"
-                    message="The sheet opens one class at a time — four hundred rows on one screen is not a sheet anybody can work down." />
-      ) : rows.length === 0 ? (
-        <EmptyState icon="users" title="Nobody in this class"
-                    message="Admit pupils into it, or move them from another class." />
-      ) : !layout.canTable ? (
-        <EmptyState icon="alert" title="The sheet needs a wider screen"
-                    message="Typing across fourteen columns on a handset is not a sheet. Open a pupil from All Students to correct one record, or use this on a tablet or a PC." />
-      ) : (
-        <Panel padded={false} title={`${rows.length} pupils`}
-               subtitle="Type into a cell to correct it. Nothing is written until you save.">
-          <SheetGrid rows={rows} edits={edits} onEdit={edit} />
-        </Panel>
-      )}
-    </OfficeScreen>
-  );
-}
-
-function SheetGrid({ rows, edits, onEdit }) {
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator style={{ width: '100%' }}>
-      <View>
-          <View style={styles.sheetHead}>
-            <View style={[styles.sheetCell, { width: 46 }]}><Text style={styles.sheetHeadText}>#</Text></View>
-            {SHEET_COLUMNS.map(c => (
-              <View key={c.key} style={[styles.sheetCell, { width: c.width }]}>
-                <Text numberOfLines={1} style={styles.sheetHeadText}>{c.label}</Text>
-              </View>
-            ))}
-          </View>
-          {rows.map((r, i) => (
-            <View key={r.id} style={[styles.sheetRow, i % 2 ? styles.sheetRowAlt : null]}>
-              <View style={[styles.sheetCell, { width: 46 }]}>
-                <Text style={styles.sheetIndex}>{i + 1}</Text>
-              </View>
-              {SHEET_COLUMNS.map(c => (
-                <SheetCell
-                  key={c.key} column={c} row={r}
-                  value={(edits[r.id] && c.key in edits[r.id]) ? edits[r.id][c.key] : (r[c.key] ?? '')}
-                  dirty={!!(edits[r.id] && c.key in edits[r.id])}
-                  onChange={(v) => onEdit(r.id, c.key, v)} />
-              ))}
-            </View>
-          ))}
-      </View>
-    </ScrollView>
-  );
-}
-
-function SheetCell({ column, value, dirty, onChange }) {
-  const [focus, setFocus] = useState(false);
-  return (
-    <View style={[styles.sheetCell, { width: column.width }]}>
-      <TextInput
-        value={value == null ? '' : String(value)}
-        onChangeText={onChange}
-        onFocus={() => setFocus(true)} onBlur={() => setFocus(false)}
-        placeholder={column.hint || ''}
-        placeholderTextColor={colors.faint}
-        accessibilityLabel={column.label}
-        style={[styles.sheetInput, dirty && styles.sheetInputDirty, focus && styles.sheetInputFocus]}
-      />
-    </View>
   );
 }
 
@@ -616,29 +405,4 @@ const styles = {
   admissionMeta: { ...type.small, fontSize: 11, color: colors.muted, marginTop: 2 },
   admissionDate: { ...type.small, fontSize: 12, color: colors.muted, flexShrink: 0 },
 
-  formGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.md },
-  formCell: { minWidth: 220, flexGrow: 1, flexBasis: 220 },
-
-  sheetHead: {
-    flexDirection: 'row', backgroundColor: colors.surfaceAlt,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  sheetHeadText: {
-    ...type.micro, color: colors.muted, fontSize: 10.5, paddingHorizontal: 8, paddingVertical: 9,
-  },
-  sheetRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.borderSoft },
-  sheetRowAlt: { backgroundColor: colors.surfaceAlt },
-  sheetCell: { paddingHorizontal: 3, paddingVertical: 3, justifyContent: 'center' },
-  sheetIndex: { ...type.small, color: colors.faint, fontSize: 11.5, textAlign: 'center' },
-  sheetInput: {
-    ...type.small, color: colors.text, fontSize: 13,
-    paddingHorizontal: 7, paddingVertical: 7, minHeight: 34,
-    borderRadius: radius.xs, borderWidth: 1, borderColor: 'transparent',
-    backgroundColor: 'transparent',
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
-  },
-  // A corrected cell stays marked until it is saved, so somebody who has typed
-  // down forty rows can see at a glance what they have touched.
-  sheetInputDirty: { backgroundColor: colors.accentSoft, borderColor: colors.accent },
-  sheetInputFocus: { borderColor: colors.primary, backgroundColor: colors.card },
 };

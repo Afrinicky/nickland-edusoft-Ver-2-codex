@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/index.js';
 import { fullName, initials } from '../../lib/format.js';
+import { STATUSES, needsReason, statusTone } from '../../lib/studentStatus.js';
 import Modal from '../../components/Modal.jsx';
 import StudentForm from './Form.jsx';
 import Avatar from '../../components/Avatar.jsx';
@@ -22,6 +23,11 @@ export default function StudentsStatusTab() {
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showPromote, setShowPromote] = useState(false);
+  // Taking a pupil off the roll is the one change to a record a PARENT
+  // notices — the app stops showing their child — so it asks why, and the
+  // answer goes on the record rather than into somebody's memory.
+  const [changing, setChanging] = useState(null);   // { studentId, name, status }
+  const [reason, setReason] = useState('');
   const navigate = useNavigate();
 
   async function refresh() {
@@ -41,16 +47,31 @@ export default function StudentsStatusTab() {
   }
 
 
-  async function handleStatusChange(studentId, nextStatus) {
-    const res = await window.api.students.update(studentId, { status: nextStatus });
-    if (!res.ok) {
-      showToast('Status update failed', 'error');
+  function handleStatusChange(student, nextStatus) {
+    if (nextStatus === student.status) return;
+    if (needsReason(nextStatus)) {
+      setReason('');
+      setChanging({ studentId: student.id, name: fullName(student), status: nextStatus });
       return;
     }
+    applyStatus(student.id, nextStatus, null);
+  }
+
+  async function applyStatus(studentId, nextStatus, why) {
+    const res = await window.api.students.update(studentId, {
+      status: nextStatus,
+      // The reason goes on the RECORD. It used to be neither asked for nor
+      // stored, so a pupil marked Inactive left no trace of why, and the
+      // Reason column beside them was always empty.
+      inactive_reason: nextStatus === 'Active' ? null : (why || null),
+    });
+    if (!res.ok) return showToast(res.error || 'Status update failed', 'error');
     setStudents(prev => prev.map(s => (
-      s.id === studentId ? { ...s, status: nextStatus } : s
+      s.id === studentId ? { ...s, status: nextStatus, inactive_reason: why || null } : s
     )));
-    showToast(`Student status saved as ${nextStatus}`, 'success');
+    setChanging(null);
+    showToast(`Status saved as ${nextStatus}`, 'success');
+    refresh();
   }
 
   async function handleDownload() {
@@ -100,13 +121,12 @@ export default function StudentsStatusTab() {
             <option value="">All classes</option>
             {classes.map(c => <option key={c.id} value={c.id ?? ''}>{c.name}</option>)}
           </select>
-          <select className="select" style={{ maxWidth: 140 }}
+          <select className="select" style={{ maxWidth: 160 }}
             value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="Active">Active</option>
-            <option value="">All status</option>
-            <option value="Inactive">Inactive</option>
-            <option value="Graduated">Graduated</option>
-            <option value="Transferred">Transferred</option>
+            <option value="">Every status</option>
+            {STATUSES.filter(s => s.value !== 'Active')
+              .map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
         </div>
 
@@ -135,16 +155,16 @@ export default function StudentsStatusTab() {
                     <select
                       className="select"
                       value={s.status || 'Active'}
-                      onChange={e => handleStatusChange(s.id, e.target.value)}
-                      style={{ maxWidth: 130 }}
+                      onChange={e => handleStatusChange(s, e.target.value)}
+                      style={{ maxWidth: 140 }}
                     >
-                      <option value="Active">Active</option>
-                      <option value="Inactive">Inactive</option>
-                      <option value="Graduated">Graduated</option>
-                      <option value="Transferred">Transferred</option>
+                      {STATUSES.map(x => <option key={x.value} value={x.value}>{x.label}</option>)}
                     </select>
                   ) : (
-                    <span className="badge badge-muted">{s.status || 'Active'}</span>
+                    <span className={'badge ' + statusTone(s.status)}>{s.status || 'Active'}</span>
+                  )}
+                  {s.status !== 'Active' && s.inactive_reason && (
+                    <div className="text-xs text-muted" style={{ marginTop: 2 }}>{s.inactive_reason}</div>
                   )}
                 </td>
               </tr>
@@ -160,6 +180,29 @@ export default function StudentsStatusTab() {
           </tbody>
         </table>
       </div>
+
+      {changing && (
+        <Modal title={`Take ${changing.name} off the roll`} onClose={() => setChanging(null)} size="sm"
+          footer={<>
+            <button className="btn btn-ghost" onClick={() => setChanging(null)}>Cancel</button>
+            <button className="btn btn-primary" disabled={reason.trim().length < 3}
+              onClick={() => applyStatus(changing.studentId, changing.status, reason.trim())}>
+              Mark as {changing.status}
+            </button>
+          </>}>
+          <p className="text-sm">
+            A pupil who is not <b>Active</b> drops off class lists, registers and the
+            bills a term raises, and their parent's app stops showing them. Say why,
+            so the next person to open this record does not have to ask.
+          </p>
+          <div className="form-group">
+            <label className="label">Why (required)</label>
+            <textarea className="input" rows={3} value={reason}
+              onChange={e => setReason(e.target.value)}
+              placeholder="e.g. Parent relocated to Sunyani — transferred to St Joseph's." />
+          </div>
+        </Modal>
+      )}
 
       {showAdd && (
         <Modal title="Add new student" onClose={() => setShowAdd(false)} size="lg">

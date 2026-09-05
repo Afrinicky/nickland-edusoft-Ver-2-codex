@@ -109,7 +109,7 @@ function req(base, method, p, { token, body } = {}) {
       .run(idx, sur, first, cls, `Mr ${sur}`, '0244111222', `Mrs ${sur}`, '0201112223');
     pupils.push(db.prepare('SELECT id FROM students WHERE index_number = ?').get(idx).id);
   }
-  const [p1, p2, , outside] = pupils;
+  const [p1, p2, p3, outside] = pupils;
 
   db.prepare(`INSERT INTO student_bills (student_id, term_id, total_billed, total_paid, balance, status)
               VALUES (?, 3, 500, 240, 260, 'active')`).run(p1);
@@ -179,6 +179,50 @@ function req(base, method, p, { token, body } = {}) {
   r = await req(base, 'GET', '/api/v1/attendance/history?classId=1&days=30', { token });
   ck('register history counts the day', r.json.marked_days === 1 && r.json.days[0].absent === 1);
   ck('and totals each pupil', (r.json.students || []).find(s => s.id === p2).absent === 1);
+  ck('...and carries the reason the teacher wrote, so it can be read back',
+    ((r.json.students || []).find(s => s.id === p2).reasons || [])
+      .some(x => x.reason === 'Sick' && x.status === 'absent'));
+
+  // ── a late arrival has a reason too ──
+  //
+  // Every writer in the system used to do `status === 'absent' ? notes : null`,
+  // so a child who arrived at nine because of a funeral lost the story — which
+  // is the story a head teacher wants three weeks later, when the pattern
+  // shows up.
+  r = await req(base, 'POST', '/api/v1/attendance', {
+    token,
+    body: { date: '2026-08-25', marks: [{ student_id: p3, status: 'late', notes: 'Funeral at Techiman' }] },
+  });
+  ck('a pupil can be marked late', r.json.ok && r.json.saved === 1);
+  ck('...and the reason for the lateness is kept, not thrown away',
+    db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?')
+      .get(p3, '2026-08-25').notes === 'Funeral at Techiman');
+
+  // Re-marking the same day present clears the reason: a note explaining an
+  // absence that did not happen is how a printout ends up lying.
+  r = await req(base, 'POST', '/api/v1/attendance', {
+    token, body: { date: '2026-08-25', marks: [{ student_id: p3, status: 'present' }] },
+  });
+  ck('marking them present afterwards clears the reason',
+    db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?')
+      .get(p3, '2026-08-25').notes === null);
+
+  // Re-marking absent WITHOUT retyping keeps what was already there, so a
+  // correction to the mark does not silently discard the reason.
+  await req(base, 'POST', '/api/v1/attendance', {
+    token, body: { date: '2026-08-26', marks: [{ student_id: p3, status: 'absent', notes: 'At the clinic' }] },
+  });
+  await req(base, 'POST', '/api/v1/attendance', {
+    token, body: { date: '2026-08-26', marks: [{ student_id: p3, status: 'late' }] },
+  });
+  ck('changing the mark without retyping keeps the reason already given',
+    db.prepare('SELECT status, notes FROM student_attendance WHERE student_id = ? AND date = ?')
+      .get(p3, '2026-08-26').notes === 'At the clinic');
+
+  r = await req(base, 'POST', '/api/v1/attendance', {
+    token, body: { date: '2026-08-27', marks: [{ student_id: p3, status: 'wandering' }] },
+  });
+  ck('a mark the register does not take is refused', r.status === 400);
 
   // ── continuous assessment ──
   r = await req(base, 'POST', '/api/v1/assessments/column', {

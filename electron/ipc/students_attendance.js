@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const { enqueueStudentSnapshot } = require('../server/sync/outbox');
+const attendance = require('./_attendance');
 
 module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDataPath, getResourcePath) {
 
@@ -152,9 +153,11 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
       const byDate = {};
       for (const r of records) byDate[r.date] = { status: r.status, notes: r.notes };
       const presentCount = records.filter(r => r.status === 'present').length;
-      // Accumulated reasons across the week
+      const lateCount = records.filter(r => r.status === 'late').length;
+      // Accumulated reasons across the week — for every mark that carries one,
+      // not absences alone.
       const reasons = records
-        .filter(r => r.status === 'absent' && r.notes)
+        .filter(r => attendance.needsReason(r.status) && r.notes)
         .map(r => `${r.date}: ${r.notes}`)
         .join('\n');
       return {
@@ -165,6 +168,8 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
         other_names: s.other_names,
         attendance: byDate,          // { '2026-04-27': { status, notes }, ... }
         present_count: presentCount,
+        late_count: lateCount,
+        in_school_count: presentCount + lateCount,
         absence_reasons: reasons,
       };
     });
@@ -173,9 +178,12 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
   // Mark a single day for a student. Update existing rows first so already-marked
   // attendance can be changed even in older databases that may contain duplicates.
   ipcMain.handle('students:register-mark', (_e, { studentId, date, status, reason, markedBy, termId }) => {
+    if (!attendance.isValid(status)) return { ok: false, error: 'That is not a mark the register takes.' };
     const existing = db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?')
       .get(studentId, date);
-    const notes = status === 'absent' ? (reason || existing?.notes || null) : null;
+    // Late keeps its reason too. It used to be thrown away because the pupil
+    // eventually turned up, which is the one case the old rule got backwards.
+    const notes = attendance.notesFor(status, reason, existing && existing.notes);
 
     const update = db.prepare(`
       UPDATE student_attendance
@@ -196,14 +204,23 @@ module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDa
     return { ok: true, updated: update.changes > 0 };
   });
 
-  // Save just the absence reason for a student on a date
+  // Save just the reason for a day, leaving the mark alone.
+  //
+  // This used to force the day to 'absent'. Typing why a pupil was LATE
+  // therefore re-marked them as away for the whole day — the register said one
+  // thing and the reason underneath it said another. The mark a teacher
+  // already made is now kept; only a day with no mark at all is taken to be an
+  // absence, which is what somebody typing a reason into a blank cell means.
   ipcMain.handle('students:register-save-reason', (_e, { studentId, date, reason, markedBy, termId }) => {
+    const existing = db.prepare('SELECT status FROM student_attendance WHERE student_id = ? AND date = ?')
+      .get(studentId, date);
+    const status = existing && attendance.needsReason(existing.status) ? existing.status : 'absent';
     db.prepare(`
       INSERT INTO student_attendance (student_id, date, status, marked_by, term_id, notes)
-      VALUES (?, ?, 'absent', ?, ?, ?)
-      ON CONFLICT (student_id, date) DO UPDATE SET notes = excluded.notes, status = 'absent'
-    `).run(studentId, date, markedBy || null, termId || null, reason || null);
-    return { ok: true };
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (student_id, date) DO UPDATE SET notes = excluded.notes, status = excluded.status
+    `).run(studentId, date, status, markedBy || null, termId || null, reason || null);
+    return { ok: true, status };
   });
 
   // ── Export attendance register (Excel) ────────────────
@@ -262,17 +279,21 @@ function getWeeklyRegisterExportData(db, classId, dates, termId) {
       SELECT date, status, notes FROM student_attendance
       WHERE student_id = ? AND date IN (${placeholders})
     `).all(student.id, ...dates);
-    const attendance = Object.fromEntries(records.map(r => [r.date, r]));
+    // Named `marks`, not `attendance`: the module holding the vocabulary is
+    // called that, and shadowing it here is how the reason rule would quietly
+    // stop applying to the printout.
+    const marks = Object.fromEntries(records.map(r => [r.date, r]));
     return {
       no: index + 1,
       indexNumber: student.index_number || '',
       name: [student.surname, student.first_name, student.other_names].filter(Boolean).join(' '),
-      attendance,
-      presentCount: dates.filter(date => attendance[date]?.status === 'present').length,
-      absentCount: dates.filter(date => attendance[date]?.status === 'absent').length,
+      attendance: marks,
+      presentCount: dates.filter(date => marks[date]?.status === 'present').length,
+      lateCount: dates.filter(date => marks[date]?.status === 'late').length,
+      absentCount: dates.filter(date => marks[date]?.status === 'absent').length,
       absenceReasons: records
-        .filter(r => r.status === 'absent' && r.notes)
-        .map(r => `${formatDateLabel(r.date)}: ${r.notes}`)
+        .filter(r => attendance.needsReason(r.status) && r.notes)
+        .map(r => `${formatDateLabel(r.date)}: ${statusLabel(r.status)} — ${r.notes}`)
         .join('\n'),
     };
   });
@@ -296,23 +317,22 @@ function formatDateLabel(iso) {
 }
 
 function statusLabel(status) {
-  if (!status) return '';
-  const labels = { present: 'Present', absent: 'Absent', late: 'Late', excused: 'Excused' };
-  return labels[status] || String(status).replace(/_/g, ' ');
+  return attendance.label(status);
 }
 
-// Excel cell value for a day: present → "yes", absent → "no", otherwise blank.
+// Excel cell value for a day. A late day used to come out blank — the same as
+// a day nobody marked — so a printed register could not tell "arrived at nine"
+// from "never taken".
 function excelMark(status) {
   if (status === 'present') return 'yes';
   if (status === 'absent') return 'no';
-  return '';
+  if (!status) return '';
+  return attendance.label(status).toLowerCase();
 }
 
-// PDF cell glyph for a day: present → ✓, absent → ✗, otherwise blank.
+// PDF cell glyph for a day: ✓ present, L late, ✗ absent, blank if unmarked.
 function pdfMark(status) {
-  if (status === 'present') return '✓';
-  if (status === 'absent') return '✗';
-  return '';
+  return attendance.mark(status);
 }
 
 function ensureOutputDir(savePath) {
@@ -327,7 +347,7 @@ async function exportAttendanceRegisterExcel(register, savePath) {
   wb.created = new Date();
   const ws = wb.addWorksheet('Attendance Register');
   const dateRange = `${formatDateLabel(register.dates[0])} - ${formatDateLabel(register.dates[register.dates.length - 1])}`;
-  const totalColumns = 6 + register.dates.length;
+  const totalColumns = 7 + register.dates.length;
 
   ws.mergeCells(1, 1, 1, totalColumns);
   ws.getCell(1, 1).value = register.schoolName;
@@ -346,7 +366,7 @@ async function exportAttendanceRegisterExcel(register, savePath) {
   ws.getCell(4, 1).value = `Term: ${register.termLabel}    Date Range: ${dateRange}`;
   ws.getCell(4, 1).alignment = { horizontal: 'center' };
 
-  const headers = ['#', 'Index No.', 'Name', ...register.dates.map(formatDateLabel), 'Total Present', 'Total Absent', 'Absence Reasons'];
+  const headers = ['#', 'Index No.', 'Name', ...register.dates.map(formatDateLabel), 'Total Present', 'Total Late', 'Total Absent', 'Reasons Given'];
   ws.addRow([]);
   const headerRow = ws.addRow(headers);
   headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -360,6 +380,7 @@ async function exportAttendanceRegisterExcel(register, savePath) {
       row.name,
       ...register.dates.map(date => excelMark(row.attendance[date]?.status)),
       row.presentCount,
+      row.lateCount,
       row.absentCount,
       row.absenceReasons,
     ]);
@@ -373,8 +394,9 @@ async function exportAttendanceRegisterExcel(register, savePath) {
     else if (idx === 2) col.width = 28;
     else if (idx >= firstDateCol && idx < totalPresentCol) col.width = 11;
     else if (idx === totalPresentCol) col.width = 14;       // Total Present
-    else if (idx === totalPresentCol + 1) col.width = 14;   // Total Absent
-    else col.width = 30;                                    // Absence Reasons
+    else if (idx === totalPresentCol + 1) col.width = 12;   // Total Late
+    else if (idx === totalPresentCol + 2) col.width = 14;   // Total Absent
+    else col.width = 34;                                    // Reasons Given
   });
   ws.eachRow((row, rowNumber) => {
     if (rowNumber >= 6) {
@@ -421,6 +443,7 @@ function buildAttendanceRegisterHtml(register, getResourcePath) {
       <td class="name">${escapeHtml(row.name)}</td>
       ${register.dates.map(date => `<td class="status ${escapeHtml(row.attendance[date]?.status || '')}">${pdfMark(row.attendance[date]?.status)}</td>`).join('')}
       <td class="num"><strong>${row.presentCount}</strong></td>
+      <td class="num">${row.lateCount || ''}</td>
       <td class="num"><strong>${row.absentCount}</strong></td>
       <td class="notes">${escapeHtml(row.absenceReasons).replace(/\n/g, '<br>')}</td>
     </tr>
@@ -455,7 +478,7 @@ function buildAttendanceRegisterHtml(register, getResourcePath) {
   </div>
   <div class="meta"><strong>Attendance Register</strong> &nbsp; | &nbsp; Class: ${escapeHtml(register.className)} &nbsp; | &nbsp; Term: ${escapeHtml(register.termLabel)} &nbsp; | &nbsp; Date Range: ${escapeHtml(dateRange)}</div>
   <table>
-    <thead><tr><th>#</th><th>Index No.</th><th>Name</th>${dateHeaders}<th>Total Present</th><th>Total Absent</th><th>Absence Reasons</th></tr></thead>
+    <thead><tr><th>#</th><th>Index No.</th><th>Name</th>${dateHeaders}<th>Total Present</th><th>Total Late</th><th>Total Absent</th><th>Reasons Given</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </body></html>`;

@@ -399,6 +399,48 @@ export function TabStrip({ tabs, value, onChange }) {
 }
 
 /**
+ * The strip INSIDE a tab.
+ *
+ * Fees has four sections at the top — Dashboard, Payments, Bills, Discounts —
+ * and each of the middle two holds several screens: the counter and the bulk
+ * sheet under Payments, the six kinds of bill under Bills. A flat strip of
+ * eleven tabs said nothing about which of them belonged together, and put the
+ * thing a school does every morning eleven items along from the thing it does
+ * three times a year.
+ *
+ * Drawn as pills rather than the outer strip's underlines, so at a glance it
+ * is obviously a level down and not a second row of the same thing.
+ */
+export function SubTabStrip({ tabs, value, onChange }) {
+  if (!tabs || tabs.length < 2) return null;
+  const items = tabs.map((t) => {
+    const on = t.id === value;
+    return (
+      <Pressable key={t.id} onPress={() => onChange(t.id)}
+                 accessibilityRole="tab" accessibilityState={{ selected: on }}
+                 style={[styles.subTab, on && styles.subTabOn]}>
+        <Text numberOfLines={1} style={[styles.subTabText, on && styles.subTabTextOn]}>
+          {t.label}
+        </Text>
+        {t.badge > 0 ? (
+          <View style={styles.subTabBadge}>
+            <Text style={styles.subTabBadgeText}>{t.badge}</Text>
+          </View>
+        ) : null}
+      </Pressable>
+    );
+  });
+  return (
+    <View style={styles.subTabsWrap}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.subTabs}>
+        {items}
+      </ScrollView>
+    </View>
+  );
+}
+
+/**
  * A row of controls above a table: filters on the left, actions on the right.
  * Wraps on a narrow window rather than scrolling sideways, because a filter you
  * cannot see is a filter that is silently applied.
@@ -627,6 +669,23 @@ const styles = StyleSheet.create({
   tabOn: { borderBottomColor: colors.primary },
   tabText: { ...type.small, color: colors.muted, fontWeight: '600', fontSize: 13.5 },
   tabTextOn: { color: colors.primary, fontWeight: '800' },
+
+  subTabsWrap: { marginBottom: spacing.lg },
+  subTabs: { flexDirection: 'row', gap: 6, paddingRight: spacing.lg, flexWrap: 'nowrap' },
+  subTab: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 13, paddingVertical: 8,
+    borderRadius: 999, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  subTabOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  subTabText: { ...type.small, color: colors.muted, fontWeight: '700', fontSize: 13 },
+  subTabTextOn: { color: '#fff' },
+  subTabBadge: {
+    minWidth: 18, paddingHorizontal: 5, paddingVertical: 1,
+    borderRadius: 999, backgroundColor: colors.danger, alignItems: 'center',
+  },
+  subTabBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
 
   bar: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,

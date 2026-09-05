@@ -187,7 +187,7 @@ function makeDesktop() {
     body: { date: today, marks: [
       { student_id: pupils[0], status: 'present' },
       { student_id: pupils[1], status: 'absent', notes: 'Sick' },
-      { student_id: pupils[2], status: 'present' },
+      { student_id: pupils[2], status: 'late', notes: 'Funeral at Techiman' },
     ] },
   });
   ck('register submitted and queued', r.json.ok && r.json.queued === true && r.json.saved === 3);
@@ -234,6 +234,12 @@ function makeDesktop() {
   const att = db.prepare('SELECT student_id, status, notes, marked_by FROM student_attendance WHERE date = ?').all(today);
   ck('the register is in the school database', att.length === 3);
   ck('an absence kept its note', att.find(a => a.student_id === pupils[1]).status === 'absent' && att.find(a => a.student_id === pupils[1]).notes === 'Sick');
+  // The reason on a LATE pupil used to be dropped by the applier — `status ===
+  // 'absent' ? notes : null` — so a note typed in a corridor with no signal
+  // never reached the school it was typed for.
+  ck('...and so did a late arrival, which used to be dropped on the way in',
+    att.find(a => a.student_id === pupils[2]).status === 'late'
+    && att.find(a => a.student_id === pupils[2]).notes === 'Funeral at Techiman');
   ck('the work is attributed to the teacher who did it', att.every(a => a.marked_by === userId));
 
   const sc = db.prepare('SELECT student_id, exam_score, total_score FROM scores WHERE subject_id = ?').all(subjectId);

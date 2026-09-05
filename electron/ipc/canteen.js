@@ -1,5 +1,5 @@
 // Canteen IPC handlers — academic calendar, per-student canteen profile, payments, debtors.
-const { getSetting } = require('../utils/idgen');
+const { getSetting, getNextReceiptNumber } = require('../utils/idgen');
 const { postIncome } = require('./_ledger');
 const { autoReceiptForPayment, autoDeliverReceipt } = require('./receipts_engine');
 
@@ -168,19 +168,30 @@ function recordCanteenPayment(db, data) {
     LIMIT ?
   `).all(data.student_id, startFrom, days);
 
+  // Every receipt in the system carries an identifier a parent can quote back.
+  // The canteen's used to print blank.
+  const receiptNo = `CT/${new Date().getFullYear().toString().slice(-2)}/`
+    + String(getNextReceiptNumber(db)).padStart(5, '0');
+
   const tx = db.transaction(() => {
     const startDate = unpaidDays.length > 0 ? unpaidDays[0].date : startFrom;
     const endDate = unpaidDays.length > 0 ? unpaidDays[unpaidDays.length - 1].date : startFrom;
     const paymentResult = db.prepare(`
       INSERT INTO canteen_payments (student_id, term_id, payment_date, amount,
-        daily_rate, days_covered, start_date, end_date, received_by, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        daily_rate, days_covered, start_date, end_date, received_by, notes,
+        payment_method, reference, receipt_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       data.student_id, termId, paymentDate, amount,
       dailyRate, days, startDate, endDate,
       // NULL, not '' — received_by is a users(id) FK; an empty string is never a
       // valid id and violates the constraint when foreign_keys is enforced.
-      data.received_by || null, data.notes || ''
+      data.received_by || null, data.notes || '',
+      // How it was paid, and the transaction reference if there is one. The
+      // canteen used to record neither, because it only ever took cash across
+      // a counter — which stopped being true the moment a parent could send
+      // mobile money for a month's feeding.
+      data.payment_method || 'Cash', data.reference || null, receiptNo
     );
     const paymentId = paymentResult.lastInsertRowid;
     const insStatus = db.prepare(`
@@ -192,10 +203,12 @@ function recordCanteenPayment(db, data) {
     // omitted transaction_date (a NOT NULL column) which rolled the whole
     // payment back, so canteen collections never reached Finance.
     postIncome(db, {
+      receipt_number: receiptNo,
       category: 'canteen',
       amount,
       description: `Canteen payment - ${days} days @ GHS ${dailyRate.toFixed(2)}`,
       payment_method: data.payment_method || 'Cash',
+      reference: data.reference || null,
       date: paymentDate,
       source: 'canteen_payment',
       student_id: data.student_id,
@@ -210,7 +223,11 @@ function recordCanteenPayment(db, data) {
   let receiptRow = null;
   try { receiptRow = autoReceiptForPayment(db, 'canteen', id); } catch (_) {}
   try { autoDeliverReceipt(db, 'canteen', id); } catch (_) {}
-  return { ok: true, id, days_covered: days, receipt_id: receiptRow?.id || null };
+  return {
+    ok: true, id, days_covered: days,
+    receipt_number: receiptNo,
+    receipt_id: receiptRow?.id || null,
+  };
 }
 
 module.exports = registerCanteenHandlers;

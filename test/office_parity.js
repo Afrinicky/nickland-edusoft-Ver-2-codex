@@ -95,6 +95,22 @@ function makeDb(userDataPath) {
   return db;
 }
 
+/** The printable documents answer HTML, not JSON. */
+function reqText(base, method, p, { token } = {}) {
+  return new Promise((resolve) => {
+    const u = new URL(base + p);
+    const headers = {};
+    if (token) headers.Authorization = 'Bearer ' + token;
+    const r = http.request({ host: u.hostname, port: u.port, path: u.pathname + u.search, method, headers },
+      (res) => {
+        let d = ''; res.on('data', c => { d += c; });
+        res.on('end', () => resolve({ status: res.statusCode, text: d }));
+      });
+    r.on('error', () => resolve({ status: 0, text: '' }));
+    r.end();
+  });
+}
+
 function req(base, method, p, { token, body } = {}) {
   return new Promise((resolve) => {
     const data = body ? JSON.stringify(body) : null;
@@ -232,6 +248,245 @@ function req(base, method, p, { token, body } = {}) {
   const after = db.prepare('SELECT * FROM student_bills WHERE id = ?').get(bill.id);
   ck('re-raising a class does not discard money already received',
     r.status === 200 && Number(after.total_paid) === 100);
+
+  // ══ Admitting a pupil, in a browser ═══════════════════════════════════════
+  //
+  // The browser's admission used to write eight columns and invent its own
+  // admission number, so a pupil admitted at the gate on a phone and one
+  // admitted in the office on the same morning ended up on the roll with two
+  // different numbering schemes and half a record.
+
+  r = await req(base, 'POST', '/api/v1/admin/students', { token: admin, body: {
+    surname: 'OWUSU', first_name: 'Akosua', other_names: 'Serwaa',
+    gender: 'Female', date_of_birth: '2015-03-04', current_class_id: 1,
+    previous_school: 'St Peter\'s Preparatory', hometown: 'Acherensua',
+    nationality: 'Ghanaian', lives_with: 'Guardian', guardian_relationship: 'Aunt',
+    guardian_name: 'Comfort Owusu', guardian_contact: '0244000111',
+    emergency_contact_name: 'Kwame Owusu', emergency_contact_phone: '0209988776',
+    blood_group: 'O+', allergies: 'Peanuts', medical_notes: 'Mild asthma',
+    special_needs: 'Sits at the front', digital_address: 'BR-0348-9927',
+    admission_date: '2026-01-12', notes: 'Joined mid-term',
+  } });
+  ck('a pupil can be admitted from a browser', r.status === 200 && r.json.ok);
+  ck('...with the admission number the office PC would have issued, not another scheme',
+    /^[A-Z]+\/\d+\/\d+$/.test(r.json.index_number || ''));
+
+  const admittedRow = db.prepare('SELECT * FROM students WHERE id = ?').get(r.json.id);
+  ck('...the previous school, which decides the class they enter',
+    admittedRow.previous_school === "St Peter's Preparatory");
+  ck('...who the pupil actually lives with, and how they are related',
+    admittedRow.lives_with === 'Guardian' && admittedRow.guardian_relationship === 'Aunt');
+  ck('...an emergency contact separate from the parents',
+    admittedRow.emergency_contact_phone === '0209988776');
+  ck('...the medical facts that matter on the morning they matter',
+    admittedRow.blood_group === 'O+' && admittedRow.allergies === 'Peanuts'
+    && admittedRow.medical_notes === 'Mild asthma');
+  ck('...the day they actually joined, not the day somebody typed them in',
+    admittedRow.admission_date === '2026-01-12');
+  ck('...and the age worked out from the date of birth, which used to be dropped',
+    Number(admittedRow.age) >= 10);
+
+  r = await req(base, 'POST', '/api/v1/admin/students', { token: admin, body: {
+    surname: 'NOBODY', first_name: 'Ntim',
+  } });
+  ck('a pupil with no class is refused, as at the office PC', r.status === 400);
+
+  // ══ The pupils' sheet, in a browser ═══════════════════════════════════════
+  //
+  // The office PC has a spreadsheet of the whole roll that a clerk corrects in
+  // place. The browser had a narrower one of its own making: fewer columns, its
+  // own idea of which were free text, and no notion of which values a column
+  // would accept. So a correction typed on the school Wi-Fi could put a word in
+  // a column the office PC would have refused.
+
+  r = await req(base, 'GET', '/api/v1/students/sheet', { token: admin });
+  const sheetCols = (r.json && r.json.columns) || [];
+  ck('the browser reads the same sheet the office PC does',
+    r.status === 200 && Array.isArray(r.json.rows) && r.json.rows.length > 0);
+  ck('...with the office PC\'s own column rules, not a second list',
+    sheetCols.length >= 30
+    && sheetCols.some(c => c.field === 'blood_group' && Array.isArray(c.values))
+    && (sheetCols.find(c => c.field === 'status') || {}).values.join(',')
+       === require(path.join(ROOT, 'electron/ipc/_student_status.js')).VALUES.join(','));
+
+  const sheetPupil = (r.json.rows.find(x => x.surname === 'OWUSU') || r.json.rows[0]);
+  ck('...including the admission details the browser could not show at all',
+    Object.prototype.hasOwnProperty.call(sheetPupil, 'previous_school')
+    && Object.prototype.hasOwnProperty.call(sheetPupil, 'emergency_contact_phone'));
+
+  r = await req(base, 'POST', '/api/v1/students/sheet/cell',
+    { token: admin, body: { studentId: sheetPupil.id, field: 'hometown', value: 'Sunyani' } });
+  ck('a correction made in a browser is the same correction',
+    r.status === 200 && r.json.ok
+    && db.prepare('SELECT hometown FROM students WHERE id = ?').get(sheetPupil.id).hometown === 'Sunyani');
+
+  r = await req(base, 'POST', '/api/v1/students/sheet/cell',
+    { token: admin, body: { studentId: sheetPupil.id, field: 'blood_group', value: 'Purple' } });
+  ck('...and a value the office PC would refuse is refused here too',
+    r.status === 400 && /not allowed/i.test(r.json.error || ''));
+
+  r = await req(base, 'POST', '/api/v1/students/sheet/cell',
+    { token: bursar, body: { studentId: sheetPupil.id, field: 'hometown', value: 'Nowhere' } });
+  ck('...while somebody with no business editing pupils cannot', r.status === 403);
+
+  // ══ Taking a pupil off the roll, in a browser ═════════════════════════════
+  //
+  // The reason used to go only into the audit log, so a pupil withdrawn at the
+  // gate showed a blank Reason on the office PC's Status tab and nobody could
+  // see why they had gone.
+
+  r = await req(base, 'POST', `/api/v1/admin/students/${sheetPupil.id}/status`,
+    { token: admin, body: { status: 'Transferred', reason: 'Family moved to Kumasi' } });
+  const moved = db.prepare('SELECT status, inactive_reason FROM students WHERE id = ?').get(sheetPupil.id);
+  ck('a pupil can be transferred out from a browser — a status it could not even show before',
+    r.status === 200 && moved.status === 'Transferred');
+  ck('...and the reason is on the record, where the office PC reads it',
+    moved.inactive_reason === 'Family moved to Kumasi');
+
+  r = await req(base, 'POST', `/api/v1/admin/students/${sheetPupil.id}/status`,
+    { token: admin, body: { status: 'Gone', reason: 'Left' } });
+  ck('...a word that is not one of the six is refused', r.status === 400);
+
+  r = await req(base, 'POST', `/api/v1/admin/students/${sheetPupil.id}/status`,
+    { token: admin, body: { status: 'Withdrawn' } });
+  ck('...and nobody leaves the roll without saying why', r.status === 400);
+
+  r = await req(base, 'POST', `/api/v1/admin/students/${sheetPupil.id}/status`,
+    { token: admin, body: { status: 'Active' } });
+  ck('readmitting clears the reason rather than leaving a stale one',
+    r.status === 200
+    && db.prepare('SELECT inactive_reason FROM students WHERE id = ?').get(sheetPupil.id).inactive_reason === null);
+
+  // ══ The counter, in a browser ═════════════════════════════════════════════
+  //
+  // A school does not have a fees counter, a books counter, a canteen counter
+  // and a bus counter. It has one counter, and the browser must be able to be
+  // it — dispatching each purpose to the module that owns it rather than
+  // computing a second version of any balance.
+
+  r = await req(base, 'GET', '/api/v1/payments/purposes', { token: bursar });
+  ck('the browser is told what the school can be paid for',
+    r.status === 200 && r.json.purposes.some(p => p.key === 'school_fees'));
+  ck('...and that receipts print on an 80mm roll', r.json.paper_size === 'roll80');
+
+  r = await req(base, 'GET', '/api/v1/payments/students?owing=owing', { token: bursar });
+  ck('the counter can list who still owes without a name being typed',
+    r.status === 200 && r.json.students.length > 0
+    && r.json.students.every(s => Number(s.fees_balance) > 0));
+
+  const payer = db.prepare('SELECT id FROM students WHERE status = \'Active\' LIMIT 1').get().id;
+  r = await req(base, 'GET', `/api/v1/payments/account/${payer}`, { token: bursar });
+  ck('one pupil, every purpose, one answer',
+    r.status === 200 && r.json.accounts.some(a => a.purpose === 'school_fees'));
+  ck('...with the term named with its academic year',
+    /·/.test(r.json.term.full_label || ''));
+
+  r = await req(base, 'POST', '/api/v1/payments/take', { token: bursar, body: {
+    studentId: payer, purpose: 'school_fees', amount: 50, method: 'Mobile Money',
+  } });
+  ck('a mobile-money payment with no reference is refused in a browser too',
+    r.status === 422 && r.json.code === 'REFERENCE_REQUIRED');
+
+  r = await req(base, 'POST', '/api/v1/payments/take', { token: bursar, body: {
+    studentId: payer, purpose: 'school_fees', amount: 50, method: 'Mobile Money',
+    reference: 'MM-4471',
+  } });
+  ck('a payment can be taken from a browser', r.status === 200 && r.json.ok);
+  ck('...and comes back with the receipt, ready for the screen',
+    r.json.receipt && r.json.receipt.purpose_label === 'School Fees');
+  ck('...naming whoever is signed in, not a typed-in name',
+    r.json.receipt.received_by === 'Nicholas the Bursar'
+    || typeof r.json.receipt.received_by === 'string');
+  ck('...with the transaction reference on it', r.json.receipt.reference === 'MM-4471');
+
+  const takenId = r.json.payment_id;
+  r = await req(base, 'GET', `/api/v1/payments/receipt/fees/${takenId}`, { token: bursar });
+  ck('the receipt can be read back', r.status === 200 && r.json.receipt.payment_id === takenId);
+
+  r = await reqText(base, 'GET', `/api/v1/payments/receipt/fees/${takenId}/print.html`, { token: bursar });
+  ck('...and printed as the office prints it, not rebuilt in the browser',
+    r.status === 200 && /RECEIPT/.test(r.text) && /80mm/.test(r.text));
+
+  r = await req(base, 'GET', '/api/v1/payments/register', { token: bursar });
+  ck('the day\'s takings are one list, whatever they were for',
+    r.status === 200 && r.json.count >= 1);
+
+  // ══ Raising the term's fees, in a browser ═════════════════════════════════
+
+  r = await req(base, 'GET', '/api/v1/fees/frameworks', { token: bursar });
+  ck('the frameworks a bill starts from reach the browser',
+    r.status === 200 && r.json.frameworks.some(f => f.id === 'ave-maria-termly'));
+
+  r = await req(base, 'GET', '/api/v1/fees/school-fees/plan', { token: bursar });
+  ck('what raising would replace is answered before anything is written',
+    r.status === 200 && r.json.replaces === true);
+
+  // Raising what every family in the school is asked to pay is not the same
+  // question as "may this person take a payment". A bursar with Fees at Full
+  // is refused, in a browser exactly as at the office PC.
+  r = await req(base, 'POST', '/api/v1/fees/school-fees', { token: bursar, body: {
+    scope: 'school', items: [{ description: 'Tuition Fee', amount: 300 }],
+  } });
+  ck('a bursar cannot raise the term\'s fees, however full their Fees access',
+    r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/fees/school-fees', { token: admin, body: {
+    scope: 'school', items: [{ description: 'Tuition Fee', amount: 300 }],
+  } });
+  ck('a second school fees bill is refused, not silently created',
+    r.status === 409 && r.json.code === 'REPLACE_REQUIRED');
+
+  const paidBefore = db.prepare('SELECT total_paid FROM student_bills WHERE id = ?').get(bill.id).total_paid;
+  r = await req(base, 'POST', '/api/v1/fees/school-fees', { token: admin, body: {
+    scope: 'school', confirmReplace: true,
+    items: [{ description: 'Tuition Fee', amount: 300 }],
+  } });
+  ck('confirming replaces it from a browser', r.status === 200 && r.json.replaced >= 1);
+  const rebuilt = db.prepare('SELECT * FROM student_bills WHERE id = ?').get(bill.id);
+  ck('...the pupil is billed the new amount', Number(rebuilt.total_billed) === 300);
+  ck('...and the money already received is still theirs',
+    Number(rebuilt.total_paid) === Number(paidBefore));
+
+  r = await req(base, 'GET', '/api/v1/fees/bills/summary', { token: bursar });
+  ck('the bills home reports every kind of bill',
+    r.status === 200 && r.json.kinds.length === 5);
+  ck('...with the debtors merged into it', Array.isArray(r.json.debtors));
+
+  r = await reqText(base, 'GET', `/api/v1/fees/bills/print.html?classId=1`, { token: bursar });
+  ck('a class\'s bills print from a browser, on the office\'s own stationery',
+    r.status === 200 && /SCHOOL FEES BILL/.test(r.text));
+
+  // ══ Books, in a browser ═══════════════════════════════════════════════════
+
+  r = await req(base, 'POST', '/api/v1/books/charge', { token: bursar, body: {
+    scope: 'school', items: [{ title: 'Textbooks', amount: 440 }],
+  } });
+  ck('a bursar cannot charge the year\'s books either', r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/books/charge', { token: admin, body: {
+    scope: 'school', items: [{ title: 'Textbooks', amount: 440 }],
+  } });
+  ck('books can be charged from a browser', r.status === 200 && r.json.created > 0);
+
+  r = await req(base, 'GET', '/api/v1/books/sheet?classId=1', { token: bursar });
+  ck('...and the sheet comes back with what each pupil owes for them',
+    r.status === 200 && r.json.rows.every(x => Number(x.books_total) === 440));
+
+  r = await req(base, 'POST', '/api/v1/payments/take', { token: bursar, body: {
+    studentId: payer, purpose: 'books', amount: 200, method: 'Cash',
+  } });
+  ck('a books payment moves the books balance, not the fees balance',
+    r.status === 200
+    && Number(db.prepare('SELECT balance FROM student_books WHERE student_id = ?').get(payer).balance) === 240
+    && Number(db.prepare('SELECT total_billed FROM student_bills WHERE id = ?').get(bill.id).total_billed) === 300);
+
+  r = await req(base, 'POST', '/api/v1/books/charge', { token: admin, body: {
+    scope: 'school', replace: true, items: [{ title: 'Textbooks', amount: 300 }],
+  } });
+  const corrected = db.prepare('SELECT * FROM student_books WHERE student_id = ?').get(payer);
+  ck('correcting the books charge keeps what the parent has paid',
+    r.status === 200 && Number(corrected.total_amount) === 300
+    && Number(corrected.total_paid) === 200 && Number(corrected.balance) === 100);
 
   // ══ Payroll: the month, in a browser ══════════════════════════════════════
 

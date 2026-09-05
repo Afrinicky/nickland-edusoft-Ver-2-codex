@@ -230,40 +230,67 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     });
   });
 
-  // Admitting a pupil. The desktop's admissions form asks for more than this
-  // and should — a photograph, the guardians, the medical note. What is here
-  // is what an office can honestly complete from a phone with a parent
-  // standing at the gate; the rest is filled in on the record afterwards.
+  // Admitting a pupil — through the desktop's own admission, not a smaller
+  // copy of it.
+  //
+  // The copy wrote eight columns and invented its own admission number:
+  // "2026/0001" where the office PC produces "AVE/18/00001". A school that
+  // admitted at the gate on a phone and in the office on the same morning
+  // ended up with two numbering schemes on one roll, and half the admission
+  // form — the guardians, the previous school, the medical facts — was
+  // dropped on the floor because the INSERT did not name those columns.
+  //
+  // It is now electron/ipc/students.js: same index-number policy, same roll
+  // counter, same field list, whichever machine the form was filled in on.
   add('POST', `${API}/admin/students`, async (ctx, req, res, params, body) => {
     if (!adminGate(ctx, res, 'students', 'create')) return undefined;
-    const surname = String(body.surname || '').trim();
-    const firstName = String(body.firstName || body.first_name || '').trim();
+    const students = require('../ipc/students');
+
+    // The browser's older screens send camelCase; the admission form sends the
+    // column names. Both are accepted so a phone on an old build still admits.
+    const data = { ...body };
+    const alias = {
+      firstName: 'first_name', otherNames: 'other_names', classId: 'current_class_id',
+      dateOfBirth: 'date_of_birth', admissionDate: 'admission_date',
+      indexNumber: 'index_number', placeOfBirth: 'place_of_birth',
+      placeOfResidence: 'place_of_residence', previousSchool: 'previous_school',
+      livesWith: 'lives_with', guardianRelationship: 'guardian_relationship',
+      emergencyContactName: 'emergency_contact_name',
+      emergencyContactPhone: 'emergency_contact_phone',
+      bloodGroup: 'blood_group', medicalNotes: 'medical_notes', specialNeeds: 'special_needs',
+    };
+    for (const [from, to] of Object.entries(alias)) {
+      if (data[from] !== undefined && data[to] === undefined) data[to] = data[from];
+    }
+
+    const surname = String(data.surname || '').trim();
+    const firstName = String(data.first_name || '').trim();
     if (!surname || !firstName) return bad(res, 'A surname and a first name are required.');
-    const classId = body.classId ? parseInt(body.classId, 10) : null;
-    if (classId && !db.prepare('SELECT id FROM class_groups WHERE id = ?').get(classId)) {
+    const classId = data.current_class_id ? parseInt(data.current_class_id, 10) : null;
+    if (!classId) return bad(res, 'Choose the class this pupil joins.');
+    if (!db.prepare('SELECT id FROM class_groups WHERE id = ?').get(classId)) {
       return bad(res, 'That class does not exist.');
     }
-    let indexNumber = String(body.indexNumber || body.index_number || '').trim();
+    const indexNumber = String(data.index_number || '').trim();
     if (indexNumber && db.prepare('SELECT id FROM students WHERE index_number = ?').get(indexNumber)) {
       return bad(res, 'That admission number is already in use.');
     }
-    if (!indexNumber) {
-      // Same shape the desktop generates: the year, then a running count.
-      const year = new Date().getFullYear();
-      const n = db.prepare("SELECT COUNT(*) c FROM students WHERE index_number LIKE ?").get(`${year}/%`).c;
-      indexNumber = `${year}/${String(n + 1).padStart(4, '0')}`;
-    }
-    const r = db.prepare(`
-      INSERT INTO students (index_number, surname, first_name, other_names, gender,
-        date_of_birth, current_class_id, admission_date, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active')
-    `).run(indexNumber, surname, firstName, body.otherNames || body.other_names || null,
-      body.gender || null, body.dateOfBirth || body.date_of_birth || null,
-      classId, body.admissionDate || todayISO());
 
-    try { require('./sync/outbox').enqueueStudentSnapshot(db, r.lastInsertRowid); } catch (_) {}
-    audit(db, ctx, 'student', r.lastInsertRowid, 'admit_student', `${surname} ${firstName} (${indexNumber})`);
-    return json(res, 200, { ok: true, id: r.lastInsertRowid, index_number: indexNumber });
+    let out;
+    try {
+      out = students.createStudent(db, {
+        ...data, surname, first_name: firstName, current_class_id: classId,
+        index_number: indexNumber || null,
+      });
+    } catch (e) {
+      return bad(res, String((e && e.message) || e));
+    }
+    if (!out.ok) return bad(res, out.error || 'The pupil could not be admitted.');
+
+    try { require('./sync/outbox').enqueueStudentSnapshot(db, out.id); } catch (_) {}
+    audit(db, ctx, 'student', out.id, 'admit_student',
+      `${surname} ${firstName} (${out.index_number})`);
+    return json(res, 200, { ok: true, id: out.id, index_number: out.index_number });
   });
 
   // Correcting a pupil's record.
@@ -285,13 +312,10 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     const existing = db.prepare('SELECT id, surname, first_name, current_class_id FROM students WHERE id = ?').get(id);
     if (!existing) return json(res, 404, { ok: false, error: 'That pupil is not on the roll.' });
 
-    const EDITABLE = [
-      'surname', 'first_name', 'other_names', 'gender', 'denomination', 'date_of_birth',
-      'place_of_birth', 'place_of_residence', 'street_address', 'house_number',
-      'digital_address', 'nhis_number', 'father_name', 'father_contact', 'father_email',
-      'mother_name', 'mother_contact', 'mother_email', 'guardian_name', 'guardian_contact',
-      'guardian_email', 'current_class_id', 'admission_date', 'notes',
-    ];
+    // The same list the desktop edits, read from the one place it is written
+    // down. Two hand-kept lists is how a field appears on the browser's form
+    // and is silently dropped when it saves.
+    const EDITABLE = require('../ipc/students').EDITABLE_FIELDS;
     const patch = {};
     for (const k of EDITABLE) if (Object.prototype.hasOwnProperty.call(body, k)) patch[k] = body[k];
     if (!Object.keys(patch).length) return bad(res, 'Nothing to change.');
@@ -314,20 +338,73 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     return json(res, 200, { ok: true });
   });
 
+  // ══ The Students Sheet ═════════════════════════════════════════════════════
+  //
+  // The desktop's spreadsheet view: a whole class on one screen, corrected in
+  // place, the way an office actually works through a pile of admission forms.
+  //
+  // The browser's version showed twelve columns and edited them through the
+  // ordinary update route, so it could not correct the status, the admission
+  // number, the address, the medical facts — most of what an admission form
+  // asks for — and it had no idea which columns were dates, which were a fixed
+  // list of choices, or what those choices were.
+  //
+  // It now reads the SAME data and the SAME column rules the desktop's sheet
+  // uses (electron/ipc/students_sheet.js), so a correction made in a browser
+  // on the school Wi-Fi and one made at the office PC are the same operation
+  // with the same validation.
+
+  add('GET', `${API}/students/sheet`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!adminGate(ctx, res, 'students')) return undefined;
+    const sheet = require('../ipc/students_sheet');
+    const rows = sheet.sheetData(db, {
+      classId: query && query.classId ? parseInt(query.classId, 10) : undefined,
+      status: (query && query.status) || undefined,
+      search: (query && query.search) || undefined,
+    });
+    return json(res, 200, { ok: true, rows, columns: sheet.sheetColumns() });
+  });
+
+  add('POST', `${API}/students/sheet/cell`, async (ctx, req, res, params, body) => {
+    if (!adminGate(ctx, res, 'students', 'edit')) return undefined;
+    const sheet = require('../ipc/students_sheet');
+    const out = sheet.updateCell(db, {
+      studentId: parseInt(body.studentId, 10),
+      field: String(body.field || ''),
+      value: body.value,
+    });
+    if (!out.ok) return bad(res, out.error);
+    try { require('./sync/outbox').enqueueStudentSnapshot(db, parseInt(body.studentId, 10)); } catch (_) {}
+    audit(db, ctx, 'student', parseInt(body.studentId, 10), 'sheet_edit',
+      `${body.field} corrected on the sheet`);
+    return json(res, 200, out);
+  });
+
   // Withdrawing, graduating or readmitting. A status change is what a parent
   // notices first — the app stops showing their child — so it is audited with
   // the reason, and the reason is required.
   add('POST', `${API}/admin/students/:id/status`, async (ctx, req, res, params, body) => {
     if (!adminGate(ctx, res, 'students', 'edit')) return undefined;
-    const allowed = ['Active', 'Withdrawn', 'Graduated', 'Suspended'];
+    // One vocabulary. The browser used to offer Active/Withdrawn/Graduated/
+    // Suspended while the office PC offered Active/Inactive/Graduated/
+    // Transferred, both writing the same column — so a pupil withdrawn at the
+    // gate did not appear under the office's "Inactive" filter and the two
+    // screens reported different roll sizes for the same school.
+    const studentStatus = require('../ipc/_student_status');
     const status = String(body.status || '');
-    if (!allowed.includes(status)) return bad(res, 'That is not a status a pupil can be put into.');
+    if (!studentStatus.isValid(status)) {
+      return bad(res, 'That is not a status a pupil can be put into.');
+    }
     const reason = String(body.reason || '').trim();
     if (status !== 'Active' && reason.length < 3) return bad(res, 'Give the reason.');
     const sid = parseInt(params.id, 10);
     const student = db.prepare('SELECT id, surname, first_name, status FROM students WHERE id = ?').get(sid);
     if (!student) return missing(res, 'That pupil is not on the roll.');
-    db.prepare('UPDATE students SET status = ? WHERE id = ?').run(status, sid);
+    // The reason goes on the RECORD, not only into the audit log. It used to go
+    // only to the log, so a pupil withdrawn in a browser showed a blank Reason
+    // on the office PC's Status tab and nobody could see why they had gone.
+    db.prepare('UPDATE students SET status = ?, inactive_reason = ? WHERE id = ?')
+      .run(status, status === 'Active' ? null : (reason || null), sid);
     try { require('./sync/outbox').enqueueStudentSnapshot(db, sid); } catch (_) {}
     audit(db, ctx, 'student', sid, 'student_status',
       `${student.surname} ${student.first_name}: ${student.status} → ${status}${reason ? ` (${reason})` : ''}`,

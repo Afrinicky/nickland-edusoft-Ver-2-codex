@@ -2436,6 +2436,22 @@ tr:hover td { background: var(--surface-2); }
   cursor: not-allowed;
 }
 
+/* Late is a mark of its own on the register, and it needs a button that reads
+   as neither "in school on time" nor "away all day". */
+.btn-warning {
+  background: var(--warning);
+  color: #fff;
+  border: 1px solid var(--warning);
+}
+.btn-warning:hover {
+  background: #92400E;
+  border-color: #92400E;
+}
+.btn-warning:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ═══════════════════════════════════════════════════════
    INVENTORY
    ═══════════════════════════════════════════════════════ */
@@ -2703,6 +2719,7 @@ tr:hover td { background: var(--surface-2); }
 .register-day-cell:hover { background: var(--surface-2); }
 .register-selected { background: var(--primary-50) !important; color: var(--primary); }
 .register-present { background: rgba(34,197,94,0.18) !important; color: #15803D; }
+.register-late    { background: rgba(245,158,11,0.20) !important; color: #B45309; font-weight: 700; }
 .register-absent  { background: rgba(239,68,68,0.18) !important; color: #B91C1C; }
 .register-day-cell.register-selected {
   outline: 3px solid var(--primary);

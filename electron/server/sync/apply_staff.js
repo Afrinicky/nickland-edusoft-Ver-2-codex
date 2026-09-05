@@ -63,6 +63,8 @@ function applyAttendance(db, payload) {
   if (!date || !marks.length) return false;
 
   const termId = payload.term_id ?? currentTermId(db);
+  const attendance = require('../../ipc/_attendance');
+  const prior = db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?');
   const up = db.prepare(`
     INSERT INTO student_attendance (student_id, date, status, marked_by, term_id, notes)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -75,7 +77,12 @@ function applyAttendance(db, payload) {
       const sid = parseInt(m.student_id, 10);
       if (!sid) continue;
       const status = m.status || 'present';
-      up.run(sid, date, status, user.id, termId, status === 'absent' ? (m.notes || null) : null);
+      // A reason typed on a phone with no signal reaches the school through
+      // here. It used to arrive only for an absence, so the reason a teacher
+      // gave for a LATE pupil in the corridor was thrown away on sync.
+      const existing = prior.get(sid, date);
+      up.run(sid, date, status, user.id, termId,
+        attendance.notesFor(status, m.notes, existing && existing.notes));
       touched.push(sid);
     }
   });

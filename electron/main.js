@@ -22,6 +22,8 @@ const registerStudentsSheetHandlers = require('./ipc/students_sheet');
 const registerAcademicsHandlers = require('./ipc/academics');
 const registerFeesExtraHandlers = require('./ipc/fees_extra');
 const registerFeesBillingHandlers = require('./ipc/fees_billing');
+const registerSchoolFeesHandlers = require('./ipc/fees_schoolfees');
+const registerPaymentDeskHandlers = require('./ipc/payments_desk');
 const registerFinanceWorkbookHandlers = require('./ipc/finance_workbook');
 const registerCanteenExtraHandlers = require('./ipc/canteen_extra');
 const registerStaffHrHandlers = require('./ipc/staff_hr');
@@ -251,6 +253,16 @@ app.whenReady().then(async () => {
   mount('academics', () => registerAcademicsHandlers(guarded, db));
   mount('fees.extra', () => registerFeesExtraHandlers(guarded, db));
   mount('fees.billing', () => registerFeesBillingHandlers(guarded, db));
+  // Raising the term's school fees is one action, so it has one module.
+  mount('fees.schoolfees', () => registerSchoolFeesHandlers(guarded, db, require('./ipc/fees')));
+  // One counter for every purpose a school takes money for. It dispatches to
+  // each module's own recorder rather than reimplementing any of them.
+  mount('payments.desk', () => registerPaymentDeskHandlers(guarded, db, {
+    fees: require('./ipc/fees'),
+    books: require('./ipc/books'),
+    canteen: require('./ipc/canteen'),
+    transport: require('./ipc/transport'),
+  }));
   mount('finance.workbook', () => registerFinanceWorkbookHandlers(guarded, db, app, userDataPath));
   mount('canteen.extra', () => registerCanteenExtraHandlers(guarded, db));
   mount('staff.hr', () => registerStaffHrHandlers(guarded, db, userDataPath));
