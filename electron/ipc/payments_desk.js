@@ -340,7 +340,13 @@ function takePayment(db, mods, data) {
 
   // Who took the money is not typed in. It is whoever is signed in, which is
   // the only version of it anybody can rely on afterwards.
-  const receivedBy = security.getCurrentUserId() || data.receivedBy || null;
+  //
+  // `receivedBy` is passed ONLY by the HTTP route, which has already
+  // authenticated the browser's token and knows whose account it is; the
+  // desktop's renderer never sends it and falls through to the IPC session.
+  // Explicit wins, because a stale IPC session on a machine serving a browser
+  // would otherwise put the wrong person's name on somebody else's receipt.
+  const receivedBy = data.receivedBy != null ? data.receivedBy : (security.getCurrentUserId() || null);
   const termId = data.termId || currentTermId(db);
   const paymentDate = data.paymentDate || new Date().toISOString().slice(0, 10);
   const notes = String(data.notes || '').trim() || null;

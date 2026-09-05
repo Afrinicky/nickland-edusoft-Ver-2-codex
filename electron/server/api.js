@@ -1606,7 +1606,7 @@ function createApiServer(db, opts = {}) {
   // Billing, discounts, books, the store room, the buses, payroll's schedules,
   // the notification log, activities, budgets and the cashbook — everything the
   // browser app needs on the school's own Wi-Fi that used to live behind IPC.
-  registerOfficeRoutes({ add, db, json, can, API, getSetting, audit });
+  registerOfficeRoutes({ add, db, json, html, can, API, getSetting, audit, getResourcePath });
 
   // The dashboards themselves — the installed application's own summary
   // screens, served to the browser so the two are one product rather than two

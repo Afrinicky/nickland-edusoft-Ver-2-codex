@@ -36,7 +36,7 @@ import { Loading } from './ui';
 import { AppShell } from './shell';
 import { DeskShell } from './desk';
 import {
-  visibleModules, visibleTabs, firstTab, quickActions, bottomBar,
+  visibleModules, visibleTabs, visibleSubs, firstTab, quickActions, bottomBar,
   moduleByKey, landingHref, allows,
 } from './modules';
 
@@ -167,6 +167,41 @@ export function useModuleTab(moduleKey) {
 
   return { mod, tabs, tab: active, setTab, params, profile, features,
            can: (action = 'view') => allows(profile, mod.module, action) };
+}
+
+/**
+ * The section INSIDE a tab, also in the URL.
+ *
+ * `/app/fees?tab=bills&sub=schoolfees`. Same reasons as the tab itself: a link
+ * pasted into a staff-room chat opens the school fees, a refresh does not
+ * throw away where somebody was, and the back button steps back through the
+ * sections the way everybody's hands expect.
+ *
+ * A section this account may not open is not merely absent from the strip —
+ * asking for its URL lands on the first one it can open.
+ */
+export function useSubTab(moduleKey, tabId, fallback) {
+  const { profile, features } = useModules();
+  const router = useRouter();
+  const params = useLocalSearchParams();
+  const mod = moduleByKey(moduleKey);
+
+  // The sections come from src/modules.js, where the rest of the app's shape
+  // lives — including which of them this account may open. A screen that kept
+  // its own list would be a second place the access rules had to be right.
+  const list = useMemo(
+    () => visibleSubs(mod, tabId, profile, features),
+    [mod, tabId, profile, features]);
+  const asked = typeof params.sub === 'string' ? params.sub : null;
+  const allowed = list.some(s => s.id === asked);
+  const preferred = fallback && list.some(s => s.id === fallback) ? fallback : null;
+  const active = allowed ? asked : (preferred || (list[0] ? list[0].id : null));
+
+  const setSub = useCallback((id) => {
+    router.replace(`${mod.href}?tab=${encodeURIComponent(tabId)}&sub=${encodeURIComponent(id)}`);
+  }, [router, mod, tabId]);
+
+  return { subs: list, sub: active, setSub };
 }
 
 /**

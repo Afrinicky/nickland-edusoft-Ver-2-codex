@@ -130,18 +130,42 @@ export const MODULES = [
     key: 'fees', href: '/app/fees', label: 'Fees Management', short: 'Fees', icon: 'wallet',
     sub: 'Fees, payments & arrears',
     module: 'fees', match: ['/app/fees'],
+    // Four sections, matching the installed application exactly. Payments is
+    // SECOND because bills are raised three times a year and money is taken
+    // every morning of the term — the tab a bursar opens forty times a day was
+    // sitting behind the one they open three times a year.
+    //
+    // What used to be eleven flat tabs is now four with sections inside them:
+    // the counter and the bulk sheet under Payments; school fees, canteen,
+    // books, extras and withdrawn bills under Bills. Debtors is gone as a tab
+    // — "who owes" is the second half of "what have we billed", and it lives
+    // under those totals on the Bills home.
     tabs: [
       { id: 'dashboard', label: 'Dashboard' },
-      { id: 'bills',     label: 'Bills' },
-      { id: 'templates', label: 'Fee Templates',  need: 'edit' },
-      { id: 'payments',  label: 'Payments' },
-      { id: 'bulk',      label: 'Bulk Pay Sheet', need: 'create' },
-      { id: 'supplementary', label: 'Extra Charges', need: 'edit', elevated: true },
+      {
+        id: 'payments', label: 'Payments',
+        subs: [
+          { id: 'single',   label: 'Take a Payment',      need: 'create' },
+          { id: 'sheet',    label: 'Bulk Payment Sheet',  need: 'create' },
+          { id: 'mobile',   label: 'Mobile Payments' },
+          { id: 'register', label: 'Payment Register' },
+        ],
+      },
+      {
+        id: 'bills', label: 'Bills',
+        subs: [
+          { id: 'home',       label: 'Home' },
+          { id: 'schoolfees', label: 'School Fees' },
+          { id: 'canteen',    label: 'Canteen', feature: 'feature_canteen_enabled' },
+          { id: 'books',      label: 'Books' },
+          // Raising what every family in a class is asked to pay, and taking a
+          // bill off the school's totals, are not the same question as "may
+          // this person take a payment".
+          { id: 'extras',     label: 'Extra Charges',   need: 'edit', elevated: true },
+          { id: 'voided',     label: 'Withdrawn Bills', need: 'edit', elevated: true },
+        ],
+      },
       { id: 'discounts', label: 'Discounts' },
-      { id: 'books',     label: 'Books' },
-      { id: 'online',    label: 'Online Payments' },
-      { id: 'debtors',   label: 'Debtors' },
-      { id: 'voided',    label: 'Withdrawn Bills', need: 'edit', elevated: true },
     ],
   },
   {
@@ -152,7 +176,6 @@ export const MODULES = [
       { id: 'dashboard', label: 'Dashboard' },
       { id: 'sheet',     label: 'Canteen Sheet' },
       { id: 'quickpay',  label: 'Quick Pay (single day)', need: 'create' },
-      { id: 'calendar',  label: 'Calendar', module: 'settings' },
       { id: 'debtors',   label: 'Debtors' },
     ],
   },
@@ -313,6 +336,26 @@ export function visibleTabs(mod, profile, features = {}) {
     if (t.super && !isSuperAdmin(profile)) return false;
     if (t.elevated && !isElevated(profile)) return false;
     return allows(profile, t.module || mod.module, t.need || 'view');
+  });
+}
+
+/**
+ * The sections inside a tab this account may actually open.
+ *
+ * Same rules as `visibleTabs`, one level down: a feature the school has
+ * switched off, an action this account does not hold, or an elevation it does
+ * not have, and the section is not drawn. A pill leading to "access denied"
+ * advertises a part of the school's system to somebody told they may not have
+ * it, which is the rule this whole file is built on.
+ */
+export function visibleSubs(mod, tabId, profile, features = {}) {
+  const tab = (mod && mod.tabs || []).find(t => t.id === tabId);
+  if (!tab || !tab.subs) return [];
+  return tab.subs.filter((s) => {
+    if (!featureOn(features, s.feature)) return false;
+    if (s.super && !isSuperAdmin(profile)) return false;
+    if (s.elevated && !isElevated(profile)) return false;
+    return allows(profile, s.module || tab.module || mod.module, s.need || 'view');
   });
 }
 

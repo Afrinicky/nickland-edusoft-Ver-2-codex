@@ -24,7 +24,10 @@
 // route that lets a browser reach an arbitrary IPC channel would be a hole in
 // the middle of the access system, however convenient.
 
-module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSetting, audit }) {
+module.exports = function registerOfficeRoutes({ add, db, json, html, can, API, getSetting, audit, getResourcePath }) {
+  // The crest and the fonts the printed documents embed. Optional: a build
+  // without packaged resources still prints, just without the crest.
+  const resourcePath = typeof getResourcePath === 'function' ? getResourcePath : (() => null);
   const todayISO = () => new Date().toISOString().slice(0, 10);
 
   // ── helpers ───────────────────────────────────────────────────────────────
@@ -587,6 +590,259 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
       ? num(total * (Number(d.discount_value) || 0) / 100)
       : num(d.discount_value);
   }
+
+  // ══ The payment desk ═══════════════════════════════════════════════════════
+  //
+  // The browser gets the same counter the desktop has: one screen that takes
+  // money for school fees, books, the canteen, the bus or an extra charge, and
+  // dispatches each to that module's own recorder. Not a second implementation
+  // — the same electron/ipc/payments_desk.js, so a canteen payment taken in a
+  // browser marks the canteen days exactly as one taken at the desk does.
+
+  add('GET', `${API}/payments/purposes`, async (ctx, req, res) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const deskMod = require('../ipc/payments_desk');
+    return json(res, 200, {
+      ok: true,
+      purposes: deskMod.enabledPurposes(db),
+      methods: deskMod.METHODS,
+      reference_required: [...deskMod.REFERENCE_REQUIRED],
+      paper_size: getSetting(db, 'receipt_paper_size', 'roll80'),
+    });
+  });
+
+  add('GET', `${API}/payments/students`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const deskMod = require('../ipc/payments_desk');
+    return json(res, 200, deskMod.findStudents(db, {
+      q: query && query.q,
+      classId: int(query && query.classId),
+      owing: query && query.owing,
+      status: query && query.status,
+      termId: int(query && query.termId),
+      limit: int(query && query.limit),
+    }));
+  });
+
+  add('GET', `${API}/payments/account/:id`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const deskMod = require('../ipc/payments_desk');
+    const out = deskMod.studentAccount(db, int(params.id), int(query && query.termId));
+    if (!out.ok) return bad(res, out.error);
+    return json(res, 200, out);
+  });
+
+  add('POST', `${API}/payments/take`, async (ctx, req, res, params, body) => {
+    if (!gate(ctx, res, 'fees', 'create')) return undefined;
+    const deskMod = require('../ipc/payments_desk');
+    // Who took the money is the signed-in account, not a field in the request.
+    // The IPC path reads it from the session; over HTTP it is the caller.
+    const out = deskMod.takePayment(db, {
+      fees: require('../ipc/fees'),
+      books: require('../ipc/books'),
+      canteen: { recordPayment: require('../ipc/canteen').recordCanteenPayment },
+      transport: require('../ipc/transport'),
+    }, { ...body, receivedBy: (ctx.user && ctx.user.id) || null });
+    if (!out.ok) return json(res, out.code === 'REFERENCE_REQUIRED' ? 422 : 400, out);
+    audit(db, ctx, 'payment', out.payment_id, 'take_payment',
+      `${body.purpose} — GHS ${body.amount} (${out.receipt_number})`, 'normal');
+    return json(res, 200, out);
+  });
+
+  add('GET', `${API}/payments/receipt/:source/:id`, async (ctx, req, res, params) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const deskMod = require('../ipc/payments_desk');
+    const out = deskMod.receiptModel(db, String(params.source), int(params.id));
+    if (!out.ok) return missing(res, out.error);
+    return json(res, 200, out);
+  });
+
+  // The receipt as the office would print it.
+  //
+  // Not "a receipt the browser builds that looks like the office's" — THE
+  // office's, from electron/ipc/receipts_engine.js, at the school's configured
+  // paper size. A school that hands out two documents with the same title and
+  // different layouts has a problem no feature makes up for.
+  add('GET', `${API}/payments/receipt/:source/:id/print.html`,
+    async (ctx, req, res, params, body, ip, tokenId, query) => {
+      if (!gate(ctx, res, 'fees')) return undefined;
+      const engine = require('../ipc/receipts_engine');
+      const model = engine.buildReceiptModel(db, String(params.source), int(params.id));
+      if (!model) return missing(res, 'That receipt no longer exists.');
+      const deskMod = require('../ipc/payments_desk');
+      const purpose = deskMod.PURPOSES.find(p => p.key === (query && query.purpose));
+      if (purpose) model.purpose_label = purpose.label;
+      const paper = (query && query.paper) || getSetting(db, 'receipt_paper_size', 'roll80');
+      return html(res, 200, engine.renderReceiptHtml(engine.schoolInfo(db), model, paper));
+    });
+
+  add('GET', `${API}/payments/register`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const deskMod = require('../ipc/payments_desk');
+    return json(res, 200, deskMod.paymentRegister(db, {
+      from: (query && query.from) || null,
+      to: (query && query.to) || null,
+      purposes: query && query.purposes
+        ? String(query.purposes).split(',').filter(Boolean) : undefined,
+      classId: int(query && query.classId),
+      method: (query && query.method) || undefined,
+      q: (query && query.q) || undefined,
+    }));
+  });
+
+  // The bulk sheet's data: a class against what each pupil owes, discounts
+  // applied and status worked out. The desktop's own query — the browser must
+  // not compute a different balance from the same tables.
+  add('GET', `${API}/fees/bulk-sheet`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const classId = int(query && query.classId);
+    if (!classId) return bad(res, 'Choose a class.');
+    const billing = require('../ipc/_billing');
+    const termId = int(query && query.termId) || (currentTerm() || {}).id;
+    const term = billing.termWithYear(db, termId);
+    if (!term) return bad(res, 'No term is running.');
+
+    const students = db.prepare(`
+      SELECT s.id AS student_id, s.index_number, s.surname, s.first_name, s.other_names,
+             c.name AS class_name, c.short_code AS class_short,
+             sb.id AS bill_id, sb.total_billed AS gross_billed,
+             sb.total_paid AS fees_paid, sb.balance AS fees_balance,
+             sb.arrears_from_prev, sb.books_arrears
+      FROM students s
+      LEFT JOIN class_groups c ON c.id = s.current_class_id
+      LEFT JOIN student_bills sb ON sb.student_id = s.id AND sb.term_id = ?
+                                AND COALESCE(sb.status, 'active') = 'active'
+      WHERE s.current_class_id = ? AND s.status = 'Active'
+      ORDER BY s.surname, s.first_name`).all(term.id, classId);
+
+    const rows = students.map(s => {
+      const gross = s.gross_billed || 0;
+      const d = db.prepare(`
+        SELECT * FROM student_discounts
+        WHERE student_id = ? AND is_active = 1 AND (applies_to = 'fees' OR applies_to = 'both')
+        LIMIT 1`).get(s.student_id);
+      let discount = 0;
+      let label = null;
+      if (d) {
+        discount = d.discount_type === 'percent'
+          ? num(gross * (d.discount_value / 100))
+          : Math.min(num(d.discount_value), gross);
+        label = d.discount_type === 'percent' ? `${d.discount_value}%` : `GHS ${d.discount_value}`;
+      }
+      const net = num(Math.max(0, gross - discount));
+      const paid = s.fees_paid || 0;
+      const status = gross === 0 ? 'not_billed'
+        : paid >= net - 0.01 ? 'paid_full'
+          : paid > 0 ? 'paid_partial' : 'unpaid';
+      return {
+        ...s,
+        discount_amount: discount, discount_label: label,
+        discount_reason: d ? d.reason : null,
+        net_billed: net, fees_paid: paid,
+        balance: num(Math.max(0, net - paid)),
+        status,
+        books_arrears: s.books_arrears || 0,
+      };
+    });
+
+    return json(res, 200, {
+      ok: true, rows,
+      term: { id: term.id, label: term.label, year_label: term.year_label,
+              full_label: billing.termLabel(term) },
+    });
+  });
+
+  // ── The bills the browser prints ─────────────────────────────────────────
+  //
+  // The office's own document, served as HTML and printed verbatim. The
+  // browser holds no bill layout of its own: a school that hands a parent two
+  // documents with the same title and different layouts has a problem no
+  // feature makes up for.
+
+  add('GET', `${API}/fees/bills/print.html`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const docs = require('../ipc/reports');
+    if (!docs.billsDocument) return json(res, 501, { ok: false, error: 'This system cannot print bills yet.' });
+    const termId = int(query && query.termId) || (currentTerm() || {}).id;
+    const studentIds = String((query && query.studentIds) || '')
+      .split(',').map(v => parseInt(v, 10)).filter(Boolean);
+    const billIds = docs.billIdsFor(db, { studentIds, classId: int(query && query.classId), termId });
+    const r = docs.billsDocument(db, resourcePath, {
+      billIds, colorMode: (query && query.bw) === '1' ? 'bw' : 'color',
+    });
+    if (!r.ok) return missing(res, r.error);
+    return html(res, 200, r.document);
+  });
+
+  add('GET', `${API}/canteen/bills/print.html`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const docs = require('../ipc/reports');
+    if (!docs.canteenBillsDocument) return json(res, 501, { ok: false, error: 'This system cannot print canteen bills yet.' });
+    const r = docs.canteenBillsDocument(db, resourcePath, {
+      termId: int(query && query.termId) || (currentTerm() || {}).id,
+      studentIds: String((query && query.studentIds) || '')
+        .split(',').map(v => parseInt(v, 10)).filter(Boolean),
+      dailyRate: query && query.dailyRate,
+    });
+    if (!r.ok) return missing(res, r.error);
+    return html(res, 200, r.document);
+  });
+
+  add('GET', `${API}/books/bills/print.html`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const docs = require('../ipc/reports');
+    if (!docs.booksBillsDocument) return json(res, 501, { ok: false, error: 'This system cannot print books bills yet.' });
+    const r = docs.booksBillsDocument(db, resourcePath, {
+      academicYearId: int(query && query.academicYearId),
+      studentIds: String((query && query.studentIds) || '')
+        .split(',').map(v => parseInt(v, 10)).filter(Boolean),
+    });
+    if (!r.ok) return missing(res, r.error);
+    return html(res, 200, r.document);
+  });
+
+  // ══ Books ══════════════════════════════════════════════════════════════════
+
+  // The books sheet: a class against what each pupil has been charged for the
+  // year's textbooks, and what is left on it.
+  add('GET', `${API}/books/sheet`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const classId = int(query && query.classId);
+    if (!classId) return bad(res, 'Choose a class.');
+    const yearId = int(query && query.academicYearId) || currentYearId();
+    const year = yearId ? db.prepare('SELECT * FROM academic_years WHERE id = ?').get(yearId) : null;
+    if (!year) return bad(res, 'No academic year is set.');
+
+    const rows = db.prepare(`
+      SELECT s.id AS student_id, s.index_number, s.surname, s.first_name, s.other_names,
+             c.name AS class_name,
+             sb.id AS student_books_id,
+             COALESCE(sb.total_amount, 0) AS books_total,
+             COALESCE(sb.total_paid, 0) AS books_paid,
+             COALESCE(sb.balance, 0) AS books_balance
+      FROM students s
+      LEFT JOIN class_groups c ON c.id = s.current_class_id
+      LEFT JOIN student_books sb ON sb.student_id = s.id AND sb.academic_year_id = ?
+      WHERE s.current_class_id = ? AND s.status = 'Active'
+      ORDER BY s.surname, s.first_name`).all(year.id, classId).map(r => ({
+      ...r,
+      status: !r.student_books_id || r.books_total === 0 ? 'not_billed'
+        : r.books_paid >= r.books_total - 0.01 ? 'paid_full'
+          : r.books_paid > 0 ? 'paid_partial' : 'unpaid',
+    }));
+
+    return json(res, 200, { ok: true, rows, year: { id: year.id, label: year.label } });
+  });
+
+  add('POST', `${API}/books/charge`, async (ctx, req, res, params, body) => {
+    if (!gate(ctx, res, 'fees', 'create')) return undefined;
+    if (!elevated(ctx, res, 'charge the year\'s books')) return undefined;
+    const out = require('../ipc/books').generateBooks(db, body);
+    if (!out.ok) return bad(res, out.error);
+    audit(db, ctx, 'student_books', null, 'charge_books',
+      `${out.created} charged, ${out.updated} corrected at GHS ${out.per_pupil}`, 'high');
+    return json(res, 200, out);
+  });
 
   // ══ Discounts ══════════════════════════════════════════════════════════════
 

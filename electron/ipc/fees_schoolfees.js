@@ -384,6 +384,12 @@ function billsSummary(db, termId) {
       ? `${canteen.days} feeding day(s) on the term's calendar`
       : 'The term’s canteen calendar has not been laid out',
     unit: 'days',
+    // The two figures the canteen bill is actually made of, so a screen can
+    // show "12 days × GHS 5" rather than deriving the rate back out of a
+    // total and a headcount.
+    daily_rate: canteenRate,
+    feeding_days: canteen.days || 0,
+    per_pupil: billing.round2((canteen.days || 0) * canteenRate),
   });
 
   // ── Transport — a termly fee against a route ────────────────────────────

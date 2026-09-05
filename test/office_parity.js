@@ -95,6 +95,22 @@ function makeDb(userDataPath) {
   return db;
 }
 
+/** The printable documents answer HTML, not JSON. */
+function reqText(base, method, p, { token } = {}) {
+  return new Promise((resolve) => {
+    const u = new URL(base + p);
+    const headers = {};
+    if (token) headers.Authorization = 'Bearer ' + token;
+    const r = http.request({ host: u.hostname, port: u.port, path: u.pathname + u.search, method, headers },
+      (res) => {
+        let d = ''; res.on('data', c => { d += c; });
+        res.on('end', () => resolve({ status: res.statusCode, text: d }));
+      });
+    r.on('error', () => resolve({ status: 0, text: '' }));
+    r.end();
+  });
+}
+
 function req(base, method, p, { token, body } = {}) {
   return new Promise((resolve) => {
     const data = body ? JSON.stringify(body) : null;
@@ -232,6 +248,137 @@ function req(base, method, p, { token, body } = {}) {
   const after = db.prepare('SELECT * FROM student_bills WHERE id = ?').get(bill.id);
   ck('re-raising a class does not discard money already received',
     r.status === 200 && Number(after.total_paid) === 100);
+
+  // ══ The counter, in a browser ═════════════════════════════════════════════
+  //
+  // A school does not have a fees counter, a books counter, a canteen counter
+  // and a bus counter. It has one counter, and the browser must be able to be
+  // it — dispatching each purpose to the module that owns it rather than
+  // computing a second version of any balance.
+
+  r = await req(base, 'GET', '/api/v1/payments/purposes', { token: bursar });
+  ck('the browser is told what the school can be paid for',
+    r.status === 200 && r.json.purposes.some(p => p.key === 'school_fees'));
+  ck('...and that receipts print on an 80mm roll', r.json.paper_size === 'roll80');
+
+  r = await req(base, 'GET', '/api/v1/payments/students?owing=owing', { token: bursar });
+  ck('the counter can list who still owes without a name being typed',
+    r.status === 200 && r.json.students.length > 0
+    && r.json.students.every(s => Number(s.fees_balance) > 0));
+
+  const payer = db.prepare('SELECT id FROM students WHERE status = \'Active\' LIMIT 1').get().id;
+  r = await req(base, 'GET', `/api/v1/payments/account/${payer}`, { token: bursar });
+  ck('one pupil, every purpose, one answer',
+    r.status === 200 && r.json.accounts.some(a => a.purpose === 'school_fees'));
+  ck('...with the term named with its academic year',
+    /·/.test(r.json.term.full_label || ''));
+
+  r = await req(base, 'POST', '/api/v1/payments/take', { token: bursar, body: {
+    studentId: payer, purpose: 'school_fees', amount: 50, method: 'Mobile Money',
+  } });
+  ck('a mobile-money payment with no reference is refused in a browser too',
+    r.status === 422 && r.json.code === 'REFERENCE_REQUIRED');
+
+  r = await req(base, 'POST', '/api/v1/payments/take', { token: bursar, body: {
+    studentId: payer, purpose: 'school_fees', amount: 50, method: 'Mobile Money',
+    reference: 'MM-4471',
+  } });
+  ck('a payment can be taken from a browser', r.status === 200 && r.json.ok);
+  ck('...and comes back with the receipt, ready for the screen',
+    r.json.receipt && r.json.receipt.purpose_label === 'School Fees');
+  ck('...naming whoever is signed in, not a typed-in name',
+    r.json.receipt.received_by === 'Nicholas the Bursar'
+    || typeof r.json.receipt.received_by === 'string');
+  ck('...with the transaction reference on it', r.json.receipt.reference === 'MM-4471');
+
+  const takenId = r.json.payment_id;
+  r = await req(base, 'GET', `/api/v1/payments/receipt/fees/${takenId}`, { token: bursar });
+  ck('the receipt can be read back', r.status === 200 && r.json.receipt.payment_id === takenId);
+
+  r = await reqText(base, 'GET', `/api/v1/payments/receipt/fees/${takenId}/print.html`, { token: bursar });
+  ck('...and printed as the office prints it, not rebuilt in the browser',
+    r.status === 200 && /RECEIPT/.test(r.text) && /80mm/.test(r.text));
+
+  r = await req(base, 'GET', '/api/v1/payments/register', { token: bursar });
+  ck('the day\'s takings are one list, whatever they were for',
+    r.status === 200 && r.json.count >= 1);
+
+  // ══ Raising the term's fees, in a browser ═════════════════════════════════
+
+  r = await req(base, 'GET', '/api/v1/fees/frameworks', { token: bursar });
+  ck('the frameworks a bill starts from reach the browser',
+    r.status === 200 && r.json.frameworks.some(f => f.id === 'ave-maria-termly'));
+
+  r = await req(base, 'GET', '/api/v1/fees/school-fees/plan', { token: bursar });
+  ck('what raising would replace is answered before anything is written',
+    r.status === 200 && r.json.replaces === true);
+
+  // Raising what every family in the school is asked to pay is not the same
+  // question as "may this person take a payment". A bursar with Fees at Full
+  // is refused, in a browser exactly as at the office PC.
+  r = await req(base, 'POST', '/api/v1/fees/school-fees', { token: bursar, body: {
+    scope: 'school', items: [{ description: 'Tuition Fee', amount: 300 }],
+  } });
+  ck('a bursar cannot raise the term\'s fees, however full their Fees access',
+    r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/fees/school-fees', { token: admin, body: {
+    scope: 'school', items: [{ description: 'Tuition Fee', amount: 300 }],
+  } });
+  ck('a second school fees bill is refused, not silently created',
+    r.status === 409 && r.json.code === 'REPLACE_REQUIRED');
+
+  const paidBefore = db.prepare('SELECT total_paid FROM student_bills WHERE id = ?').get(bill.id).total_paid;
+  r = await req(base, 'POST', '/api/v1/fees/school-fees', { token: admin, body: {
+    scope: 'school', confirmReplace: true,
+    items: [{ description: 'Tuition Fee', amount: 300 }],
+  } });
+  ck('confirming replaces it from a browser', r.status === 200 && r.json.replaced >= 1);
+  const rebuilt = db.prepare('SELECT * FROM student_bills WHERE id = ?').get(bill.id);
+  ck('...the pupil is billed the new amount', Number(rebuilt.total_billed) === 300);
+  ck('...and the money already received is still theirs',
+    Number(rebuilt.total_paid) === Number(paidBefore));
+
+  r = await req(base, 'GET', '/api/v1/fees/bills/summary', { token: bursar });
+  ck('the bills home reports every kind of bill',
+    r.status === 200 && r.json.kinds.length === 5);
+  ck('...with the debtors merged into it', Array.isArray(r.json.debtors));
+
+  r = await reqText(base, 'GET', `/api/v1/fees/bills/print.html?classId=1`, { token: bursar });
+  ck('a class\'s bills print from a browser, on the office\'s own stationery',
+    r.status === 200 && /SCHOOL FEES BILL/.test(r.text));
+
+  // ══ Books, in a browser ═══════════════════════════════════════════════════
+
+  r = await req(base, 'POST', '/api/v1/books/charge', { token: bursar, body: {
+    scope: 'school', items: [{ title: 'Textbooks', amount: 440 }],
+  } });
+  ck('a bursar cannot charge the year\'s books either', r.status === 403);
+
+  r = await req(base, 'POST', '/api/v1/books/charge', { token: admin, body: {
+    scope: 'school', items: [{ title: 'Textbooks', amount: 440 }],
+  } });
+  ck('books can be charged from a browser', r.status === 200 && r.json.created > 0);
+
+  r = await req(base, 'GET', '/api/v1/books/sheet?classId=1', { token: bursar });
+  ck('...and the sheet comes back with what each pupil owes for them',
+    r.status === 200 && r.json.rows.every(x => Number(x.books_total) === 440));
+
+  r = await req(base, 'POST', '/api/v1/payments/take', { token: bursar, body: {
+    studentId: payer, purpose: 'books', amount: 200, method: 'Cash',
+  } });
+  ck('a books payment moves the books balance, not the fees balance',
+    r.status === 200
+    && Number(db.prepare('SELECT balance FROM student_books WHERE student_id = ?').get(payer).balance) === 240
+    && Number(db.prepare('SELECT total_billed FROM student_bills WHERE id = ?').get(bill.id).total_billed) === 300);
+
+  r = await req(base, 'POST', '/api/v1/books/charge', { token: admin, body: {
+    scope: 'school', replace: true, items: [{ title: 'Textbooks', amount: 300 }],
+  } });
+  const corrected = db.prepare('SELECT * FROM student_books WHERE student_id = ?').get(payer);
+  ck('correcting the books charge keeps what the parent has paid',
+    r.status === 200 && Number(corrected.total_amount) === 300
+    && Number(corrected.total_paid) === 200 && Number(corrected.balance) === 100);
 
   // ══ Payroll: the month, in a browser ══════════════════════════════════════
 

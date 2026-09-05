@@ -54,9 +54,40 @@ export function FeesDashboard() {
 
   return (
     <OfficeScreen state={state} skeleton={4}>
+      <TakePaymentCall router={router} />
       {rich ? <FeesFull d={rich} router={router} />
         : d ? <FeesPlain d={d} router={router} /> : null}
     </OfficeScreen>
+  );
+}
+
+// ── The one thing this module is opened to do ───────────────────────────────
+//
+// Bills are raised three times a year. Money is taken every morning of the
+// term, and a bursar who has just opened Fees has almost always come to take
+// some. It is the first thing on the screen and it is bold, because the
+// alternative is reading four cards to find a tab.
+function TakePaymentCall({ router }) {
+  const { profile } = useAuth();
+  if (!can(profile, 'fees', 'create')) return null;
+  return (
+    <Panel style={{ borderColor: colors.primary }}>
+      <Bar left={(
+        <View style={{ minWidth: 260, flex: 1 }}>
+          <Text style={{ ...type.heading, color: colors.text }}>Somebody at the counter?</Text>
+          <Muted>
+            School fees, books, the canteen, the bus, an extra charge — one form takes the
+            money for any of it and prints the receipt straight away.
+          </Muted>
+        </View>
+      )}
+      right={<>
+        <Button title="Take a Payment" icon="plus" size="lg" full={false}
+                onPress={() => router.push('/app/fees?tab=payments&sub=single')} />
+        <Button title="Collection day — bulk sheet" variant="outline" full={false}
+                onPress={() => router.push('/app/fees?tab=payments&sub=sheet')} />
+      </>} />
+    </Panel>
   );
 }
 
@@ -91,11 +122,11 @@ function FeesFull({ d, router }) {
               {(m.unbillable_students || 0) > 0 ? (
                 <MetricLink tone="danger"
                             label={`${m.unbillable_students} pupil(s) no template covers →`}
-                            onPress={() => router.push('/app/fees?tab=bills')} />
+                            onPress={() => router.push('/app/fees?tab=bills&sub=schoolfees')} />
               ) : null}
               {(m.unbilled_students || 0) > 0 ? (
                 <MetricLink label="Generate bills →"
-                            onPress={() => router.push('/app/fees?tab=bills')} />
+                            onPress={() => router.push('/app/fees?tab=bills&sub=schoolfees')} />
               ) : null}
             </>
           )} />
@@ -103,12 +134,12 @@ function FeesFull({ d, router }) {
                     label="Collected So Far" value={ghs(m.total_collected)}
                     sub={`${m.payment_count || 0} payments`}
                     link="View payments →"
-                    onPress={() => router.push('/app/fees?tab=payments')} />
+                    onPress={() => router.push('/app/fees?tab=payments&sub=register')} />
         <MetricCard index={2} tone="red" icon="alert" valueTone="danger"
                     label="Outstanding" value={ghs(m.outstanding)}
                     sub={`${m.debtor_count || 0} debtors`}
                     link="View debtors →"
-                    onPress={() => router.push('/app/fees?tab=debtors')} />
+                    onPress={() => router.push('/app/fees?tab=bills&sub=home')} />
         <MetricCard index={3} tone="purple" icon="trend"
                     label="Collection Rate" value={`${m.collection_pct || 0}%`}
                     sub={`${ghs(m.total_billed)} billed`} />
@@ -158,7 +189,7 @@ function FeesFull({ d, router }) {
         </SectionCard>
 
         <SectionCard title="Top Debtors" viewAll="View all →"
-                     onViewAll={() => router.push('/app/fees?tab=debtors')}>
+                     onViewAll={() => router.push('/app/fees?tab=bills&sub=home')}>
           {(d.top_debtors || []).length === 0
             ? <EmptyLine>No outstanding bills</EmptyLine>
             : d.top_debtors.slice(0, 7).map((r, i, arr) => (
@@ -170,7 +201,7 @@ function FeesFull({ d, router }) {
       </DashRow>
 
       <SectionCard title="Recent Payments" viewAll="View all →"
-                   onViewAll={() => router.push('/app/fees?tab=payments')}>
+                   onViewAll={() => router.push('/app/fees?tab=payments&sub=register')}>
         {(d.recent_payments || []).length === 0
           ? <EmptyLine>No payments yet</EmptyLine>
           : d.recent_payments.slice(0, 8).map((p, i, arr) => (
@@ -206,11 +237,11 @@ function FeesPlain({ d, router }) {
         <Stat index={1} label="Collected" icon="check" tone="success"
               value={f ? cedis(f.collected) : '—'}
               note={f ? count(f.receipts, 'receipt', 'receipts') : ''}
-              action="View payments" onPress={() => router.push('/app/fees?tab=payments')} />
+              action="View payments" onPress={() => router.push('/app/fees?tab=payments&sub=register')} />
         <Stat index={2} label="Outstanding" icon="trend" tone="danger"
               value={f ? cedis(f.outstanding) : '—'}
               note={f ? count(f.debtors, 'pupil owing', 'pupils owing') : ''}
-              action="View debtors" onPress={() => router.push('/app/fees?tab=debtors')} />
+              action="View debtors" onPress={() => router.push('/app/fees?tab=bills&sub=home')} />
         <Stat index={3} label="Taken today" icon="wallet" tone="data"
               value={f ? cedis(f.today) : '—'}
               note={f ? count(f.today_receipts, 'receipt today', 'receipts today') : ''} />

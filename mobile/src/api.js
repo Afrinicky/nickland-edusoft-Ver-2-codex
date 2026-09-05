@@ -820,6 +820,92 @@ export const api = {
     MODE === 'online' ? school.raiseBills(token, body)
       : MODE === 'cloud' ? hostOnly('Raising bills')()
                          : request('/fees/bills', { method: 'POST', token, body }),
+  // ── The payment desk ──────────────────────────────────────────────
+  //
+  // One counter for everything the school takes money for. The host serves the
+  // desktop's own engine, so a canteen payment taken in a browser marks the
+  // canteen days exactly as one taken at the office PC does.
+  paymentPurposes: (token) =>
+    MODE === 'online' ? school.paymentPurposes(token)
+      : MODE === 'cloud' ? hostOnly('The payment desk')()
+                         : request('/payments/purposes', { token }),
+  paymentStudents: (token, q = {}) =>
+    MODE === 'online' ? school.paymentStudents(token, q)
+      : MODE === 'cloud' ? hostOnly('The payment desk')()
+                         : request(`/payments/students${qs(q)}`, { token }),
+  paymentAccount: (token, studentId, termId) =>
+    MODE === 'online' ? school.paymentAccount(token, studentId, termId)
+      : MODE === 'cloud' ? hostOnly("A pupil's account")()
+                         : request(`/payments/account/${studentId}${qs({ termId })}`, { token }),
+  takePayment: (token, body) =>
+    MODE === 'online' ? school.takeDeskPayment(token, body)
+      : MODE === 'cloud' ? hostOnly('Taking a payment')()
+                         : request('/payments/take', { method: 'POST', token, body }),
+  paymentReceipt: (token, source, id) =>
+    MODE === 'online' ? school.paymentReceipt(token, source, id)
+      : MODE === 'cloud' ? hostOnly('A receipt')()
+                         : request(`/payments/receipt/${source}/${id}`, { token }),
+  paymentRegister: (token, q = {}) =>
+    MODE === 'online' ? school.paymentRegister(token, q)
+      : MODE === 'cloud' ? hostOnly('The payment register')()
+                         : request(`/payments/register${qs(q)}`, { token }),
+  // The receipt as HTML, built by the office's own generator — printed
+  // verbatim, never rebuilt here. Same rule as the report card.
+  receiptHtml: (token, source, id, q = {}) =>
+    MODE === 'online' ? school.receiptHtml(token, source, id, q)
+      : MODE === 'cloud' ? hostOnly('Printing a receipt')()
+                         : requestHtml(`/payments/receipt/${source}/${id}/print.html${qs(q)}`, { token }),
+
+  // ── The bills the browser prints ──────────────────────────────────
+  //
+  // The office's own document, printed verbatim. Same rule as the report card:
+  // the browser holds no bill layout of its own.
+  billHtml: (token, q = {}) =>
+    MODE === 'online' ? school.billHtml(token, q)
+      : MODE === 'cloud' ? hostOnly('Printing a bill')()
+                         : requestHtml(`/fees/bills/print.html${qs(q)}`, { token }),
+  canteenBillHtml: (token, q = {}) =>
+    MODE === 'online' ? school.canteenBillHtml(token, q)
+      : MODE === 'cloud' ? hostOnly('Printing a canteen bill')()
+                         : requestHtml(`/canteen/bills/print.html${qs(q)}`, { token }),
+  booksBillHtml: (token, q = {}) =>
+    MODE === 'online' ? school.booksBillHtml(token, q)
+      : MODE === 'cloud' ? hostOnly('Printing a books bill')()
+                         : requestHtml(`/books/bills/print.html${qs(q)}`, { token }),
+
+  // The bulk sheet's data — the desktop's own query, so the browser cannot
+  // compute a different balance from the same tables.
+  feesBulkSheet: (token, classId, termId) =>
+    MODE === 'online' ? school.feesBulkSheet(token, classId, termId)
+      : MODE === 'cloud' ? hostOnly('The bulk payment sheet')()
+                         : request(`/fees/bulk-sheet${qs({ classId, termId })}`, { token }),
+
+  // ── Raising the term's school fees ────────────────────────────────
+  billFrameworks: (token, billType) =>
+    MODE === 'online' ? school.billFrameworks(token, billType)
+      : MODE === 'cloud' ? hostOnly('Bill frameworks')()
+                         : request(`/fees/frameworks${qs({ billType })}`, { token }),
+  schoolFeesPlan: (token, q = {}) =>
+    MODE === 'online' ? school.schoolFeesPlan(token, q)
+      : MODE === 'cloud' ? hostOnly('Raising the school fees')()
+                         : request(`/fees/school-fees/plan${qs(q)}`, { token }),
+  raiseSchoolFees: (token, body) =>
+    MODE === 'online' ? school.raiseSchoolFees(token, body)
+      : MODE === 'cloud' ? hostOnly('Raising the school fees')()
+                         : request('/fees/school-fees', { method: 'POST', token, body }),
+  billsSummary: (token, termId) =>
+    MODE === 'online' ? school.billsSummary(token, termId)
+      : MODE === 'cloud' ? hostOnly('The bills summary')()
+                         : request(`/fees/bills/summary${qs({ termId })}`, { token }),
+  booksSheet: (token, classId, academicYearId) =>
+    MODE === 'online' ? school.booksSheet(token, classId, academicYearId)
+      : MODE === 'cloud' ? hostOnly('The books sheet')()
+                         : request(`/books/sheet${qs({ classId, academicYearId })}`, { token }),
+  chargeBooks: (token, body) =>
+    MODE === 'online' ? school.chargeBooks(token, body)
+      : MODE === 'cloud' ? hostOnly('Charging books')()
+                         : request('/books/charge', { method: 'POST', token, body }),
+
   feeDiscounts: (token, q = {}) =>
     MODE === 'online' ? school.discounts(token, q)
       : MODE === 'cloud' ? hostOnly('Discounts')()
@@ -1478,6 +1564,28 @@ async function schoolRequest(path, { method = 'GET', token, body, query } = {}) 
   return data;
 }
 
+/** A printable document from the online school, as HTML rather than JSON. */
+async function schoolRequestHtml(path, { token, query } = {}) {
+  if (!BASE) throw new Error('No school configured. Connect first.');
+  const qs = query
+    ? '?' + Object.entries(query)
+        .filter(([, v]) => v !== undefined && v !== null && v !== '')
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
+    : '';
+  const headers = {};
+  if (token) headers.Authorization = 'Bearer ' + token;
+  let res;
+  try { res = await fetch(`${BASE}${SCHOOL}${path}${qs}`, { headers }); }
+  catch (e) { throw new Error('Cannot reach the school. Check your internet connection.'); }
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = `Could not fetch the document (${res.status}).`;
+    try { const j = JSON.parse(text); if (j && j.error) msg = j.error; } catch (_) {}
+    const err = new Error(msg); err.status = res.status; throw err;
+  }
+  return text;
+}
+
 export const school = {
   // ── the session ──
   signIn: (schoolId, username, password) =>
@@ -1514,6 +1622,30 @@ export const school = {
   restoreBill: (token, id) => schoolRequest(`/fees/bills/${id}/restore`, { method: 'POST', token }),
   saveFeeTemplate: (token, body) => schoolRequest('/fees/templates', { method: 'POST', token, body }),
   raiseBills: (token, body) => schoolRequest('/fees/bills', { method: 'POST', token, body }),
+  feesBulkSheet: (token, classId, termId) =>
+    schoolRequest('/fees/bulk-sheet', { token, query: { classId, termId } }),
+  billHtml: (token, query) => schoolRequestHtml('/fees/bills/print.html', { token, query }),
+  canteenBillHtml: (token, query) => schoolRequestHtml('/canteen/bills/print.html', { token, query }),
+  booksBillHtml: (token, query) => schoolRequestHtml('/books/bills/print.html', { token, query }),
+  paymentPurposes: (token) => schoolRequest('/payments/purposes', { token }),
+  paymentStudents: (token, query) => schoolRequest('/payments/students', { token, query }),
+  paymentAccount: (token, id, termId) =>
+    schoolRequest(`/payments/account/${id}`, { token, query: { termId } }),
+  takeDeskPayment: (token, body) => schoolRequest('/payments/take', { method: 'POST', token, body }),
+  paymentReceipt: (token, source, id) => schoolRequest(`/payments/receipt/${source}/${id}`, { token }),
+  receiptHtml: (token, source, id, query) =>
+    schoolRequestHtml(`/payments/receipt/${source}/${id}/print.html`, { token, query }),
+  paymentRegister: (token, query) => schoolRequest('/payments/register', { token, query }),
+  billFrameworks: (token, billType) =>
+    schoolRequest('/fees/frameworks', { token, query: { billType } }),
+  schoolFeesPlan: (token, query) => schoolRequest('/fees/school-fees/plan', { token, query }),
+  raiseSchoolFees: (token, body) =>
+    schoolRequest('/fees/school-fees', { method: 'POST', token, body }),
+  billsSummary: (token, termId) =>
+    schoolRequest('/fees/bills/summary', { token, query: { termId } }),
+  booksSheet: (token, classId, academicYearId) =>
+    schoolRequest('/books/sheet', { token, query: { classId, academicYearId } }),
+  chargeBooks: (token, body) => schoolRequest('/books/charge', { method: 'POST', token, body }),
   onlinePayments: (token, status) => schoolRequest('/fees/online', { token, query: { status } }),
   acknowledgeIntent: (token, id, method) =>
     schoolRequest(`/fees/online/${id}/acknowledge`, { method: 'POST', token, body: { method } }),

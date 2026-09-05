@@ -2110,5 +2110,148 @@ module.exports.renderCardHtml = renderCardHtml;
 module.exports.studentProfileDocument = studentProfileDocument;
 // Exposed so the bill layout can be regression-tested without an Electron
 // runtime (the PDF step needs a BrowserWindow; the HTML does not).
+
+// ── The bills the browser prints ────────────────────────────────────────────
+//
+// The same builders the PDF path uses, stopping at the HTML. A bill printed
+// from a browser is the bill the office prints — not similar, the same — so
+// the browser holds no bill layout of its own.
+module.exports.billsDocument = function billsDocument(db, getResourcePath, { billIds = [], colorMode = 'color' } = {}) {
+  const header = getSchoolHeader(db, getResourcePath, colorMode);
+  const pages = [];
+  for (const id of billIds) {
+    const bill = db.prepare(`
+      SELECT b.*, s.index_number, s.surname, s.first_name, s.other_names,
+             c.name AS class_name, t.label AS term_label, t.start_date AS term_start
+      FROM student_bills b
+      JOIN students s ON s.id = b.student_id
+      LEFT JOIN class_groups c ON c.id = s.current_class_id
+      JOIN terms t ON t.id = b.term_id
+      WHERE b.id = ?
+    `).get(id);
+    if (!bill) continue;
+    const items = db.prepare(
+      'SELECT * FROM bill_line_items WHERE student_bill_id = ? ORDER BY is_arrear, item_number'
+    ).all(id);
+    pages.push(billHtml(header, bill, items));
+  }
+  if (!pages.length) return { ok: false, error: 'None of those bills exist.' };
+  return {
+    ok: true, count: pages.length,
+    document: `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
+  };
+};
+
+/** The bill ids for a set of pupils in a term — what the browser asks by. */
+module.exports.billIdsFor = function billIdsFor(db, { studentIds = [], classId, termId }) {
+  if (!termId) return [];
+  if (studentIds.length) {
+    const marks = studentIds.map(() => '?').join(',');
+    return db.prepare(`
+      SELECT id FROM student_bills
+      WHERE term_id = ? AND student_id IN (${marks})
+        AND COALESCE(status, 'active') = 'active'`).all(termId, ...studentIds).map(r => r.id);
+  }
+  if (classId) {
+    return db.prepare(`
+      SELECT b.id FROM student_bills b JOIN students s ON s.id = b.student_id
+      WHERE b.term_id = ? AND s.current_class_id = ?
+        AND COALESCE(b.status, 'active') = 'active'
+      ORDER BY s.surname, s.first_name`).all(termId, classId).map(r => r.id);
+  }
+  return db.prepare(`
+    SELECT b.id FROM student_bills b JOIN students s ON s.id = b.student_id
+    WHERE b.term_id = ? AND COALESCE(b.status, 'active') = 'active'
+    ORDER BY s.surname, s.first_name`).all(termId).map(r => r.id);
+};
+
+/** The canteen bill, as HTML. Same stationery as the fees bill. */
+module.exports.canteenBillsDocument = function canteenBillsDocument(db, getResourcePath, params) {
+  const { termId, studentIds = [], dailyRate, colorMode = 'color' } = params || {};
+  const header = getSchoolHeader(db, getResourcePath, colorMode);
+  const term = db.prepare(`
+    SELECT t.*, y.label AS year_label FROM terms t
+    LEFT JOIN academic_years y ON y.id = t.academic_year_id WHERE t.id = ?`).get(termId);
+  if (!term) return { ok: false, error: 'Term not found' };
+  const rate = Number(dailyRate) || parseFloat(getSetting(db, 'canteen_daily_rate', '0')) || 0;
+  const days = db.prepare(`
+    SELECT date FROM school_calendar
+    WHERE term_id = ? AND day_type = 'school_day' ORDER BY date`).all(termId);
+  if (!days.length) {
+    return { ok: false, error: 'The term’s canteen calendar has not been laid out, so there is nothing to bill.' };
+  }
+  const first = days[0].date, last = days[days.length - 1].date;
+  const pages = [];
+  for (const id of studentIds) {
+    const student = db.prepare(`
+      SELECT s.*, c.name AS class_name FROM students s
+      LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?`).get(id);
+    if (!student) continue;
+    const paid = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS t FROM canteen_payments
+      WHERE student_id = ? AND payment_date BETWEEN ? AND ?`).get(id, first, last).t || 0;
+    const daysPaid = db.prepare(`
+      SELECT COUNT(*) AS n FROM canteen_day_status
+      WHERE student_id = ? AND status = 'paid' AND date BETWEEN ? AND ?`).get(id, first, last).n || 0;
+    pages.push(dayBillHtml(header, {
+      title: `CANTEEN BILL — ${(term.label || '').toUpperCase()}`,
+      sectionTitle: `PART A — Feeding, ${termFullLabel(term)}`,
+      student, termLabel: termFullLabel(term),
+      period: `${first} to ${last}`,
+      rows: [
+        ['Feeding days on the term calendar', String(days.length)],
+        ['Daily rate', `GHS ${rate.toFixed(2)}`],
+        ['Days already settled', String(daysPaid)],
+      ],
+      total: Math.round(days.length * rate * 100) / 100,
+      paid: Math.round(paid * 100) / 100,
+      footnote: 'The canteen is charged for the days the school actually opens. '
+              + 'A day the school does not open is not billed.',
+    }));
+  }
+  if (!pages.length) return { ok: false, error: 'Nobody to bill.' };
+  return {
+    ok: true, count: pages.length,
+    document: `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
+  };
+};
+
+/** The books bill, as HTML. */
+module.exports.booksBillsDocument = function booksBillsDocument(db, getResourcePath, params) {
+  const { academicYearId, studentIds = [], colorMode = 'color' } = params || {};
+  const header = getSchoolHeader(db, getResourcePath, colorMode);
+  const yearId = academicYearId
+    || (db.prepare('SELECT id FROM academic_years WHERE is_current = 1').get() || {}).id;
+  const year = db.prepare('SELECT * FROM academic_years WHERE id = ?').get(yearId);
+  if (!year) return { ok: false, error: 'No academic year is set.' };
+  const pages = [];
+  for (const id of studentIds) {
+    const student = db.prepare(`
+      SELECT s.*, c.name AS class_name FROM students s
+      LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?`).get(id);
+    if (!student) continue;
+    const record = db.prepare(
+      'SELECT * FROM student_books WHERE student_id = ? AND academic_year_id = ?').get(id, yearId);
+    const items = record
+      ? db.prepare('SELECT * FROM student_books_items WHERE student_books_id = ? ORDER BY display_order, id').all(record.id)
+      : [];
+    pages.push(itemisedBillHtml(header, {
+      title: `BOOKS BILL — ${year.label}`,
+      sectionTitle: `PART A — Books issued, ${year.label}`,
+      student, termLabel: year.label,
+      items: items.map((it, n) => ({ item_number: n + 1, description: it.title, amount: it.amount })),
+      total: Math.round((record ? record.total_amount : 0) * 100) / 100,
+      paid: Math.round((record ? record.total_paid : 0) * 100) / 100,
+      footnote: 'Books are charged once for the academic year. Anything unpaid is '
+              + 'carried into the following terms as arrears on the school fees bill.',
+    }));
+  }
+  if (!pages.length) return { ok: false, error: 'Nobody to bill.' };
+  return {
+    ok: true, count: pages.length,
+    document: `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
+  };
+};
+
 module.exports.__billHtmlForTest = billHtml;
 module.exports.__billStylesForTest = billStyles;

@@ -21,7 +21,7 @@
 
 import {
   MODULES, ALL_ITEMS, QUICK_ACTIONS,
-  allows, isSuperAdmin, featureOn, visibleModules, visibleTabs, firstTab,
+  allows, isSuperAdmin, featureOn, visibleModules, visibleTabs, visibleSubs, firstTab,
   activeModule, landingHref, bottomBar, quickActions, groupModules, moduleByKey,
 } from '../mobile/src/modules.js';
 import { PORTAL_NAV, visibleNav } from '../mobile/src/nav.js';
@@ -116,14 +116,48 @@ ck('a module opens on the first tab its holder may actually open',
 // take money; they may not forgive it, raise a new charge against every family
 // in the school, or take a bill off the books.
 const fees = moduleByKey('fees');
+const subsFor = (mod, tabId, who, f) => visibleSubs(mod, tabId, who, f).map(x => x.id);
+const accountant = staff('Accountant', { fees: lvl(3) });
+
+// Fees is four sections with sections inside two of them, matching the
+// installed application. Payments is second: bills are raised three times a
+// year and money is taken every morning of the term.
+ck('Fees opens on the dashboard, with Payments before Bills',
+  tabsFor(fees, proprietor).join(',') === 'dashboard,payments,bills,discounts');
+
 ck('a bursar with Fees at Full is not shown the extra charges',
-  !tabsFor(fees, staff('Accountant', { fees: lvl(3) })).includes('supplementary'));
+  !subsFor(fees, 'bills', accountant).includes('extras'));
 ck('...nor the withdrawn bills',
-  !tabsFor(fees, staff('Accountant', { fees: lvl(3) })).includes('voided'));
+  !subsFor(fees, 'bills', accountant).includes('voided'));
+ck('...but is shown the school fees, the books and who owes',
+  ['home', 'schoolfees', 'books'].every(id => subsFor(fees, 'bills', accountant).includes(id)));
 ck('the Proprietor is shown both',
-  tabsFor(fees, proprietor).includes('supplementary') && tabsFor(fees, proprietor).includes('voided'));
+  subsFor(fees, 'bills', proprietor).includes('extras')
+  && subsFor(fees, 'bills', proprietor).includes('voided'));
 ck('...and so is the Super Admin',
-  tabsFor(fees, superAdmin).includes('supplementary') && tabsFor(fees, superAdmin).includes('voided'));
+  subsFor(fees, 'bills', superAdmin).includes('extras')
+  && subsFor(fees, 'bills', superAdmin).includes('voided'));
+
+// The canteen bill IS the term's feeding calendar, so it follows the same
+// switch the Canteen module does — including the rule that a school which has
+// never touched the switch has the feature.
+ck('a school that has switched the canteen off is not shown the canteen bill',
+  !subsFor(fees, 'bills', proprietor, { feature_canteen_enabled: 'false' }).includes('canteen'));
+ck('...and one that runs a canteen is',
+  subsFor(fees, 'bills', proprietor, { feature_canteen_enabled: 'true' }).includes('canteen'));
+ck('...as is one that has never touched the switch',
+  subsFor(fees, 'bills', proprietor, {}).includes('canteen'));
+
+// Taking money needs create, not view. Somebody who may only look at fees gets
+// the register and the pending queue, and no counter.
+const looker = staff('Secretary', { fees: lvl(1) });
+ck('an account that may only look at fees is not offered the counter',
+  !subsFor(fees, 'payments', looker).includes('single')
+  && !subsFor(fees, 'payments', looker).includes('sheet'));
+ck('...but can still read the register', subsFor(fees, 'payments', looker).includes('register'));
+ck('a bursar who may take money gets the counter and the sheet',
+  subsFor(fees, 'payments', accountant).includes('single')
+  && subsFor(fees, 'payments', accountant).includes('sheet'));
 
 const settings = moduleByKey('settings');
 ck('the audit trail is the Super Admin\'s alone',
