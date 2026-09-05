@@ -228,14 +228,18 @@ function registerStaffRoutes({ add, db, json, html, can, API, getSetting, media,
     if (!students.length) return json(res, 200, { ok: true, days: [], students: [], marked_days: 0 });
 
     const ph = students.map(() => '?').join(',');
+    // The written reason comes back with the count. Capturing why a child was
+    // away is only worth doing if somebody can read it afterwards, and the
+    // head teacher's question on Friday — "why has Ama missed three days?" —
+    // is asked of this screen, not of the one day being marked.
     const rows = db.prepare(`
-      SELECT date, student_id, status FROM student_attendance
+      SELECT date, student_id, status, notes FROM student_attendance
       WHERE student_id IN (${ph}) AND date >= date('now', ?)
       ORDER BY date DESC
     `).all(...students.map(s => s.id), `-${days} days`);
 
     const byDay = new Map();
-    const perStudent = new Map(students.map(s => [s.id, { present: 0, absent: 0, late: 0, total: 0 }]));
+    const perStudent = new Map(students.map(s => [s.id, { present: 0, absent: 0, late: 0, total: 0, reasons: [] }]));
     for (const r of rows) {
       const d = byDay.get(r.date) || { date: r.date, present: 0, absent: 0, late: 0, total: 0 };
       d.total++;
@@ -249,6 +253,10 @@ function registerStaffRoutes({ add, db, json, html, can, API, getSetting, media,
         if (r.status === 'absent') p.absent++;
         else if (r.status === 'late') p.late++;
         else p.present++;
+        // Newest first, and capped: this is a summary, not the whole term.
+        if (r.notes && p.reasons.length < 6) {
+          p.reasons.push({ date: r.date, status: r.status, reason: r.notes });
+        }
       }
     }
 

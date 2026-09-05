@@ -1184,7 +1184,18 @@ function createApiServer(db, opts = {}) {
         }
       }
     }
+    // One vocabulary, one rule about reasons — the same module the office PC's
+    // register uses. A mark the desktop would refuse is refused here, and the
+    // reason on a LATE pupil is kept rather than thrown away because they
+    // eventually turned up.
+    const attendanceLib = require('../ipc/_attendance');
+    for (const m of marks) {
+      if (m.status && !attendanceLib.isValid(m.status)) {
+        return json(res, 400, { ok: false, error: 'That is not a mark the register takes.' });
+      }
+    }
     const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
+    const prior = db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?');
     const up = db.prepare(`
       INSERT INTO student_attendance (student_id, date, status, marked_by, term_id, notes)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -1195,7 +1206,8 @@ function createApiServer(db, opts = {}) {
     const tx = db.transaction(() => {
       for (const m of marks) {
         const status = m.status || 'present';
-        const notes = status === 'absent' ? (m.notes || null) : null;
+        const existing = prior.get(m.student_id, date);
+        const notes = attendanceLib.notesFor(status, m.notes, existing && existing.notes);
         up.run(m.student_id, date, status, ctx.user.id, term?.id || null, notes);
         n++;
       }

@@ -7,6 +7,15 @@
 // is why registers get taken late), and look at what was marked last week —
 // which is the question a parent asks, and the reason a register gets
 // corrected.
+//
+// A third: say WHY. The office PC's register has always kept a written reason
+// against a day, and this one kept none — so a class marked on a phone in the
+// corridor reached the office as a column of red with nothing behind it, and
+// the head teacher asking on Friday why Ama had missed three days had to ring
+// the teacher. The reason box is now here, seeded with whatever is already on
+// the record, and it is asked for on a LATE mark as well as an absence: a
+// child who arrives at nine has a story, and it is the story that matters when
+// the pattern shows up three weeks later.
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, RefreshControl } from 'react-native';
 import { useAuth } from '../../auth';
@@ -15,17 +24,21 @@ import { api } from '../../api';
 import {
   Screen, Card, Section, Heading, Body, Muted, Micro, Button, Badge,
   ErrorNote, Flash, InfoNote, Skeleton, EmptyState, SegmentedControl,
-  DataTable, Grid, StatCard, ProgressBar, PendingBadge,
+  DataTable, Grid, StatCard, ProgressBar, PendingBadge, Field,
 } from '../../ui';
 import { ClassPicker, DateStepper, useOfficeClasses, todayISO } from '../../pickers';
 import { useLayout } from '../../responsive';
 import { colors, palette, spacing, radius, type } from '../../theme';
 
+// The office PC's list, in the office PC's order — see electron/ipc/_attendance.js,
+// which is what actually enforces it. Late and Absent both ask why.
 const STATUSES = [
   { key: 'present', label: 'Present', color: palette.green600, soft: palette.green100 },
-  { key: 'absent', label: 'Absent', color: palette.red600, soft: palette.red100 },
-  { key: 'late', label: 'Late', color: palette.amber600, soft: palette.amber100 },
+  { key: 'late', label: 'Late', color: palette.amber600, soft: palette.amber100, needsReason: true },
+  { key: 'absent', label: 'Absent', color: palette.red600, soft: palette.red100, needsReason: true },
 ];
+
+const needsReason = (status) => !!(STATUSES.find(s => s.key === status) || {}).needsReason;
 
 function AttendanceScreen() {
   const { token, mode } = useAuth();
@@ -37,6 +50,10 @@ function AttendanceScreen() {
   const [date, setDate] = useState(todayISO());
   const [roster, setRoster] = useState(null);
   const [marks, setMarks] = useState({});
+  // { studentId: 'went to the clinic' } — what is typed against a mark that
+  // asks why. Seeded from the record so an existing reason is edited, not
+  // silently replaced with a blank.
+  const [reasons, setReasons] = useState({});
   const [dirty, setDirty] = useState(false);
   const [history, setHistory] = useState(null);
   const [error, setError] = useState(null);
@@ -58,6 +75,7 @@ function AttendanceScreen() {
       setRoster(r.students || []);
       // Everyone starts Present, so a teacher taps only the exceptions.
       setMarks(Object.fromEntries((r.students || []).map(s => [s.id, s.status || 'present'])));
+      setReasons(Object.fromEntries((r.students || []).map(s => [s.id, s.notes || ''])));
     } catch (e) { setError(e.message); setRoster([]); }
   }, [token, classId, date]);
 
@@ -79,11 +97,27 @@ function AttendanceScreen() {
     setMarks(m => ({ ...m, [id]: status }));
     setDirty(true);
   }
+  function setReason(id, text) {
+    setReasons(r => ({ ...r, [id]: text }));
+    setDirty(true);
+  }
+
+  // Pupils marked late or absent with nothing written against them. The save
+  // is not blocked on it — a register taken at eight o'clock is often taken
+  // before anybody knows why a child is missing, and a teacher who cannot save
+  // simply does not take the register — but the count is put in front of them,
+  // and the boxes stay on screen to be filled in when the note comes in.
+  const missingReasons = (roster || []).filter(
+    s => needsReason(marks[s.id]) && !String(reasons[s.id] || '').trim());
 
   async function save() {
     setSaving(true); setError(null); setSaved(null);
     try {
-      const payload = Object.entries(marks).map(([student_id, status]) => ({ student_id: Number(student_id), status }));
+      const payload = Object.entries(marks).map(([student_id, status]) => ({
+        student_id: Number(student_id),
+        status,
+        notes: needsReason(status) ? (String(reasons[student_id] || '').trim() || null) : null,
+      }));
       const r = await api.markAttendance(token, date, payload);
       setSaved(mode === 'cloud'
         ? `Register for ${date} saved on this device and queued — it reaches the school when its computer next syncs.`
@@ -148,7 +182,7 @@ function AttendanceScreen() {
                   </Card>
 
                   <Card>
-                    <Muted style={{ marginBottom: spacing.sm }}>Everyone starts as present. Tap only the exceptions.</Muted>
+                    <Muted style={{ marginBottom: spacing.sm }}>Everyone starts as present. Tap only the exceptions — a late arrival and an absence both ask why.</Muted>
                     {roster.map(s => (
                       <View key={s.id} style={{
                         paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
@@ -183,8 +217,29 @@ function AttendanceScreen() {
                             );
                           })}
                         </View>
+                        {/* The box appears under the pupil it belongs to, the
+                            moment the mark that calls for it is tapped — the
+                            teacher is already looking at that row. */}
+                        {needsReason(marks[s.id]) ? (
+                          <View style={{ width: layout.canTable ? 300 : undefined }}>
+                            <Field
+                              value={reasons[s.id] || ''}
+                              onChangeText={t => setReason(s.id, t)}
+                              placeholder={marks[s.id] === 'late' ? 'Why were they late?' : 'Why are they away?'}
+                              icon="note"
+                              style={{ marginBottom: 0 }}
+                              accessibilityLabel={`Reason for ${s.name}`}
+                            />
+                          </View>
+                        ) : null}
                       </View>
                     ))}
+                    {missingReasons.length > 0 ? (
+                      <InfoNote
+                        style={{ marginTop: spacing.md }}
+                        message={`${missingReasons.length} pupil${missingReasons.length === 1 ? '' : 's'} marked late or absent with no reason written. You can save now and add the reason when you have it.`}
+                      />
+                    ) : null}
                     <Flash
                       error={error} success={saved} onClear={() => setSaved(null)}
                       style={{ marginTop: spacing.md, marginBottom: 0 }}
@@ -245,11 +300,12 @@ function HistoryPanel({ history }) {
         />
       </Section>
 
-      <Section title="Who is missing school" icon="users" subtitle="Ordered by days absent.">
+      <Section title="Who is missing school" icon="users" subtitle="Ordered by days absent, with the reasons that were given.">
         {pupils.filter(p => p.total > 0).sort((a, b) => b.absent - a.absent).slice(0, 40).map(p => (
           <View key={p.id} style={{ paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.borderSoft }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
               <Text numberOfLines={1} style={{ ...type.body, fontWeight: '700', color: colors.text, flex: 1 }}>{p.name}</Text>
+              {p.late ? <Badge tone="warning" label={`${p.late} late`} /> : null}
               <Badge
                 tone={p.absent === 0 ? 'success' : p.absent <= 2 ? 'warning' : 'danger'}
                 label={`${p.absent} absent`}
@@ -261,6 +317,20 @@ function HistoryPanel({ history }) {
                 tone={p.total && (p.present + p.late) / p.total >= 0.9 ? 'success' : 'warning'}
               />
             </View>
+            {/* Why, in the teacher's own words — the half of the register that
+                used to be thrown away between the classroom and the office. */}
+            {(p.reasons || []).length > 0 ? (
+              <View style={{ marginTop: 7, gap: 3 }}>
+                {p.reasons.map(r => (
+                  <View key={`${r.date}-${r.status}`} style={{ flexDirection: 'row', gap: 6, alignItems: 'baseline' }}>
+                    <Micro color={r.status === 'late' ? palette.amber600 : palette.red600}>
+                      {r.date.slice(5)} {r.status}
+                    </Micro>
+                    <Muted style={{ flex: 1 }} numberOfLines={2}>{r.reason}</Muted>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
         ))}
       </Section>

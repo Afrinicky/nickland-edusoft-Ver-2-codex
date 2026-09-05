@@ -383,20 +383,26 @@ async function attendanceHistory(store, school_id, classId, days, rec) {
     for (const m of p.marks || []) bucket[m.student_id] = { status: m.status, notes: m.notes || null };
   }
 
-  const perStudent = new Map((r.students || []).map(s => [String(s.id), { present: 0, absent: 0, late: 0, total: 0 }]));
+  const perStudent = new Map((r.students || []).map(
+    s => [String(s.id), { present: 0, absent: 0, late: 0, total: 0, reasons: [] }]));
   const dayRows = [];
-  for (const [date, marks] of Object.entries(byDate)) {
+  // Newest day first, so the capped list of reasons below is the recent ones.
+  for (const [date, marks] of Object.entries(byDate).sort((a, b) => (a[0] < b[0] ? 1 : -1))) {
     const row = { date, present: 0, absent: 0, late: 0, total: 0 };
     for (const [sid, m] of Object.entries(marks)) {
       row.total++;
       const key = m.status === 'absent' ? 'absent' : m.status === 'late' ? 'late' : 'present';
       row[key]++;
       const p = perStudent.get(String(sid));
-      if (p) { p.total++; p[key]++; }
+      if (p) {
+        p.total++; p[key]++;
+        // The reason travels with the count. Capturing why a child was away is
+        // only worth doing if somebody can read it back afterwards.
+        if (m.notes && p.reasons.length < 6) p.reasons.push({ date, status: m.status, reason: m.notes });
+      }
     }
     dayRows.push(row);
   }
-  dayRows.sort((a, b) => (a.date < b.date ? 1 : -1));
   const limited = days ? dayRows.slice(0, days) : dayRows;
 
   return {

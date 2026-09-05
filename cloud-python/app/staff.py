@@ -431,10 +431,10 @@ def attendance_history(store, school_id, class_id, days=30, rec=None):
         for m in p.get("marks") or []:
             bucket[str(m.get("student_id"))] = {"status": m.get("status"), "notes": m.get("notes")}
 
-    per = {str(x.get("id")): {"present": 0, "absent": 0, "late": 0, "total": 0}
+    per = {str(x.get("id")): {"present": 0, "absent": 0, "late": 0, "total": 0, "reasons": []}
            for x in (r.get("students") or [])}
     rows = []
-    for date, marks in by_date.items():
+    for date, marks in sorted(by_date.items(), reverse=True):
         row = {"date": date, "present": 0, "absent": 0, "late": 0, "total": 0}
         for sid, m in marks.items():
             row["total"] += 1
@@ -444,8 +444,13 @@ def attendance_history(store, school_id, class_id, days=30, rec=None):
             if hit:
                 hit["total"] += 1
                 hit[key] += 1
+                # The reason travels with the count, newest first and capped —
+                # capturing why a child was away is only worth doing if
+                # somebody can read it back afterwards.
+                if m.get("notes") and len(hit["reasons"]) < 6:
+                    hit["reasons"].append({"date": date, "status": m.get("status"),
+                                           "reason": m.get("notes")})
         rows.append(row)
-    rows.sort(key=lambda x: x["date"], reverse=True)
     limited = rows[:days] if days else rows
 
     return {
