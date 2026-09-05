@@ -259,107 +259,11 @@ function filterPupils(list, q) {
 }
 
 // ── Admissions ──────────────────────────────────────────────────────────────
-
-export function StudentsAdmissions() {
-  const { token, profile } = useAuth();
-  const { classes } = useOfficeClasses(token);
-  const state = useOffice((t) => api.adminStudents(t, { status: 'Active' }));
-  const [form, setForm] = useState(blankAdmission());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const [admitted, setAdmitted] = useState(null);
-  const may = can(profile, 'students', 'create');
-
-  const set = (k) => (v) => setForm(f => ({ ...f, [k]: v }));
-
-  const recent = useMemo(() => (state.data?.students || [])
-    .slice()
-    .sort((a, b) => String(b.admission_date || '').localeCompare(String(a.admission_date || '')))
-    .slice(0, 12), [state.data]);
-
-  async function admit() {
-    setError(null); setAdmitted(null);
-    if (!form.surname.trim() || !form.firstName.trim()) {
-      return setError('A surname and a first name are required.');
-    }
-    setBusy(true);
-    try {
-      const r = await api.adminAdmit(token, {
-        surname: form.surname.trim(),
-        firstName: form.firstName.trim(),
-        otherNames: form.otherNames.trim() || undefined,
-        gender: form.gender || undefined,
-        dateOfBirth: form.dateOfBirth || undefined,
-        classId: form.classId ? Number(form.classId) : undefined,
-        indexNumber: form.indexNumber.trim() || undefined,
-      });
-      setAdmitted(r.index_number);
-      setForm(blankAdmission());
-      state.reload();
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  }
-
-  if (!may) {
-    return <EmptyState icon="lock" title="Admissions are not yours to make"
-                       message="Your account can read the roll but not add to it." />;
-  }
-
-  return (
-    <OfficeScreen state={state} skeleton={3}>
-      <ErrorNote message={error} />
-      {admitted ? (
-        <SuccessNote message={`Admitted — admission number ${admitted}. Write it on the record.`} />
-      ) : null}
-
-      <Panel title="Admit a pupil"
-             subtitle="An admission number is issued automatically unless the school has its own.">
-        <View style={styles.formGrid}>
-          <View style={styles.formCell}><Field label="Surname" value={form.surname} onChangeText={set('surname')} /></View>
-          <View style={styles.formCell}><Field label="First name" value={form.firstName} onChangeText={set('firstName')} /></View>
-          <View style={styles.formCell}><Field label="Other names" value={form.otherNames} onChangeText={set('otherNames')} /></View>
-          <View style={styles.formCell}>
-            <Select label="Sex" value={form.gender} onChange={set('gender')}
-                    options={[{ label: 'Female', value: 'Female' }, { label: 'Male', value: 'Male' }]} />
-          </View>
-          <View style={styles.formCell}>
-            <Field label="Date of birth" value={form.dateOfBirth} onChangeText={set('dateOfBirth')}
-                   hint="YYYY-MM-DD" />
-          </View>
-          <View style={styles.formCell}>
-            <Select label="Class" value={form.classId} onChange={set('classId')}
-                    options={(classes || []).map(c => ({ label: c.name, value: String(c.id) }))} />
-          </View>
-          <View style={styles.formCell}>
-            <Field label="Admission number" value={form.indexNumber} onChangeText={set('indexNumber')}
-                   hint="Leave empty and one is issued" />
-          </View>
-        </View>
-        <Button title={busy ? 'Admitting…' : 'Admit the pupil'} busy={busy} disabled={busy}
-                icon="check" full={false} onPress={admit} />
-      </Panel>
-
-      <Panel title="Recently admitted" subtitle="The last twelve onto the roll">
-        <DataTable
-          keyExtractor={(r) => String(r.id)}
-          empty="Nobody has been admitted yet."
-          columns={[
-            { key: 'name', label: 'Pupil' },
-            { key: 'index_number', label: 'Admission no.', width: 150 },
-            { key: 'class_name', label: 'Class', width: 140 },
-            { key: 'admission_date', label: 'Admitted', align: 'right', width: 116,
-              render: (r) => shortDate(r.admission_date) },
-          ]}
-          rows={recent} />
-      </Panel>
-    </OfficeScreen>
-  );
-}
-
-const blankAdmission = () => ({
-  surname: '', firstName: '', otherNames: '', gender: '',
-  dateOfBirth: '', classId: '', indexNumber: '',
-});
+//
+// The admission form is the installed application's, field for field, and it
+// is long enough to be worth its own file. It is re-exported here so the
+// route's imports do not have to know that.
+export { default as StudentsAdmissions } from './admissions';
 
 // ── Status ──────────────────────────────────────────────────────────────────
 //
@@ -616,8 +520,6 @@ const styles = {
   admissionMeta: { ...type.small, fontSize: 11, color: colors.muted, marginTop: 2 },
   admissionDate: { ...type.small, fontSize: 12, color: colors.muted, flexShrink: 0 },
 
-  formGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.md },
-  formCell: { minWidth: 220, flexGrow: 1, flexBasis: 220 },
 
   sheetHead: {
     flexDirection: 'row', backgroundColor: colors.surfaceAlt,

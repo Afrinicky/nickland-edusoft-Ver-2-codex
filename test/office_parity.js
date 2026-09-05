@@ -249,6 +249,48 @@ function req(base, method, p, { token, body } = {}) {
   ck('re-raising a class does not discard money already received',
     r.status === 200 && Number(after.total_paid) === 100);
 
+  // ══ Admitting a pupil, in a browser ═══════════════════════════════════════
+  //
+  // The browser's admission used to write eight columns and invent its own
+  // admission number, so a pupil admitted at the gate on a phone and one
+  // admitted in the office on the same morning ended up on the roll with two
+  // different numbering schemes and half a record.
+
+  r = await req(base, 'POST', '/api/v1/admin/students', { token: admin, body: {
+    surname: 'OWUSU', first_name: 'Akosua', other_names: 'Serwaa',
+    gender: 'Female', date_of_birth: '2015-03-04', current_class_id: 1,
+    previous_school: 'St Peter\'s Preparatory', hometown: 'Acherensua',
+    nationality: 'Ghanaian', lives_with: 'Guardian', guardian_relationship: 'Aunt',
+    guardian_name: 'Comfort Owusu', guardian_contact: '0244000111',
+    emergency_contact_name: 'Kwame Owusu', emergency_contact_phone: '0209988776',
+    blood_group: 'O+', allergies: 'Peanuts', medical_notes: 'Mild asthma',
+    special_needs: 'Sits at the front', digital_address: 'BR-0348-9927',
+    admission_date: '2026-01-12', notes: 'Joined mid-term',
+  } });
+  ck('a pupil can be admitted from a browser', r.status === 200 && r.json.ok);
+  ck('...with the admission number the office PC would have issued, not another scheme',
+    /^[A-Z]+\/\d+\/\d+$/.test(r.json.index_number || ''));
+
+  const admittedRow = db.prepare('SELECT * FROM students WHERE id = ?').get(r.json.id);
+  ck('...the previous school, which decides the class they enter',
+    admittedRow.previous_school === "St Peter's Preparatory");
+  ck('...who the pupil actually lives with, and how they are related',
+    admittedRow.lives_with === 'Guardian' && admittedRow.guardian_relationship === 'Aunt');
+  ck('...an emergency contact separate from the parents',
+    admittedRow.emergency_contact_phone === '0209988776');
+  ck('...the medical facts that matter on the morning they matter',
+    admittedRow.blood_group === 'O+' && admittedRow.allergies === 'Peanuts'
+    && admittedRow.medical_notes === 'Mild asthma');
+  ck('...the day they actually joined, not the day somebody typed them in',
+    admittedRow.admission_date === '2026-01-12');
+  ck('...and the age worked out from the date of birth, which used to be dropped',
+    Number(admittedRow.age) >= 10);
+
+  r = await req(base, 'POST', '/api/v1/admin/students', { token: admin, body: {
+    surname: 'NOBODY', first_name: 'Ntim',
+  } });
+  ck('a pupil with no class is refused, as at the office PC', r.status === 400);
+
   // ══ The counter, in a browser ═════════════════════════════════════════════
   //
   // A school does not have a fees counter, a books counter, a canteen counter

@@ -2137,6 +2137,47 @@ function runMigrations(db) {
     `).run();
   });
 
+  // 35. What an admission form actually asks for.
+  //
+  //     The form collected a name, a class, three contacts and an address, and
+  //     stopped. A Ghanaian school's admission form asks for more than that,
+  //     and every one of these was a question the office had to keep on paper
+  //     because the system had nowhere to put the answer:
+  //
+  //       • the previous school, which decides what class a pupil enters
+  //       • nationality and hometown, which the GES returns ask for
+  //       • who the pupil actually LIVES with, which is not always the parent
+  //         whose name is first on the form, and which decides who is rung
+  //       • the guardian's relationship, so "Auntie Comfort" is not a mystery
+  //         to whoever picks up the phone in three years
+  //       • an emergency contact separate from the parents, because the point
+  //         of one is that it answers when they do not
+  //       • blood group, allergies and medical notes — a child collapses in
+  //         the yard perhaps twice in a school's life, and that is the moment
+  //         this column exists for
+  //       • any special educational need, so it follows the pupil rather than
+  //         living in one teacher's memory
+  //
+  //     All additive and nullable: a school that never fills one in is exactly
+  //     where it is now.
+  safe(() => {
+    const cols = db.prepare('PRAGMA table_info(students)').all().map(c => c.name);
+    const add = (name, type = 'TEXT') => {
+      if (!cols.includes(name)) db.exec(`ALTER TABLE students ADD COLUMN ${name} ${type}`);
+    };
+    add('nationality');
+    add('hometown');
+    add('previous_school');
+    add('lives_with');              // Father | Mother | Both parents | Guardian | Other
+    add('guardian_relationship');
+    add('emergency_contact_name');
+    add('emergency_contact_phone');
+    add('blood_group');
+    add('allergies');
+    add('medical_notes');
+    add('special_needs');
+  });
+
   //  Rename the "Administrator" designation to "Super Admin".
   //
   //  Every school has administrators — the secretary who keeps the roll, the

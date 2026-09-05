@@ -34,8 +34,12 @@ export default function StudentsAdmissionsTab({ onAdmitted }) {
 
   useEffect(() => { refresh(); }, []);
 
-  async function handleSaved(id) {
-    showToast('Student admitted successfully', 'success');
+  async function handleSaved(id, indexNumber) {
+    // The admission number is the thing the office writes on the form and
+    // reads back to the parent, so it is what the confirmation says.
+    showToast(indexNumber
+      ? `Admitted — index number ${indexNumber}`
+      : 'Student admitted successfully', 'success');
     setShowForm(false);
     refresh();
     if (onAdmitted) onAdmitted();
