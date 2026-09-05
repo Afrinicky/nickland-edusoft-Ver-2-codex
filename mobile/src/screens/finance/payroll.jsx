@@ -45,7 +45,7 @@ export default function Payroll() {
     }
     setBusy(true);
     try {
-      await api.school.markSalaryPaid(token, paying.id, { amount: Number(amount), method });
+      await api.markSalaryPaid(token, paying.id, { amount: Number(amount), method });
       setPaying(null); setAmount('');
       state.reload();
     } catch (e) { setError(e.message); }

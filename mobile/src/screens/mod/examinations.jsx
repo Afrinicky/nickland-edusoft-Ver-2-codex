@@ -18,7 +18,7 @@ import { View, Text } from 'react-native';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { useClasses, useSubjects } from '../../pickers';
+import { useOfficeClasses, useSubjects } from '../../pickers';
 import {
   Select, SearchField, DataTable, Muted, Badge, EmptyState, ErrorNote, SuccessNote,
   Button, Sheet, Field, TextArea, SegmentedControl, CheckRow, Loading,
@@ -56,7 +56,7 @@ export default function Examinations() {
 
 function Papers() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const subjects = useSubjects(token, classId || null);
   const [papers, setPapers] = useState(null);
@@ -255,7 +255,7 @@ function PaperDetail({ paper, onEdit, onDelete, busy }) {
 
 function Bank() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const subjects = useSubjects(token, classId || null);
   const [subjectId, setSubjectId] = useState('');

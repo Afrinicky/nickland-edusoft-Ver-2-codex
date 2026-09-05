@@ -585,3 +585,12 @@ function generateBillForStudent(db, studentId, termId) {
 }
 
 module.exports = registerFeesHandlers;
+// The browser raises bills through this same function. Before it was exported,
+// electron/server/office_api.js had its own copy of bill generation with a
+// STRICTER template lookup — it required `term_id = ?` exactly, so a school
+// whose template said "Every class / Any term" (the ordinary setup) had every
+// pupil come back as "no template" and the browser could not raise a single
+// bill. Arrears, discounts, book charges carried forward, supplementary lines
+// preserved across a regeneration and the refusal to resurrect a withdrawn
+// bill are all in here; none of them was in the copy.
+module.exports.generateBillForStudent = generateBillForStudent;

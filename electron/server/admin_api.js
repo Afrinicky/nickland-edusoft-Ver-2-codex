@@ -506,6 +506,52 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
   });
 
   // ── Approvals: leave ──────────────────────────────────────────────────────
+  // What is waiting to be decided, in one request.
+  //
+  // The browser used to ask for the two halves separately — the leave queue
+  // and the lesson-note queue — and an account holding one but not the other
+  // got a 403 for the half it may not see. The client swallowed it, so the
+  // count was quietly short by however many lesson notes were waiting, and a
+  // 403 appeared in the console of every staff screen a bursar opened.
+  //
+  // Each half is reported only to an account that holds it, which is the same
+  // rule /admin/overview follows: a bursar is told about leave and not about
+  // lesson notes, rather than being told about neither or refused outright.
+  add('GET', `${API}/admin/approvals`, async (ctx, req, res) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    const mayLeave = can(ctx, 'staff', 'view');
+    const mayNotes = can(ctx, 'academics', 'view');
+    if (!mayLeave && !mayNotes) return deny(res);
+
+    const leave = mayLeave ? db.prepare(`
+      SELECT lr.*, st.surname, st.first_name, st.staff_number, st.role
+      FROM leave_requests lr JOIN staff st ON st.id = lr.staff_id
+      WHERE lr.status = 'pending' ORDER BY lr.id DESC LIMIT 200
+    `).all().map(r => ({ ...r, staff_name: `${r.surname || ''} ${r.first_name || ''}`.trim() })) : [];
+
+    const notes = mayNotes ? db.prepare(`
+      SELECT ln.id, ln.topic AS title, ln.sub_topic, ln.week_number, ln.lesson_date,
+             ln.status, ln.created_at, ln.class_group_id,
+             c.name AS class_name, s.name AS subject_name, st.surname, st.first_name
+      FROM lesson_notes ln
+      LEFT JOIN class_groups c ON c.id = ln.class_group_id
+      LEFT JOIN subjects s ON s.id = ln.subject_id
+      LEFT JOIN staff st ON st.id = ln.staff_id
+      WHERE COALESCE(ln.status,'draft') = 'submitted' ORDER BY ln.id DESC LIMIT 200
+    `).all().map(r => ({ ...r, teacher_name: `${r.surname || ''} ${r.first_name || ''}`.trim() })) : [];
+
+    return json(res, 200, {
+      ok: true, leave, lesson_notes: notes,
+      // What this account may see at all, so a screen can hide a section
+      // rather than draw an empty one that looks like "nothing waiting".
+      may_see: { leave: mayLeave, lesson_notes: mayNotes },
+      may_decide: {
+        leave: mayLeave && can(ctx, 'staff', 'edit'),
+        lesson_notes: mayNotes && can(ctx, 'academics', 'edit'),
+      },
+    });
+  });
+
   add('GET', `${API}/admin/leave`, async (ctx, req, res, params, body, ip, tokenId, query) => {
     if (!adminGate(ctx, res, 'staff')) return undefined;
     const status = ['pending', 'approved', 'rejected'].includes(query.status) ? query.status : 'pending';

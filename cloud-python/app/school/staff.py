@@ -412,3 +412,63 @@ def me(db, actor, year=None):
             LEFT JOIN subjects s ON s.id = sa.subject_id
            WHERE sa.staff_id = %s""", (staff_id,)),
     }
+
+
+# ── training ────────────────────────────────────────────────────────────────
+#
+# The courses somebody has been on. Small, and it was simply never given a
+# route online — which is how a capability gap usually looks from the inside.
+# A school arguing for a promotion or filing a GES return needs it, and it
+# lived only on the office PC.
+
+def training(db, actor, staff_id):
+    """Your own training record is yours to read. Anybody else's is the staff
+    module — a courses list is part of somebody's employment file."""
+    staff_id = int(staff_id)
+    own = (actor.get("staff_id") is not None and int(actor["staff_id"]) == staff_id)
+    if not own and not security.can(actor, "staff", "view"):
+        return {"ok": False, "status": 403, "error": "Access denied."}
+    return {"ok": True, "training": db.all("""
+      SELECT id, title, provider, start_date, end_date, notes
+        FROM staff_training WHERE staff_id = %s ORDER BY start_date DESC, id DESC""",
+                                           (staff_id,))}
+
+
+def save_training(db, actor, staff_id, data):
+    if not security.can(actor, "staff", "edit"):
+        return {"ok": False, "status": 403, "error": "Access denied."}
+    staff_id = int(staff_id)
+    if not db.one("SELECT id FROM staff WHERE id = %s", (staff_id,)):
+        return {"ok": False, "status": 404, "error": "No such member of staff."}
+    title = str(data.get("title") or "").strip()
+    if not title:
+        return {"ok": False, "status": 400, "error": "What was the course called?"}
+    values = (title,
+              str(data.get("provider") or "").strip() or None,
+              data.get("startDate") or None,
+              data.get("endDate") or None,
+              str(data.get("notes") or "").strip() or None)
+
+    if data.get("id"):
+        record_id = int(data["id"])
+        db.run("""UPDATE staff_training SET title = %s, provider = %s, start_date = %s,
+                    end_date = %s, notes = %s WHERE id = %s AND staff_id = %s""",
+               (*values, record_id, staff_id))
+    else:
+        record_id = db.insert("staff_training", {
+            "staff_id": staff_id, "title": values[0], "provider": values[1],
+            "start_date": values[2], "end_date": values[3], "notes": values[4]})
+    security.audit(db, actor, "staff_training", record_id, "save_training", title, "normal")
+    return {"ok": True, "id": record_id}
+
+
+def delete_training(db, actor, training_id):
+    if not security.can(actor, "staff", "edit"):
+        return {"ok": False, "status": 403, "error": "Access denied."}
+    row = db.one("SELECT * FROM staff_training WHERE id = %s", (int(training_id),))
+    if not row:
+        return {"ok": False, "status": 404, "error": "No such training record."}
+    db.run("DELETE FROM staff_training WHERE id = %s", (int(training_id),))
+    security.audit(db, actor, "staff_training", int(training_id), "delete_training",
+                   row.get("title") or "", "normal")
+    return {"ok": True}

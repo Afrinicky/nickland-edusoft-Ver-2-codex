@@ -184,8 +184,18 @@ function req(base, method, p, { token, body } = {}) {
   ck('...and the line items a parent argues about at the gate', lines.length === 3
     && lines[1].description === 'PTA levy');
 
+  // Raising the same class again re-issues the bill rather than refusing to
+  // touch it — which is what the installed application does, and what a school
+  // needs after correcting a template. The test the web copy used to pass
+  // ("it was skipped") described a divergence, not a safeguard: what actually
+  // must not happen is the parent being asked for the money twice.
   r = await req(base, 'POST', '/api/v1/fees/bills', { token: bursar, body: { classId: 1 } });
-  ck('raising them a second time bills nobody twice', r.json.raised === 0 && r.json.skipped === 2);
+  ck('raising them a second time re-issues rather than refuses',
+    r.status === 200 && r.json.generated === 2 && r.json.skipped === 0);
+  const again = db.prepare('SELECT * FROM student_bills WHERE student_id = ? AND term_id = 3').get(p1);
+  ck('...and bills nobody twice', Number(again.total_billed) === 380 && Number(again.balance) === 380);
+  ck('...against the same bill, not a second one',
+    db.prepare('SELECT COUNT(*) n FROM student_bills WHERE student_id = ? AND term_id = 3').get(p1).n === 1);
 
   r = await req(base, 'POST', '/api/v1/fees/bills', { token: teacher, body: { classId: 1 } });
   ck('a class teacher cannot raise bills', r.status === 403);

@@ -61,7 +61,7 @@ export default function OnlinePayments() {
   async function verify(intent) {
     setError(null);
     try {
-      const r = await api.school.verifyIntent(token, intent.id);
+      const r = await api.verifyPayment(token, intent.id);
       setDone(r.receipt_number ? `The gateway confirmed it. Receipt ${r.receipt_number}.` : 'Settled.');
       state.reload();
     } catch (e) { setError(e.message); }

@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { todayISO, DateStepper, useClasses } from '../../pickers';
+import { todayISO, DateStepper, useOfficeClasses } from '../../pickers';
 import { OfficeScreen, shortDate, useOffice } from '../../office';
 import {
   Select, SearchField, DataTable, Muted, Badge, EmptyState, ErrorNote, SuccessNote,
@@ -410,7 +410,7 @@ function StaffForm({ value, designations, onSaved, onCancel }) {
 
 function Assignments({ staffId, rows, onSaved }) {
   const { token } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   // Every subject the school teaches, not the ones for one class: an
   // assignment can name a subject without naming a class.
   const [subjects, setSubjects] = useState([]);

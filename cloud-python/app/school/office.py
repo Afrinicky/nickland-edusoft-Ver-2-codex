@@ -237,3 +237,95 @@ def cashbook(db, actor, date_from=None, date_to=None):
         "total_in": total_in, "total_out": total_out,
         "closing_balance": _round2(total_in - total_out),
     }
+
+
+# ── the pickers the office needs ────────────────────────────────────────────
+#
+# A class picker, a pupil search and a staff list that are NOT filtered by the
+# teaching scope.
+#
+# The scope answers "whose marks, whose register", and it is built from
+# ``staff_assignments``. An accountant has none, so it answered "nothing", and
+# every screen that filtered by it handed the office an empty list: no classes
+# on the bulk pay sheet, no pupils behind the payment sheet, nobody to run a
+# payroll for. The installed application has no such filter on those screens,
+# so the same person could do the work at the office PC and not on a laptop
+# next to it.
+#
+# These are separate routes rather than a widened scope on the teaching ones,
+# so that "not a teacher" can never become "may open anybody's register": each
+# still checks a module the office actually runs on.
+
+OFFICE_MODULES = ["students", "fees", "canteen", "finance", "academics", "staff", "payroll"]
+
+
+def _any_of(actor, modules):
+    return any(security.can(actor, m, "view") for m in modules)
+
+
+def _denied():
+    return {"ok": False, "status": 403, "error": "Access denied."}
+
+
+def classes(db, actor):
+    """Every class the school runs, with the roll on each.
+
+    The roll is here because a picker that says "Basic 5" and a picker that
+    says "Basic 5 — 32 pupils" are different tools: the second one tells you
+    immediately whether you have chosen the class you meant.
+    """
+    if not _any_of(actor, OFFICE_MODULES):
+        return _denied()
+    return {"ok": True, "classes": db.all("""
+      SELECT cg.id, cg.name, cg.short_code, cg.level_category, cg.level_order,
+             (SELECT COUNT(*) FROM students s
+               WHERE s.current_class_id = cg.id AND s.status = 'Active') AS pupils
+        FROM class_groups cg
+       WHERE COALESCE(cg.is_active, 1) = 1
+       ORDER BY cg.level_order, cg.name""")}
+
+
+STUDENT_STATUSES = ("Active", "Inactive", "Withdrawn", "Graduated", "Suspended")
+
+
+def students(db, actor, status="Active", class_id=None, q=None):
+    if not _any_of(actor, ["students", "fees", "canteen", "finance"]):
+        return _denied()
+    status = status if status in STUDENT_STATUSES else "Active"
+    sql = """
+      SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names, s.gender,
+             s.current_class_id, c.name AS class_name, c.short_code AS class_code
+        FROM students s LEFT JOIN class_groups c ON c.id = s.current_class_id
+       WHERE s.status = %s"""
+    params = [status]
+    if class_id:
+        sql += " AND s.current_class_id = %s"
+        params.append(int(class_id))
+    if q:
+        sql += """ AND (s.surname ILIKE %s OR s.first_name ILIKE %s
+                        OR s.other_names ILIKE %s OR s.index_number ILIKE %s)"""
+        like = f"%{str(q)[:60]}%"
+        params += [like, like, like, like]
+    sql += " ORDER BY s.surname, s.first_name LIMIT 500"
+    rows = db.all(sql, tuple(params))
+    for r in rows:
+        r["name"] = f"{r.get('surname') or ''} {r.get('first_name') or ''}".strip()
+    return {"ok": True, "status": status, "students": rows}
+
+
+STAFF_STATUSES = ("Active", "Inactive", "Resigned", "Retired")
+
+
+def staff_list(db, actor, status="Active"):
+    """The staff room, for the same reason: payroll and the activities board
+    both start by naming somebody, and a payroll clerk holds `payroll`, not
+    `staff`."""
+    if not _any_of(actor, ["staff", "payroll"]):
+        return _denied()
+    status = status if status in STAFF_STATUSES else "Active"
+    rows = db.all("""
+      SELECT id, staff_number, surname, first_name, role, status, phone
+        FROM staff WHERE status = %s ORDER BY surname, first_name""", (status,))
+    for r in rows:
+        r["name"] = f"{r.get('surname') or ''} {r.get('first_name') or ''}".strip()
+    return {"ok": True, "status": status, "staff": rows}

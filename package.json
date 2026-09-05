@@ -15,11 +15,11 @@
     "build:web": "node scripts/build-web.mjs",
     "serve:web": "node scripts/serve-web.mjs",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "test": "node scripts/contrast.mjs && node test/regressions.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/webapp.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
-    "test:regressions": "node test/regressions.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/webapp.js",
+    "test": "node scripts/contrast.mjs && node test/regressions.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
+    "test:regressions": "node test/regressions.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js",
     "test:contrast": "node scripts/contrast.mjs",
     "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
-    "test:online": "cd cloud-python && python3 tests/test_school.py && python3 tests/test_payments.py"
+    "test:online": "cd cloud-python && python3 tests/test_school.py && python3 tests/test_payments.py && python3 tests/test_dashboards.py"
   },
   "dependencies": {
     "better-sqlite3": "^12.0.0",

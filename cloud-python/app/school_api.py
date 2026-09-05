@@ -29,10 +29,12 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
 from . import portals, ratelimit
-from .school import (academics, admin, canteen, communications, db as sdb, exams, fees,
+from .school import (academics, admin, calendar as school_calendar, canteen,
+                     communications, dashboards, db as sdb, exams, fees,
                      office,
                      finance, homework, payments, payroll, security, session,
-                     staff, stores, students, timetable)
+                     staff, stores, students, timetable, uploads)
+from .school import media
 
 router = APIRouter(prefix="/api/v1/school")
 
@@ -196,7 +198,10 @@ async def branding(school_id: str = ""):
             "email": get("school_email", ""),
             "whatsapp": get("school_whatsapp", "") or phone,
         },
-        "logo": None,
+        # The crest, if the school has set one. Offline this column holds a
+        # path on the office PC and there is nothing here that can read it;
+        # online it holds the picture. `as_data_uri` tells the two apart.
+        "logo": media.as_data_uri(get("school_logo_path", "")),
         "currency": get("payment_currency", "GHS"),
         "theme": {k: get(k, "") for k in (
             "school_color_primary", "school_color_accent",
@@ -331,7 +336,11 @@ async def classes(authorization: str = Header(None)):
     except Denied as d:
         return d.response
     from .school import scope as scope_lib
-    visible = scope_lib.visible_class_ids(db, actor["scope"])
+    # The OFFICE gets every class here. An accountant has no teaching
+    # assignments, so the teaching filter answered "nothing" and every class
+    # picker on a fees, canteen or payroll screen came back empty.
+    visible = scope_lib.visible_class_ids(
+        db, scope_lib.office_scope(actor["scope"], actor, security.can))
     rows = db.all("""SELECT id, name, short_code, level_category, level_order
                        FROM class_groups ORDER BY level_order, name""")
     if visible is not None:
@@ -1108,7 +1117,16 @@ async def timetable_periods(db, actor):
 @router.post("/timetable/periods")
 @guarded(module="academics", action="edit")
 async def save_period(db, actor, request: Request):
-    return timetable.save_period(db, actor, await _json(request))
+    """The bell schedule.
+
+    The editor sends the whole list — that is how the screen holds it, and how
+    the desktop writes it. One period at a time is still accepted, because the
+    route always documented that shape.
+    """
+    body = await _json(request)
+    if isinstance(body.get("periods"), list):
+        return timetable.save_periods(db, actor, body["periods"])
+    return timetable.save_period(db, actor, body)
 
 
 @router.get("/timetable/class")
@@ -1337,3 +1355,230 @@ async def reject_intent(db, actor, intent_id: int, request: Request):
 @guarded(module="fees", action="edit")
 async def verify_intent(db, actor, intent_id: int):
     return payments.verify_one(db, actor, intent_id)
+
+
+# ══ the dashboards ══════════════════════════════════════════════════════════
+#
+# The eight readings the installed application shows above each module, and the
+# eight the school's own server serves to a browser on its network. Without
+# them the online app assembled its dashboards out of whatever the general
+# endpoints happened to return — four counts where the desktop shows five metric
+# cards, a progress bar where it draws a collection donut, and no chart of
+# income against expenditure at all. Same query, same field names, same
+# arithmetic: see app/school/dashboards.py.
+#
+# Each is a GET behind the module's own `view` permission, checked inside the
+# module rather than by the decorator, because `dashboard` is a module in its
+# own right and the other seven are not the module the route is named after by
+# accident — they are the module whose figures it discloses.
+
+@router.get("/dash/main")
+@guarded()
+async def dash_main(db, actor, termId: int = None):
+    return dashboards.main(db, actor, termId)
+
+
+@router.get("/dash/students")
+@guarded()
+async def dash_students(db, actor):
+    return dashboards.students(db, actor)
+
+
+@router.get("/dash/academics")
+@guarded()
+async def dash_academics(db, actor, termId: int = None):
+    return dashboards.academics(db, actor, termId)
+
+
+@router.get("/dash/fees")
+@guarded()
+async def dash_fees(db, actor, termId: int = None):
+    return dashboards.fees(db, actor, termId)
+
+
+@router.get("/dash/canteen")
+@guarded()
+async def dash_canteen(db, actor, termId: int = None):
+    return dashboards.canteen(db, actor, termId)
+
+
+@router.get("/dash/staff")
+@guarded()
+async def dash_staff(db, actor):
+    return dashboards.staff(db, actor)
+
+
+@router.get("/dash/payroll")
+@guarded()
+async def dash_payroll(db, actor, month: int = None, year: int = None):
+    return dashboards.payroll(db, actor, month, year)
+
+
+@router.get("/dash/finance")
+@guarded()
+async def dash_finance(db, actor, termId: int = None):
+    return dashboards.finance(db, actor, termId)
+
+
+# ══ the pickers the office needs ════════════════════════════════════════════
+
+@router.get("/office/classes")
+@guarded()
+async def office_classes(db, actor):
+    return office.classes(db, actor)
+
+
+@router.get("/office/students")
+@guarded()
+async def office_students(db, actor, status: str = "Active",
+                          classId: int = None, q: str = None):
+    return office.students(db, actor, status, classId, q)
+
+
+@router.get("/office/staff")
+@guarded()
+async def office_staff(db, actor, status: str = "Active"):
+    return office.staff_list(db, actor, status)
+
+
+# ══ payroll: the month, before anybody commits to it ════════════════════════
+
+@router.get("/payroll/preview")
+@guarded(module="payroll")
+async def payroll_preview(db, actor, month: int = None, year: int = None):
+    return payroll.preview_month(db, actor, month, year)
+
+
+@router.get("/payroll/{staff_id}/year")
+@guarded()
+async def payroll_year(db, actor, staff_id: int, year: int = None):
+    """A year of pay, month by month — for a loan application or a tax query.
+
+    A person may always read their OWN year, whatever their modules say, which
+    is the rule the payslip route already follows.
+    """
+    own = actor.get("staff_id") is not None and int(actor["staff_id"]) == int(staff_id)
+    if not own and not security.can(actor, "payroll", "view"):
+        return _err(403, "Access denied.")
+    out = payroll.ytd(db, actor, staff_id, year)
+    if isinstance(out, dict) and out.get("ok"):
+        out["staff_id"] = int(staff_id)
+        months = out.get("months") or []
+        out["totals"]["other_deductions"] = round(
+            sum(float(m.get("other_deductions") or 0) for m in months), 2)
+        out["totals"]["actual"] = out["totals"].get("paid", 0)
+        out["totals"]["paid_months"] = sum(1 for m in months if m.get("is_paid"))
+    return out
+
+
+# ══ the school calendar ═════════════════════════════════════════════════════
+#
+# Which days are school days. Every canteen arrears figure counts against it,
+# and it could only be set at the office PC — so a school could read the
+# consequences of its calendar online and not fix them.
+
+@router.get("/calendar")
+@guarded()
+async def calendar_days(db, actor, termId: int = None):
+    return school_calendar.listing(db, actor, termId)
+
+
+@router.post("/calendar/day")
+@guarded()
+async def calendar_set_day(db, actor, request: Request):
+    body = await _json(request)
+    return school_calendar.set_day(db, actor, body.get("date"),
+                                   body.get("dayType") or "school_day",
+                                   body.get("label"), body.get("termId"))
+
+
+@router.post("/calendar/term")
+@guarded()
+async def calendar_set_term(db, actor, request: Request):
+    body = await _json(request)
+    return school_calendar.set_term(db, actor, body.get("termId"),
+                                    body.get("startDate"), body.get("endDate"),
+                                    body.get("excludeWeekends") is not False,
+                                    body.get("holidays"))
+
+
+# ══ staff training ══════════════════════════════════════════════════════════
+
+@router.get("/staff/{staff_id}/training")
+@guarded()
+async def staff_training(db, actor, staff_id: int):
+    return staff.training(db, actor, staff_id)
+
+
+@router.post("/staff/{staff_id}/training")
+@guarded(module="staff", action="edit")
+async def save_staff_training(db, actor, staff_id: int, request: Request):
+    return staff.save_training(db, actor, staff_id, await _json(request))
+
+
+@router.post("/staff/training/{training_id}/delete")
+@guarded(module="staff", action="edit")
+async def delete_staff_training(db, actor, training_id: int):
+    return staff.delete_training(db, actor, training_id)
+
+
+# ══ what is waiting to be decided ═══════════════════════════════════════════
+
+@router.get("/admin/approvals")
+@guarded()
+async def admin_approvals(db, actor):
+    return admin.approvals(db, actor)
+
+
+# ══ attaching a picture ═════════════════════════════════════════════════════
+#
+# A photograph taken at admission used to wait on somebody carrying a cable to
+# the office PC, because the file dialog was the only way in and the file had
+# to land on that machine's disk. See app/school/media.py for where the bytes
+# go on a service that has no disk worth writing to.
+
+@router.post("/students/{student_id}/photo")
+@guarded()
+async def upload_student_photo(db, actor, student_id: int, request: Request):
+    body = await _json(request)
+    return uploads.student_photo(db, actor, student_id, body.get("file") or body.get("photo"))
+
+
+@router.post("/staff/{staff_id}/photo")
+@guarded()
+async def upload_staff_photo(db, actor, staff_id: int, request: Request):
+    body = await _json(request)
+    return uploads.staff_photo(db, actor, staff_id, body.get("file") or body.get("photo"))
+
+
+@router.get("/staff/{staff_id}/documents")
+@guarded()
+async def staff_documents(db, actor, staff_id: int):
+    return uploads.documents(db, actor, staff_id)
+
+
+@router.post("/staff/{staff_id}/documents")
+@guarded()
+async def upload_staff_document(db, actor, staff_id: int, request: Request):
+    return uploads.save_document(db, actor, staff_id, await _json(request))
+
+
+@router.post("/staff/documents/{doc_id}/delete")
+@guarded()
+async def delete_staff_document(db, actor, doc_id: int):
+    return uploads.delete_document(db, actor, doc_id)
+
+
+@router.post("/settings/logo")
+@guarded()
+async def upload_logo(db, actor, request: Request):
+    body = await _json(request)
+    return uploads.logo(db, actor, body.get("file") or body.get("logo"))
+
+
+@router.post("/settings/signature")
+@guarded()
+async def upload_signature(db, actor, request: Request):
+    body = await _json(request)
+    return uploads.signature(db, actor, body.get("role"),
+                             body.get("file") or body.get("signature"), body.get("name"))

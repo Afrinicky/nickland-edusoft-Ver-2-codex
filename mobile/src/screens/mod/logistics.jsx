@@ -10,7 +10,7 @@ import { View, Text } from 'react-native';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { useClasses } from '../../pickers';
+import { useOfficeClasses } from '../../pickers';
 import { OfficeScreen, cedis, shortDate, useOffice } from '../../office';
 import {
   Select, SearchField, DataTable, Muted, Badge, EmptyState, ErrorNote, SuccessNote,
@@ -18,6 +18,13 @@ import {
 } from '../../ui';
 import { Panel, Bar, StatRow, Stat } from '../../desk';
 import { colors, spacing, type } from '../../theme';
+
+// A picker with nothing in it should say why, and what to do about it. The
+// default — "Nothing to choose from." — is true and useless: a school that has
+// not set up a bus route reads it as a fault in the app rather than as a job
+// they have not done yet.
+const NO_ROUTES = 'No bus routes have been set up yet. Add one under Transport \u2192 Routes, '
+  + 'and riders can then be assigned to it.';
 
 // ══ Transport ═══════════════════════════════════════════════════════════════
 
@@ -120,7 +127,7 @@ export function TransportRoutes() {
 
 export function TransportRiders() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [routeId, setRouteId] = useState('');
   const [classId, setClassId] = useState('');
   const [picked, setPicked] = useState({});
@@ -165,7 +172,7 @@ export function TransportRiders() {
       <Bar left={<>
         <View style={{ minWidth: 220 }}>
           <Select label="Route" value={routeId} onChange={(v) => { setPicked({}); setRouteId(v); }}
-                  placeholder="Which route?"
+                  placeholder="Which route?" empty={NO_ROUTES}
                   options={(routes.data?.routes || []).map(r => ({ label: r.name, value: String(r.id),
                                                                    note: cedis(r.fee_per_term) }))} />
         </View>
@@ -255,6 +262,7 @@ export function TransportPayments() {
 
       <Bar left={<View style={{ minWidth: 240 }}>
         <Select label="Route" value={routeId} onChange={setRouteId} placeholder="Which route?"
+                empty={NO_ROUTES}
                 options={(routes.data?.routes || []).map(r => ({ label: r.name, value: String(r.id) }))} />
       </View>} />
 

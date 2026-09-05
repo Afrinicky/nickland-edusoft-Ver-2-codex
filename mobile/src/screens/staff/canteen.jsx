@@ -24,7 +24,7 @@ import {
   ErrorNote, Flash, InfoNote, WarningNote, Skeleton, EmptyState, ListRow, SearchField,
   Grid, StatCard, KeyValue, Tabs, CheckRow, Avatar, Toolbar, DateField, Divider,
 } from '../../ui';
-import { ClassPicker, useClasses } from '../../pickers';
+import { ClassPicker, useOfficeClasses } from '../../pickers';
 import { useLayout } from '../../responsive';
 import { colors, palette, spacing, radius, type } from '../../theme';
 
@@ -35,7 +35,7 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 function CanteenScreen() {
   const { token, mode, profile } = useAuth();
   const layout = useLayout();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
 
   // Quick Pay first. It is the eight-o'clock job, and the tab a teacher opens
   // the module for; the sheet is what they check at break.

@@ -1112,6 +1112,12 @@ export const api = {
     MODE === 'online' ? school.acknowledgeIntent(token, id, method)
       : MODE === 'cloud' ? hostOnly('Confirming a payment')()
                          : request(`/finance/online/${id}/acknowledge`, { method: 'POST', token, body: { method } }),
+  // Asking the gateway what really happened to a charge nobody heard back
+  // about. The office's own "did this actually go through?" button.
+  verifyPayment: (token, id) =>
+    MODE === 'online' ? school.verifyIntent(token, id)
+      : MODE === 'cloud' ? hostOnly('Verifying a payment')()
+                         : request(`/finance/online/${id}/verify`, { method: 'POST', token }),
   financeReject: (token, id, reason) =>
     MODE === 'online' ? school.rejectIntent(token, id, reason)
       : MODE === 'cloud' ? hostOnly('Rejecting a payment')()
@@ -1159,22 +1165,14 @@ export const api = {
       : MODE === 'cloud' ? hostOnly('The staff attendance register')()
                          : request(`/admin/staff-register${qs({ date })}`, { token }),
   adminApprovals: (token) =>
-    MODE === 'online'
-      ? Promise.all([
-          school.leave(token, 'pending').catch(() => ({ requests: [] })),
-          school.lessonNotes(token, { status: 'submitted' }).catch(() => ({ notes: [] })),
-        ]).then(([leave, notes]) => ({
-          ok: true, leave: leave.requests || [], lesson_notes: notes.notes || [],
-          may_decide: { leave: !!leave.may_decide, lesson_notes: !!notes.may_decide },
-        }))
+    MODE === 'online' ? school.approvals(token)
       : MODE === 'cloud' ? request('/staff/admin/approvals', { token })
-      : Promise.all([
-          request('/admin/leave?status=pending', { token }).catch(() => ({ requests: [] })),
-          request('/admin/lesson-notes?status=submitted', { token }).catch(() => ({ notes: [] })),
-        ]).then(([leave, notes]) => ({
-          ok: true, leave: leave.requests || [], lesson_notes: notes.notes || [],
-          may_decide: { leave: !!leave.may_decide, lesson_notes: !!notes.may_decide },
-        })),
+      // One request. It used to be two, and an account holding one queue but
+      // not the other got a 403 for the half it may not see — swallowed here,
+      // so the count came back quietly short and every staff screen logged a
+      // Forbidden. The host answers both halves, each only to somebody who
+      // holds it.
+      : request('/admin/approvals', { token }),
   adminDecideLeave: (token, id, decision, notes) =>
     MODE === 'online' ? school.decideLeave(token, id, decision, notes)
       : MODE === 'cloud'
@@ -1233,6 +1231,116 @@ export const api = {
       : MODE === 'cloud' ? hostOnly('Changing a setting')()
                          : request('/system/settings', { method: 'POST', token, body: { settings } }),
 
+  // ── Photographs and documents ─────────────────────────────────────
+  //
+  // The installed application attaches a file by opening a dialog and copying
+  // it off the machine's disk. A browser has no disk to copy from, so it sends
+  // the bytes as a data URI and the school's system writes them into the same
+  // uploads folder under the same name. One photograph, in one place, whichever
+  // machine put it there.
+  //
+  // Host only, and that is not a limitation of this code: the file has to land
+  // on the school's own storage, and the thin portal holds a projection of the
+  // school with nowhere to put it.
+  uploadStudentPhoto: (token, id, file) =>
+    MODE === 'online' ? school.uploadStudentPhoto(token, id, file)
+      : MODE === 'host' ? request(`/students/${id}/photo`, { method: 'POST', token, body: { file } })
+                        : hostOnly("A pupil's photograph")(),
+  uploadStaffPhoto: (token, id, file) =>
+    MODE === 'online' ? school.uploadStaffPhoto(token, id, file)
+      : MODE === 'host' ? request(`/staff/${id}/photo`, { method: 'POST', token, body: { file } })
+                        : hostOnly('A photograph')(),
+  staffDocuments: (token, id) =>
+    MODE === 'online' ? school.staffDocuments(token, id)
+      : MODE === 'host' ? request(`/staff/${id}/documents`, { token })
+                        : hostOnly('Staff documents')(),
+  uploadStaffDocument: (token, id, body) =>
+    MODE === 'online' ? school.uploadStaffDocument(token, id, body)
+      : MODE === 'host' ? request(`/staff/${id}/documents`, { method: 'POST', token, body })
+                        : hostOnly('Staff documents')(),
+  deleteStaffDocument: (token, docId) =>
+    MODE === 'online' ? school.deleteStaffDocument(token, docId)
+      : MODE === 'host' ? request(`/staff/documents/${docId}`, { method: 'DELETE', token })
+                        : hostOnly('Staff documents')(),
+  uploadLogo: (token, file) =>
+    MODE === 'online' ? school.uploadLogo(token, file)
+      : MODE === 'host' ? request('/settings/logo', { method: 'POST', token, body: { file } })
+                        : hostOnly("The school's crest")(),
+  uploadSignature: (token, { role, file, name }) =>
+    MODE === 'online' ? school.uploadSignature(token, { role, file, name })
+      : MODE === 'host' ? request('/settings/signature', { method: 'POST', token, body: { role, file, name } })
+                        : hostOnly('A signature')(),
+
+  // ── Staff training, and a year's pay ──────────────────────────────
+  staffTraining: (token, id) =>
+    MODE === 'online' ? school.training(token, id)
+      : MODE === 'host' ? request(`/staff/${id}/training`, { token })
+                        : hostOnly('Training records')(),
+  saveStaffTraining: (token, id, body) =>
+    MODE === 'online' ? school.saveTraining(token, id, body)
+      : MODE === 'host' ? request(`/staff/${id}/training`, { method: 'POST', token, body })
+                        : hostOnly('Training records')(),
+  deleteStaffTraining: (token, trainingId) =>
+    MODE === 'online' ? school.deleteTraining(token, trainingId)
+      : MODE === 'host' ? request(`/staff/training/${trainingId}`, { method: 'DELETE', token })
+                        : hostOnly('Training records')(),
+  // A person may always read their own year, whatever their modules say.
+  payrollYear: (token, staffId, year) =>
+    MODE === 'online' ? school.payrollYear(token, staffId, year)
+      : MODE === 'host' ? request(`/payroll/${staffId}/year${qs({ year })}`, { token })
+                        : hostOnly("A year's pay")(),
+
+  // ── The school calendar ───────────────────────────────────────────
+  //
+  // Which days are school days. Every canteen arrears figure is the number of
+  // SCHOOL DAYS a pupil has not paid for times the daily rate, so this is the
+  // table the whole module rests on — and it could only be set on the office
+  // PC, which meant the browser showed the consequences and not the cause.
+  schoolCalendar: (token, termId) =>
+    MODE === 'online' ? school.calendar(token, termId)
+      : MODE === 'host' ? request(`/calendar${qs({ termId })}`, { token })
+                        : hostOnly('The school calendar')(),
+  setCalendarDay: (token, body) =>
+    MODE === 'online' ? school.setCalendarDay(token, body)
+      : MODE === 'host' ? request('/calendar/day', { method: 'POST', token, body })
+                        : hostOnly('The school calendar')(),
+  setUpTermCalendar: (token, body) =>
+    MODE === 'online' ? school.setUpTermCalendar(token, body)
+      : MODE === 'host' ? request('/calendar/term', { method: 'POST', token, body })
+                        : hostOnly('The school calendar')(),
+
+  // ── The lists the office picks from ───────────────────────────────
+  //
+  // `classes` and `students` above are the TEACHING lists: the server filters
+  // both to the caller's own assignments, because a subject teacher who takes
+  // one lesson in Basic 6 does not mark its register. These two are the
+  // OFFICE's lists — every class the school runs, and the whole roll — and
+  // they are what a class picker or a pupil search on a fees, canteen or
+  // finance screen must ask for.
+  //
+  // Using the teaching list there was the fault behind every empty picker in
+  // the browser: an accountant has no teaching assignments, so "Nothing to
+  // choose from" was the correct answer to the wrong question.
+  officeClasses: (token) =>
+    MODE === 'online' ? school.officeClasses(token)
+      : MODE === 'cloud' ? request('/staff/classes', { token })
+                         : request('/office/classes', { token }),
+  officeStudents: (token, q = {}) =>
+    MODE === 'online' ? school.officeStudents(token, q)
+      : MODE === 'cloud' ? request(`/staff/students${qs(q)}`, { token })
+                         : request(`/office/students${qs(q)}`, { token }),
+  officeStaff: (token, status) =>
+    MODE === 'online' ? school.officeStaff(token, status)
+      : MODE === 'cloud' ? hostOnly('The staff register')()
+                         : request(`/office/staff${qs({ status })}`, { token }),
+
+  // The month as it would be, before it is written. Read-only, so a payroll
+  // clerk can check the figures before committing to them.
+  payrollPreview: (token, month, year) =>
+    MODE === 'online' ? school.payrollPreview(token, month, year)
+      : MODE === 'cloud' ? hostOnly('The payroll preview')()
+                         : request(`/payroll/preview${qs({ month, year })}`, { token }),
+
   // ── The dashboards ─────────────────────────────────────────────────
   //
   // The installed application's own summary screens, one route each, served by
@@ -1264,13 +1372,18 @@ export const api = {
 /**
  * Ask the school's own system for one of its dashboards.
  *
- * Host mode only, and quietly so. `null` means "this connection does not serve
+ * The school's own server and the online school both answer these; the thin
+ * cloud projection does not. `null` means "this connection does not serve
  * that", which every dashboard screen treats as "draw the summary you can
  * build from the ordinary endpoints". A 404 from an older desktop that
  * predates these routes lands in the same place, which is the point: a school
  * that has not updated its installation sees the app it had, not an error.
  */
 function dash(path, token, query) {
+  // The online school serves the same eight readings, from the same queries
+  // (cloud-python/app/school/dashboards.py). Only the thin cloud projection
+  // has nothing to answer with — it holds a summary of a school, not a school.
+  if (MODE === 'online') return schoolRequest(path, { token, query }).catch(() => null);
   if (MODE !== 'host') return Promise.resolve(null);
   return request(`${path}${qs(query || {})}`, { token }).catch(() => null);
 }
@@ -1420,12 +1533,52 @@ export const school = {
   payroll: (token, month, year) => schoolRequest('/payroll', { token, query: { month, year } }),
   runPayroll: (token, month, year) =>
     schoolRequest('/payroll/run', { method: 'POST', token, body: { month, year } }),
+  payrollPreview: (token, month, year) =>
+    schoolRequest('/payroll/preview', { token, query: { month, year } }),
   markSalaryPaid: (token, id, body) =>
     schoolRequest(`/payroll/${id}/paid`, { method: 'POST', token, body }),
   payslip: (token, staffId, month, year) =>
     schoolRequest(`/payroll/${staffId}/payslip`, { token, query: { month, year } }),
   schedule: (token, kind, month, year) =>
     schoolRequest(`/payroll/schedule/${kind}`, { token, query: { month, year } }),
+
+  payrollYear: (token, staffId, year) =>
+    schoolRequest(`/payroll/${staffId}/year`, { token, query: { year } }),
+
+  // ── the lists the office picks from, unfiltered by teaching assignments ──
+  officeClasses: (token) => schoolRequest('/office/classes', { token }),
+  officeStudents: (token, query) => schoolRequest('/office/students', { token, query }),
+  officeStaff: (token, status) => schoolRequest('/office/staff', { token, query: { status } }),
+
+  // ── the school calendar, which every canteen figure counts against ──
+  calendar: (token, termId) => schoolRequest('/calendar', { token, query: { termId } }),
+  setCalendarDay: (token, body) => schoolRequest('/calendar/day', { method: 'POST', token, body }),
+  setUpTermCalendar: (token, body) => schoolRequest('/calendar/term', { method: 'POST', token, body }),
+
+  // ── attaching a picture ──
+  // The online school has no disk worth writing to, so the picture is kept in
+  // the column the desktop keeps a path in. Same request, same answer.
+  uploadStudentPhoto: (token, id, file) =>
+    schoolRequest(`/students/${id}/photo`, { method: 'POST', token, body: { file } }),
+  uploadStaffPhoto: (token, id, file) =>
+    schoolRequest(`/staff/${id}/photo`, { method: 'POST', token, body: { file } }),
+  staffDocuments: (token, id) => schoolRequest(`/staff/${id}/documents`, { token }),
+  uploadStaffDocument: (token, id, body) =>
+    schoolRequest(`/staff/${id}/documents`, { method: 'POST', token, body }),
+  deleteStaffDocument: (token, docId) =>
+    schoolRequest(`/staff/documents/${docId}/delete`, { method: 'POST', token }),
+  uploadLogo: (token, file) =>
+    schoolRequest('/settings/logo', { method: 'POST', token, body: { file } }),
+  uploadSignature: (token, { role, file, name }) =>
+    schoolRequest('/settings/signature', { method: 'POST', token, body: { role, file, name } }),
+
+  // ── an employment file, and what is waiting to be decided ──
+  training: (token, staffId) => schoolRequest(`/staff/${staffId}/training`, { token }),
+  saveTraining: (token, staffId, body) =>
+    schoolRequest(`/staff/${staffId}/training`, { method: 'POST', token, body }),
+  deleteTraining: (token, trainingId) =>
+    schoolRequest(`/staff/training/${trainingId}/delete`, { method: 'POST', token }),
+  approvals: (token) => schoolRequest('/admin/approvals', { token }),
 
   inventory: (token, query) => schoolRequest('/inventory', { token, query }),
   saveItem: (token, body) => schoolRequest('/inventory', { method: 'POST', token, body }),

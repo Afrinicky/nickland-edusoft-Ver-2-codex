@@ -91,7 +91,12 @@ function registerStaffRoutes({ add, db, json, html, can, API, getSetting, media,
   // a subject teacher visiting a class sees their subject and no other, which
   // is what the desktop shows them.
   add('GET', `${API}/subjects`, async (ctx, req, res, params, body, ip, tokenId, query) => {
-    if (!isStaff(ctx) || !can(ctx, 'academics', 'view')) return deny(res);
+    // Academics is the module that OWNS subjects, but naming one is not
+    // reading anybody's marks: the fee template editor lists them, the notice
+    // sender filters by them, and settings shows what each class sits. An
+    // office account holding none of academics got 403 on all three.
+    if (!isStaff(ctx)) return deny(res);
+    if (!['academics', 'students', 'settings', 'fees'].some(m => can(ctx, m, 'view'))) return deny(res);
     const classId = parseInt(query.classId, 10) || null;
     let rows;
     if (classId) {
@@ -1057,7 +1062,15 @@ function registerStaffRoutes({ add, db, json, html, can, API, getSetting, media,
   // route is — a teacher who may not contact parents does not get a directory
   // of their phone numbers.
   add('GET', `${API}/classes/:id/contacts`, async (ctx, req, res, params) => {
-    if (!isStaff(ctx) || !can(ctx, 'notifications', 'view')) return deny(res);
+    // Whoever may send the class a message, and whoever holds the roll.
+    //
+    // It was `notifications` alone, which is the module for the SMS sender —
+    // so a class teacher with the register and the mark sheet could not get a
+    // parent's number to ring them, though the same numbers sit on the pupil's
+    // record they can already open. The class scope below still applies: this
+    // is their class's contacts, not the school's.
+    if (!isStaff(ctx)) return deny(res);
+    if (!can(ctx, 'notifications', 'view') && !can(ctx, 'students', 'view')) return deny(res);
     const classId = parseInt(params.id, 10);
     if (!classId) return bad(res, 'A class is required.');
     if (!scopeLib.canAccessClass(scopeOf(ctx), classId)) return deny(res, 'That class is not yours.');

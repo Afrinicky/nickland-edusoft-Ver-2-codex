@@ -121,6 +121,72 @@ def month_sheet(db, actor, month=None, year=None):
     }
 
 
+def preview_month(db, actor, month=None, year=None):
+    """What the month WOULD come to, without writing anything.
+
+    The same figures ``run_month`` will write, computed the same way and shown
+    first. A payroll is the largest single payment a school makes; being able
+    to check it against the bank balance before committing it is the difference
+    between a mistake and a bounced salary — and the desktop has always offered
+    it, so the browser does too.
+    """
+    if not security.can(actor, "payroll", "view"):
+        return {"ok": False, "status": 403, "error": "Access denied."}
+    now = datetime.date.today()
+    month, year = int(month or now.month), int(year or now.year)
+    if not (1 <= month <= 12) or not (1970 <= year <= 2999):
+        return {"ok": False, "status": 400, "error": "Bad month or year."}
+
+    prev_month = 12 if month == 1 else month - 1
+    prev_year = year - 1 if month == 1 else year
+
+    staff = db.all("""SELECT id, staff_number, surname, first_name, role,
+                             base_salary, ssnit_enrolled
+                        FROM staff WHERE status = 'Active' AND base_salary > 0
+                       ORDER BY surname, first_name""")
+
+    previews = []
+    t_gross = t_worker = t_employer = t_paye = t_net = 0.0
+    for s in staff:
+        carry = db.one("""SELECT carry_over_to_next FROM staff_salaries
+                           WHERE staff_id = %s AND month = %s AND year = %s""",
+                       (s["id"], prev_month, prev_year))
+        arrear = (carry or {}).get("carry_over_to_next") or 0
+        c = calculate(db, s["base_salary"], 0, arrear, 0, bool(s["ssnit_enrolled"]))
+        existing = db.one("""SELECT id, is_paid FROM staff_salaries
+                              WHERE staff_id = %s AND month = %s AND year = %s""",
+                          (s["id"], month, year))
+        previews.append({
+            "staff_id": s["id"], "staff_number": s["staff_number"],
+            "surname": s["surname"], "first_name": s["first_name"], "role": s["role"],
+            "gross_salary": c["gross_salary"],
+            "ssnit_worker": c["ssnit_worker"], "ssnit_employer": c["ssnit_employer"],
+            "paye_tax": c["paye_tax"], "net_salary": c["net_salary"],
+            "arrear_brought_forward": arrear,
+            "existing_id": (existing or {}).get("id"),
+            "is_paid": (existing or {}).get("is_paid") or 0,
+        })
+        t_gross += c["gross_salary"]
+        t_worker += c["ssnit_worker"]
+        t_employer += c["ssnit_employer"]
+        t_paye += c["paye_tax"]
+        t_net += c["net_salary"]
+
+    return {
+        "ok": True, "month": month, "year": year, "previews": previews,
+        "totals": {
+            "staff_count": len(staff),
+            "total_gross": round2(t_gross),
+            "total_ssnit_worker": round2(t_worker),
+            "total_ssnit_employer": round2(t_employer),
+            "total_ssnit_combined": round2(t_worker + t_employer),
+            "total_paye": round2(t_paye),
+            "total_net": round2(t_net),
+            "total_employer_cost": round2(t_gross + t_employer),
+        },
+    }
+
+
 def run_month(db, actor, month, year, payment_date=None):
     """Compute a month for every active member of staff with a salary.
 

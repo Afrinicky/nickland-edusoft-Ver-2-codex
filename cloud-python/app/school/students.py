@@ -19,7 +19,7 @@ before it does.
 """
 import datetime
 
-from . import idgen, scope as scope_lib, security
+from . import idgen, media, scope as scope_lib, security
 
 STATUSES = ["Active", "Withdrawn", "Graduated", "Suspended", "Transferred"]
 
@@ -49,8 +49,15 @@ def _today():
 
 
 def _scoped_class_ids(db, actor):
-    """The classes this account may see, or None for no restriction."""
-    return scope_lib.visible_class_ids(db, actor["scope"])
+    """The classes this account may see, or None for no restriction.
+
+    The office is not narrowed by the teaching scope: a bursar has no
+    assignments, and filtering the roll by them left them with nobody to bill.
+    See ``scope.office_scope`` — the register and the mark sheet keep the
+    strict scope, and this is the roll.
+    """
+    return scope_lib.visible_class_ids(
+        db, scope_lib.office_scope(actor["scope"], actor, security.can))
 
 
 def listing(db, actor, class_id=None, status="Active", gender=None, search=None, limit=500):
@@ -110,7 +117,10 @@ def get(db, actor, student_id):
 
     student["age"] = student.pop("computed_age")
     student["name"] = f"{student.get('surname') or ''} {student.get('first_name') or ''}".strip()
-    student.pop("photo_path", None)
+    # Offline this column holds a path on the office PC, which is no use to a
+    # browser; online it holds the picture. Either way the row never leaves
+    # here carrying a place on somebody's disk.
+    student["photo"] = media.as_data_uri(student.pop("photo_path", None))
     student["history"] = db.all("""
       SELECT h.*, c.name AS class_name, ay.label AS year_label
         FROM student_class_history h

@@ -547,9 +547,14 @@ function registerFinanceRoutes({ add, db, json, can, API, getSetting, audit }) {
         paye: sum('paye_tax'), paid: rows.filter(r => r.is_paid).length,
         paid_total: rows.reduce((n, r) => n + (r.is_paid ? num(r.actual_amount_paid) : 0), 0),
       },
-      // The run itself stays on the desktop; saying so is better than a button
-      // that fails.
-      run_is_desktop_only: true,
+      // Kept under both names: `rows` is what this route has always answered
+      // and `salaries` is what the online school calls it, and a screen that
+      // reads one and is handed the other shows an empty run with no error.
+      salaries: rows.map(r => ({ ...r, staff_name: `${r.surname || ''} ${r.first_name || ''}`.trim() })),
+      // The run used to stay on the desktop and this said so. It does not any
+      // more — see POST /payroll/run in office_api.js — and a flag telling the
+      // browser to hide its own working button is worse than no flag.
+      run_is_desktop_only: false,
     });
   });
 

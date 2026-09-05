@@ -70,7 +70,11 @@ export function PayrollRun() {
 
   const mayRun = can(profile, 'payroll', 'create');
   const mayPay = can(profile, 'payroll', 'edit');
-  const rows = state.data?.salaries || state.data?.payroll || [];
+  // The host answers `rows`, the online school answers `salaries`, and an
+  // older projection answers `payroll`. Reading one name and being handed
+  // another is an empty run with no error on it, which is the worst way for
+  // this screen to be wrong.
+  const rows = state.data?.rows || state.data?.salaries || state.data?.payroll || [];
   const gross = rows.reduce((n, r) => n + (Number(r.gross_salary ?? r.gross) || 0), 0);
   const net = rows.reduce((n, r) => n + (Number(r.net_salary ?? r.net) || 0), 0);
   const paid = rows.filter(r => r.payment_status === 'paid' || r.is_paid).length;
@@ -159,9 +163,9 @@ export function PayrollRun() {
               { key: 'gross_salary', label: 'Gross', align: 'right', width: 120,
                 render: (r) => cedis(r.gross_salary ?? r.gross) },
               { key: 'ssnit', label: 'SSNIT', align: 'right', width: 110,
-                render: (r) => cedis(r.ssnit_employee ?? r.ssnit ?? 0) },
+                render: (r) => cedis(r.ssnit_worker ?? r.ssnit_employee ?? r.ssnit ?? 0) },
               { key: 'paye', label: 'PAYE', align: 'right', width: 110,
-                render: (r) => cedis(r.paye ?? 0) },
+                render: (r) => cedis(r.paye_tax ?? r.paye ?? 0) },
               { key: 'net_salary', label: 'Net', align: 'right', width: 130,
                 render: (r) => (
                   <Text style={{ ...type.small, fontWeight: '800', color: colors.text }}>

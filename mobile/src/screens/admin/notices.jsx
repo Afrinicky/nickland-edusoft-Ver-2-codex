@@ -12,10 +12,8 @@ import {
 import { colors, spacing, type } from '../../theme';
 
 export default function Notices() {
-  const { token, profile, mode } = useAuth();
-  const state = useOffice((t) => (mode === 'online'
-    ? api.school.announcements(t)
-    : api.announcements(t)), [mode]);
+  const { token, profile } = useAuth();
+  const state = useOffice((t) => api.announcements(t));
 
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
@@ -31,8 +29,12 @@ export default function Notices() {
     if (!title.trim() || !body.trim()) return setError('A notice needs a title and something to say.');
     setBusy(true);
     try {
-      const send = mode === 'online' ? api.school.postAnnouncement : api.postAnnouncement;
-      await send(token, { title: title.trim(), body: body.trim(), audience: 'all' });
+      // `api.postAnnouncement` dispatches on the connection mode itself, so
+      // there is nothing for this screen to decide. It used to pick between
+      // `api.school.postAnnouncement` and this one, and `api.school` is not a
+      // thing — the online branch was a TypeError waiting for somebody to
+      // post a notice from the internet.
+      await api.postAnnouncement(token, { title: title.trim(), body: body.trim(), audience: 'all' });
       setOpen(false); setTitle(''); setBody('');
       state.reload();
     } catch (e) { setError(e.message); }
