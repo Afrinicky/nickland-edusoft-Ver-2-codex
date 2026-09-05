@@ -58,14 +58,46 @@ export const DESK = {
  * that filters is a shell that has to know about permissions, and it does not.
  */
 export function DeskShell({
-  items, school, motto, logo, person, role, photo, term, pending = 0,
-  status, onSignOut, onSearch, children,
+  items, school, motto, logo, person, role, photo, term, session, pending = 0,
+  status, onSignOut, onSearch, bare = false, children,
 }) {
   const layout = useLayout();
   const pathname = usePathname() || '';
   const router = useRouter();
   const active = activeModule(items, pathname);
   const width = layout.width >= 1600 ? DESK.sidebarWide : DESK.sidebar;
+
+  // ── Home wears no sidebar ─────────────────────────────────────────────────
+  //
+  // The installed application's Home is a different shell from the rest of it:
+  // a wider top bar, the grid of what you may open, and nothing down the left.
+  // That is a deliberate piece of design rather than an omission. Home IS the
+  // navigation — a menu drawn twice, once as a column of eleven links and
+  // again as a grid of eleven cards, is a screen that cannot decide what it
+  // is for, and the sidebar's job on every other screen is to get you back
+  // here. So Home drops it, and the grid gets the whole window.
+  //
+  // The status strip goes with it for the same reason: which database is open
+  // and when it was last backed up is a thing you check while working, and
+  // Home is the screen where no work is happening yet.
+  if (bare) {
+    return (
+      <View style={styles.bareShell}>
+        <DeskTopBar
+          school={school} motto={motto} logo={logo} term={term} session={session}
+          pending={pending} onSearch={onSearch} wide
+          onGo={(href) => router.push(href)} items={items}
+        />
+        <ScrollView
+          style={styles.bareContent}
+          contentContainerStyle={{ paddingHorizontal: 32, paddingTop: 40, paddingBottom: 24 }}
+          showsVerticalScrollIndicator
+        >
+          {children}
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.shell}>
@@ -77,7 +109,7 @@ export function DeskShell({
       />
       <View style={{ flex: 1, minWidth: 0 }}>
         <DeskTopBar
-          school={school} motto={motto} logo={logo} term={term}
+          school={school} motto={motto} logo={logo} term={term} session={session}
           pending={pending} onSearch={onSearch}
           onGo={(href) => router.push(href)} items={items}
         />
@@ -162,19 +194,19 @@ function SideItem({ item, on, onPress }) {
 
 // ── the top bar ─────────────────────────────────────────────────────────────
 
-function DeskTopBar({ school, motto, logo, term, pending, onSearch, onGo, items }) {
+function DeskTopBar({ school, motto, logo, term, session, pending, onSearch, onGo, items, wide = false }) {
   const has = (k) => items.some(i => i.key === k);
   return (
-    <View style={styles.top}>
-      <View style={styles.topBrand}>
-        <Crest logo={logo} size={38} tone="light" rounded />
+    <View style={[styles.top, wide && styles.topWide]}>
+      <View style={[styles.topBrand, wide && styles.topBrandWide]}>
+        <Crest logo={logo} size={wide ? 52 : 38} tone="light" rounded />
         <View style={{ minWidth: 0 }}>
-          <Text numberOfLines={1} style={styles.topSchool}>{school}</Text>
-          {motto ? <Text numberOfLines={1} style={styles.topMotto}>{motto}</Text> : null}
+          <Text numberOfLines={1} style={[styles.topSchool, wide && styles.topSchoolWide]}>{school}</Text>
+          {motto ? <Text numberOfLines={1} style={[styles.topMotto, wide && styles.topMottoWide]}>{motto}</Text> : null}
         </View>
       </View>
 
-      <SearchBox onSubmit={onSearch} />
+      <SearchBox onSubmit={onSearch} wide={wide} />
 
       <View style={{ flex: 1 }} />
 
@@ -188,6 +220,8 @@ function DeskTopBar({ school, motto, logo, term, pending, onSearch, onGo, items 
                     onPress={() => onGo('/app/messages')} />
       ) : null}
 
+      <SessionChip session={session} />
+
       {term ? (
         <View style={styles.termPill}>
           <Text style={styles.termYear}>{term.year_label || term.year || ''}</Text>
@@ -199,12 +233,41 @@ function DeskTopBar({ school, motto, logo, term, pending, onSearch, onGo, items 
 }
 
 /**
+ * Sitting, or on vacation, and how long until that changes.
+ *
+ * The installed application has carried this in its top bar since the first
+ * release, and it earns the space. A Ghanaian school year is three terms with
+ * long breaks between them, and half the questions an office asks the system —
+ * is this bill due, should this register be marked, why is the canteen sheet
+ * empty — have "the school is on vacation" as their answer. Saying so once, in
+ * the chrome, is cheaper than answering it eleven times on eleven screens.
+ */
+function SessionChip({ session }) {
+  if (!session || !session.status) return null;
+  const sitting = session.status === 'in_session';
+  const ink = sitting ? '#16A34A' : '#D97706';
+  const fill = sitting ? 'rgba(22,163,74,0.12)' : 'rgba(217,119,6,0.14)';
+  const days = sitting ? session.days_to_vacation : session.days_to_reopen;
+  const sub = days == null || days < 0 ? ''
+    : sitting ? `${days}d to vacation` : `Reopens in ${days}d`;
+  return (
+    <View style={[styles.sessionChip, { backgroundColor: fill }]}>
+      <View style={[styles.sessionDot, { backgroundColor: ink }]} />
+      <Text numberOfLines={1} style={[styles.sessionLabel, { color: ink }]}>
+        {sitting ? 'School in Session' : 'On Vacation'}
+      </Text>
+      {sub ? <Text numberOfLines={1} style={styles.sessionSub}>{`· ${sub}`}</Text> : null}
+    </View>
+  );
+}
+
+/**
  * The search box, with the keyboard shortcut printed on it.
  *
  * Ctrl+K is bound for real rather than drawn as decoration — a shortcut a
  * screenshot promises and the app does not honour is worse than none.
  */
-function SearchBox({ onSubmit }) {
+function SearchBox({ onSubmit, wide = false }) {
   const ref = useRef(null);
   const [q, setQ] = useState('');
   const [focus, setFocus] = useState(false);
@@ -222,7 +285,7 @@ function SearchBox({ onSubmit }) {
   }, []);
 
   return (
-    <View style={[styles.search, focus && styles.searchOn]}>
+    <View style={[styles.search, wide && { maxWidth: 420 }, focus && styles.searchOn]}>
       <Icon name="search" size={16} color={colors.muted} />
       <TextInput
         ref={ref}
@@ -432,6 +495,9 @@ function useClock() {
 
 const styles = StyleSheet.create({
   shell: { flex: 1, flexDirection: 'row', backgroundColor: colors.bg },
+  // Home's shell: the top bar and the page, on white. The installed
+  // application's `.homepage-shell`.
+  bareShell: { flex: 1, flexDirection: 'column', backgroundColor: colors.card },
 
   // ── sidebar ──
   side: { backgroundColor: colors.primary, flexShrink: 0 },
@@ -476,13 +542,29 @@ const styles = StyleSheet.create({
     paddingLeft: 24, paddingRight: 20,
     backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
+  topWide: { paddingLeft: 32, paddingRight: 32, gap: 20 },
   topBrand: { flexDirection: 'row', alignItems: 'center', gap: 12, flexShrink: 0, maxWidth: 340 },
+  // Home's bar is wider and its type is larger, so the school's name gets the
+  // room to finish. "Ave Maria School Acherens…" on the one screen whose whole
+  // job is to say whose school this is, is not a truncation anybody accepts.
+  topBrandWide: { maxWidth: 460 },
   topSchool: { ...type.heading, color: colors.primary, fontSize: 16 },
+  topSchoolWide: { fontSize: 20 },
   topMotto: { ...type.small, color: colors.accent, fontSize: 11, fontWeight: '600' },
+  topMottoWide: { fontSize: 13 },
 
   search: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    flex: 1, maxWidth: 420, minWidth: 180, height: 38, paddingHorizontal: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    // 380 wide, and the first thing to give way when the bar is tight — the
+    // session chip and the term pill are facts, and the search box is a
+    // control that works at any width.
+    //
+    // `flexBasis` rather than `flex: 1`: the spacer that pushes the icons to
+    // the right is also flexible, so two `flex: 1` children split the free
+    // space between them and the box came out at two-thirds of its width with
+    // the placeholder cut off mid-word.
+    flexGrow: 0, flexShrink: 1, flexBasis: 380, maxWidth: 380, minWidth: 150,
+    height: 38, paddingHorizontal: 12,
     backgroundColor: colors.surfaceAlt, borderRadius: radius.control,
     borderWidth: 1, borderColor: colors.border,
   },
@@ -491,7 +573,15 @@ const styles = StyleSheet.create({
     flex: 1, minWidth: 0, ...type.small, color: colors.text,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
   },
-  searchKey: { ...type.micro, color: colors.faint, fontSize: 10.5, letterSpacing: 0.2 },
+  searchKey: { ...type.micro, color: colors.faint, fontSize: 10.5, letterSpacing: 0.2, flexShrink: 0 },
+
+  sessionChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0, maxWidth: 260,
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.pill,
+  },
+  sessionDot: { width: 8, height: 8, borderRadius: 4 },
+  sessionLabel: { ...type.small, fontSize: 12, fontWeight: '800' },
+  sessionSub: { ...type.small, fontSize: 11, color: colors.muted },
 
   termPill: {
     paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.control,
@@ -503,6 +593,9 @@ const styles = StyleSheet.create({
 
   // ── content ──
   content: { flex: 1, backgroundColor: colors.bg },
+  // Home is on white, as the installed application's `.homepage-shell` is.
+  // The grey canvas is what a page of cards sits on; Home is the cards.
+  bareContent: { flex: 1, backgroundColor: colors.card },
 
   // ── status strip ──
   status: {

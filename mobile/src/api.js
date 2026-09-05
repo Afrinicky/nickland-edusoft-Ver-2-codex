@@ -1233,12 +1233,47 @@ export const api = {
       : MODE === 'cloud' ? hostOnly('Changing a setting')()
                          : request('/system/settings', { method: 'POST', token, body: { settings } }),
 
+  // ── The dashboards ─────────────────────────────────────────────────
+  //
+  // The installed application's own summary screens, one route each, served by
+  // the school's system (electron/server/dashboards_api.js). They are the
+  // reason a browser dashboard and a desktop dashboard show the same five
+  // cards and the same chart rather than two people's ideas of a summary.
+  //
+  // A connection that does not serve them answers `null` rather than throwing.
+  // That is deliberate: the thin hosted portal holds a projection of the
+  // school and cannot compute a collection donut, and a screen that reads
+  // `null` draws the summary it CAN build from what the portal does serve.
+  // A thrown error would put a red note above a page that is working.
+  dashMain:      (token, termId) => dash('/dash/main', token, { termId }),
+  dashStudents:  (token) => dash('/dash/students', token),
+  dashAcademics: (token, termId) => dash('/dash/academics', token, { termId }),
+  dashFees:      (token, termId) => dash('/dash/fees', token, { termId }),
+  dashCanteen:   (token, termId) => dash('/dash/canteen', token, { termId }),
+  dashStaff:     (token) => dash('/dash/staff', token),
+  dashPayroll:   (token, month, year) => dash('/dash/payroll', token, { month, year }),
+  dashFinance:   (token, termId) => dash('/dash/finance', token, { termId }),
+
   // Staff — how much of this teacher's work has not reached the school yet.
   // Only meaningful over the internet; on the desktop a write has landed by
   // the time the request returns.
   staffPending: (token) =>
     MODE === 'cloud' ? request('/staff/pending', { token }) : Promise.resolve({ ok: true, pending: 0 }),
 };
+
+/**
+ * Ask the school's own system for one of its dashboards.
+ *
+ * Host mode only, and quietly so. `null` means "this connection does not serve
+ * that", which every dashboard screen treats as "draw the summary you can
+ * build from the ordinary endpoints". A 404 from an older desktop that
+ * predates these routes lands in the same place, which is the point: a school
+ * that has not updated its installation sees the app it had, not an error.
+ */
+function dash(path, token, query) {
+  if (MODE !== 'host') return Promise.resolve(null);
+  return request(`${path}${qs(query || {})}`, { token }).catch(() => null);
+}
 
 /**
  * One shape for a class's week.

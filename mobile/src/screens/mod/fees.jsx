@@ -27,14 +27,166 @@ import {
   Button, Sheet, Field, Loading, ProgressBar, Divider, CheckRow, SegmentedControl,
 } from '../../ui';
 import { Panel, Bar, StatRow, Stat } from '../../desk';
+import {
+  MetricCard, MetricRow, SectionCard, DashRow, DebtorRow, PaymentRow, AvgBar,
+  MetricLink, EmptyLine, ghs, collectionInk, fullName, dateLabel,
+} from '../../dash';
+import { useLayout } from '../../responsive';
 import { colors, spacing, type } from '../../theme';
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
 export function FeesDashboard() {
   const router = useRouter();
-  const state = useOffice((t) => api.financeOverview(t));
-  const d = state.data;
+  const layout = useLayout();
+  const wide = layout.isDesktop;
+
+  const state = useOffice(async (t) => {
+    const [overview, rich] = await Promise.all([
+      api.financeOverview(t),
+      wide ? api.dashFees(t) : Promise.resolve(null),
+    ]);
+    return { overview, rich: rich && rich.ok ? rich : null };
+  }, [wide]);
+
+  const d = state.data?.overview;
+  const rich = state.data?.rich;
+
+  return (
+    <OfficeScreen state={state} skeleton={4}>
+      {rich ? <FeesFull d={rich} router={router} />
+        : d ? <FeesPlain d={d} router={router} /> : null}
+    </OfficeScreen>
+  );
+}
+
+// ══ The installed application's Fees → Dashboard ════════════════════════════
+//
+// Expected income, what has come in, what has not, and the rate; then the
+// collection class by class, the biggest debtors, and the last receipts.
+//
+// "Expected income" is the figure this screen exists for and the one most
+// easily got wrong. It is bills that exist PLUS pupils who have not been
+// billed yet, projected through the template bill generation would use — so
+// raising the missing bills does not move it. Where pupils are not billed, or
+// no template covers them at all, the card says so and links to the Bills tab,
+// because "expected GHS 0.00" and "nobody has been billed yet" are different
+// facts and only one of them is somebody's job this morning.
+
+function FeesFull({ d, router }) {
+  const m = d.metrics || {};
+  const byClass = d.by_class || [];
+
+  return (
+    <View style={{ width: '100%' }}>
+      <MetricRow columns={4}>
+        <MetricCard
+          index={0} tone="blue" icon="chart"
+          label="Expected Income" value={ghs(m.expected_income)}
+          sub={(m.unbilled_students || 0) > 0
+            ? `${ghs(m.expected_billed)} billed + ${m.unbilled_students} pupil(s) not billed yet`
+            : 'If all bills are paid'}
+          extra={(
+            <>
+              {(m.unbillable_students || 0) > 0 ? (
+                <MetricLink tone="danger"
+                            label={`${m.unbillable_students} pupil(s) no template covers →`}
+                            onPress={() => router.push('/app/fees?tab=bills')} />
+              ) : null}
+              {(m.unbilled_students || 0) > 0 ? (
+                <MetricLink label="Generate bills →"
+                            onPress={() => router.push('/app/fees?tab=bills')} />
+              ) : null}
+            </>
+          )} />
+        <MetricCard index={1} tone="green" icon="check" valueTone="success"
+                    label="Collected So Far" value={ghs(m.total_collected)}
+                    sub={`${m.payment_count || 0} payments`}
+                    link="View payments →"
+                    onPress={() => router.push('/app/fees?tab=payments')} />
+        <MetricCard index={2} tone="red" icon="alert" valueTone="danger"
+                    label="Outstanding" value={ghs(m.outstanding)}
+                    sub={`${m.debtor_count || 0} debtors`}
+                    link="View debtors →"
+                    onPress={() => router.push('/app/fees?tab=debtors')} />
+        <MetricCard index={3} tone="purple" icon="trend"
+                    label="Collection Rate" value={`${m.collection_pct || 0}%`}
+                    sub={`${ghs(m.total_billed)} billed`} />
+      </MetricRow>
+
+      <DashRow weights={[1.3, 1]}>
+        <SectionCard title="Collection by Class"
+                     right={<Muted>{d.term ? d.term.label : ''}</Muted>}>
+          {byClass.length === 0
+            ? <EmptyLine>No bills generated yet</EmptyLine>
+            : <DataTable
+                keyExtractor={(r) => String(r.id)}
+                columns={[
+                  { key: 'short_code', label: 'Class', width: 90,
+                    render: (r) => (
+                      <Text style={{ ...type.small, fontWeight: '800', color: colors.text }}>
+                        {r.short_code}
+                      </Text>
+                    ) },
+                  { key: 'student_count', label: 'Students', align: 'right', width: 90 },
+                  { key: 'total_billed', label: 'Billed', align: 'right', width: 130,
+                    render: (r) => ghs(r.total_billed) },
+                  { key: 'total_paid', label: 'Collected', align: 'right', width: 130,
+                    render: (r) => (
+                      <Text style={{ ...type.small, fontWeight: '700', color: '#15803D',
+                                     fontVariant: ['tabular-nums'] }}>{ghs(r.total_paid)}</Text>
+                    ) },
+                  { key: 'total_outstanding', label: 'Outstanding', align: 'right', width: 130,
+                    render: (r) => (
+                      <Text style={{ ...type.small, fontWeight: '700', color: colors.danger,
+                                     fontVariant: ['tabular-nums'] }}>{ghs(r.total_outstanding)}</Text>
+                    ) },
+                  { key: 'rate', label: 'Rate', width: 100, render: (r) => {
+                    const pct = Number(r.total_billed) > 0
+                      ? Math.round((Number(r.total_paid) / Number(r.total_billed)) * 100) : 0;
+                    return (
+                      <View>
+                        <AvgBar value={pct} color={collectionInk(pct)} />
+                        <Text style={{ ...type.small, fontSize: 11, color: colors.muted, marginTop: 2 }}>
+                          {`${pct}%`}
+                        </Text>
+                      </View>
+                    );
+                  } },
+                ]}
+                rows={byClass} />}
+        </SectionCard>
+
+        <SectionCard title="Top Debtors" viewAll="View all →"
+                     onViewAll={() => router.push('/app/fees?tab=debtors')}>
+          {(d.top_debtors || []).length === 0
+            ? <EmptyLine>No outstanding bills</EmptyLine>
+            : d.top_debtors.slice(0, 7).map((r, i, arr) => (
+              <DebtorRow key={r.student_id} person={r} amount={r.balance}
+                         days={r.days_outstanding} last={i === arr.length - 1}
+                         onPress={() => router.push(`/app/students/${r.student_id}`)} />
+            ))}
+        </SectionCard>
+      </DashRow>
+
+      <SectionCard title="Recent Payments" viewAll="View all →"
+                   onViewAll={() => router.push('/app/fees?tab=payments')}>
+        {(d.recent_payments || []).length === 0
+          ? <EmptyLine>No payments yet</EmptyLine>
+          : d.recent_payments.slice(0, 8).map((p, i, arr) => (
+            <PaymentRow key={p.id} code={p.receipt_number} name={fullName(p)}
+                        note={[p.class_code, p.payment_method].filter(Boolean).join(' · ')}
+                        amount={ghs(p.amount)} when={dateLabel(p.payment_date)}
+                        last={i === arr.length - 1} />
+          ))}
+      </SectionCard>
+    </View>
+  );
+}
+
+// ══ What the finance overview alone can show ════════════════════════════════
+
+function FeesPlain({ d, router }) {
   const f = d?.fees;
 
   // A count that is absent is not a count of undefined. An older host answers
@@ -46,61 +198,57 @@ export function FeesDashboard() {
   };
 
   return (
-    <OfficeScreen state={state} skeleton={4}>
-      {d ? (
-        <>
-          <StatRow>
-            <Stat index={0} label="Billed this term" icon="layers" tone="primary"
-                  value={f ? cedis(f.billed) : '—'}
-                  note={f ? count(f.bills, 'bill raised', 'bills raised') : ''} />
-            <Stat index={1} label="Collected" icon="check" tone="success"
-                  value={f ? cedis(f.collected) : '—'}
-                  note={f ? count(f.receipts, 'receipt', 'receipts') : ''}
-                  action="View payments" onPress={() => router.push('/app/fees?tab=payments')} />
-            <Stat index={2} label="Outstanding" icon="trend" tone="danger"
-                  value={f ? cedis(f.outstanding) : '—'}
-                  note={f ? count(f.debtors, 'pupil owing', 'pupils owing') : ''}
-                  action="View debtors" onPress={() => router.push('/app/fees?tab=debtors')} />
-            <Stat index={3} label="Taken today" icon="wallet" tone="data"
-                  value={f ? cedis(f.today) : '—'}
-                  note={f ? count(f.today_receipts, 'receipt today', 'receipts today') : ''} />
-          </StatRow>
+    <>
+      <StatRow>
+        <Stat index={0} label="Billed this term" icon="layers" tone="primary"
+              value={f ? cedis(f.billed) : '—'}
+              note={f ? count(f.bills, 'bill raised', 'bills raised') : ''} />
+        <Stat index={1} label="Collected" icon="check" tone="success"
+              value={f ? cedis(f.collected) : '—'}
+              note={f ? count(f.receipts, 'receipt', 'receipts') : ''}
+              action="View payments" onPress={() => router.push('/app/fees?tab=payments')} />
+        <Stat index={2} label="Outstanding" icon="trend" tone="danger"
+              value={f ? cedis(f.outstanding) : '—'}
+              note={f ? count(f.debtors, 'pupil owing', 'pupils owing') : ''}
+              action="View debtors" onPress={() => router.push('/app/fees?tab=debtors')} />
+        <Stat index={3} label="Taken today" icon="wallet" tone="data"
+              value={f ? cedis(f.today) : '—'}
+              note={f ? count(f.today_receipts, 'receipt today', 'receipts today') : ''} />
+      </StatRow>
 
-          {f ? (
-            <Panel title="Collection" subtitle={`${f.collection_rate}% of what was billed this term`}>
-              <ProgressBar value={f.collection_rate} max={100}
-                           tone={f.collection_rate >= 80 ? 'success'
-                                 : f.collection_rate >= 50 ? 'warning' : 'danger'} />
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-                <Muted>{`Collected ${cedis(f.collected)}`}</Muted>
-                <Muted>{`Still owed ${cedis(f.outstanding)}`}</Muted>
-              </View>
-            </Panel>
-          ) : null}
-
-          {d.recent && d.recent.length ? (
-            <Panel padded={false} title="Recent payments"
-                   subtitle="The last receipts written, newest first">
-              <View style={{ padding: spacing.lg }}>
-                <DataTable
-                  keyExtractor={(r) => String(r.id)}
-                  columns={[
-                    { key: 'name', label: 'Pupil',
-                      render: (r) => `${r.surname || ''} ${r.first_name || ''}`.trim() },
-                    { key: 'class_name', label: 'Class', width: 130 },
-                    { key: 'receipt_number', label: 'Receipt', width: 150 },
-                    { key: 'payment_date', label: 'Date', width: 110,
-                      render: (r) => shortDate(r.payment_date) },
-                    { key: 'amount', label: 'Amount', align: 'right', width: 130,
-                      render: (r) => cedis(r.amount) },
-                  ]}
-                  rows={d.recent} />
-              </View>
-            </Panel>
-          ) : null}
-        </>
+      {f ? (
+        <Panel title="Collection" subtitle={`${f.collection_rate}% of what was billed this term`}>
+          <ProgressBar value={f.collection_rate} max={100}
+                       tone={f.collection_rate >= 80 ? 'success'
+                             : f.collection_rate >= 50 ? 'warning' : 'danger'} />
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+            <Muted>{`Collected ${cedis(f.collected)}`}</Muted>
+            <Muted>{`Still owed ${cedis(f.outstanding)}`}</Muted>
+          </View>
+        </Panel>
       ) : null}
-    </OfficeScreen>
+
+      {d.recent && d.recent.length ? (
+        <Panel padded={false} title="Recent payments"
+               subtitle="The last receipts written, newest first">
+          <View style={{ padding: spacing.lg }}>
+            <DataTable
+              keyExtractor={(r) => String(r.id)}
+              columns={[
+                { key: 'name', label: 'Pupil',
+                  render: (r) => `${r.surname || ''} ${r.first_name || ''}`.trim() },
+                { key: 'class_name', label: 'Class', width: 130 },
+                { key: 'receipt_number', label: 'Receipt', width: 150 },
+                { key: 'payment_date', label: 'Date', width: 110,
+                  render: (r) => shortDate(r.payment_date) },
+                { key: 'amount', label: 'Amount', align: 'right', width: 130,
+                  render: (r) => cedis(r.amount) },
+              ]}
+              rows={d.recent} />
+          </View>
+        </Panel>
+      ) : null}
+    </>
   );
 }
 

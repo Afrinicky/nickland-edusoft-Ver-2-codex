@@ -20,7 +20,7 @@
 // of order.
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TextInput, ScrollView, Platform } from 'react-native';
+import { View, Text, TextInput, ScrollView, Platform, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
@@ -29,8 +29,12 @@ import { OfficeScreen, shortDate, useOffice } from '../../office';
 import { useClasses } from '../../pickers';
 import {
   SearchField, DataTable, Muted, EmptyState, Badge, Button, Sheet, Field, Select,
-  ErrorNote, SuccessNote, SegmentedControl, ProgressBar,
+  ErrorNote, SuccessNote, SegmentedControl, ProgressBar, Avatar,
 } from '../../ui';
+import {
+  MetricCard, MetricRow, SectionCard, DashRow, BarList, SplitBar, SplitRow,
+  EmptyLine, dateLabel, fullName,
+} from '../../dash';
 import { Panel, Bar, StatRow, Stat } from '../../desk';
 import { useLayout } from '../../responsive';
 import { colors, spacing, type, radius } from '../../theme';
@@ -40,55 +44,149 @@ const STATUSES = ['Active', 'Withdrawn', 'Graduated', 'Suspended'];
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
 export function StudentsDashboard() {
-  const state = useOffice((t) => api.adminOverview(t));
-  const d = state.data;
-  const roll = d?.enrolment;
-  const classes = d?.by_class || [];
-  const biggest = Math.max(1, ...classes.map(c => Number(c.pupils) || 0));
+  const router = useRouter();
+  const layout = useLayout();
+  const wide = layout.isDesktop;
+
+  const state = useOffice(async (t) => {
+    const [overview, rich] = await Promise.all([
+      api.adminOverview(t),
+      wide ? api.dashStudents(t) : Promise.resolve(null),
+    ]);
+    return { overview, rich: rich && rich.ok ? rich : null };
+  }, [wide]);
+
+  const d = state.data?.overview;
+  const rich = state.data?.rich;
 
   return (
     <OfficeScreen state={state} skeleton={4}>
-      {d ? (
-        <>
-          <StatRow>
-            <Stat index={0} label="On the roll" icon="users" tone="primary"
-                  value={roll ? roll.total : '—'}
-                  note={roll ? `${roll.boys || 0} boys · ${roll.girls || 0} girls` : 'Not available'} />
-            <Stat index={1} label="Classes" icon="layers" tone="data" value={classes.length}
-                  note={classes.length ? `Largest: ${classes.reduce((a, c) => (c.pupils > (a.pupils || 0) ? c : a), {}).name || '—'}` : ''} />
-            {d.attendance ? (
-              <Stat index={2} label="Present today" icon="check"
-                    tone={d.attendance.rate == null ? 'primary'
-                          : d.attendance.rate >= 90 ? 'success' : d.attendance.rate >= 75 ? 'warning' : 'danger'}
-                    value={d.attendance.present}
-                    note={d.attendance.rate == null ? 'No register marked yet'
-                                                    : `${d.attendance.rate}% of those marked`} />
-            ) : null}
-            {d.attendance ? (
-              <Stat index={3} label="Registers marked" icon="note" tone="warning"
-                    value={`${d.attendance.classes_marked} of ${d.attendance.classes_total}`}
-                    note={d.attendance.classes_marked === d.attendance.classes_total
-                          ? 'Every class is in' : 'Some classes have not marked'} />
-            ) : null}
-          </StatRow>
-
-          <Panel title="Enrolment by class" subtitle="Active pupils, this term">
-            {classes.length === 0 ? (
-              <EmptyState icon="users" title="No classes yet"
-                          message="Set the school's classes up in Settings, then admit pupils into them." />
-            ) : classes.map((c) => (
-              <View key={c.id} style={{ marginBottom: spacing.md }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ ...type.small, fontWeight: '700', color: colors.text }}>{c.name}</Text>
-                  <Text style={{ ...type.small, fontWeight: '700', color: colors.muted }}>{c.pupils}</Text>
-                </View>
-                <ProgressBar value={Number(c.pupils) || 0} max={biggest} />
-              </View>
-            ))}
-          </Panel>
-        </>
-      ) : null}
+      {rich ? <StudentsFull d={rich} router={router} />
+        : d ? <StudentsPlain d={d} /> : null}
     </OfficeScreen>
+  );
+}
+
+// The desktop's Students → Dashboard: four counts of the roll by status, the
+// class distribution as bars, the boy/girl split, and who was admitted last.
+function StudentsFull({ d, router }) {
+  const m = d.metrics || {};
+  const classes = d.by_class || [];
+  const recent = d.recent_admissions || [];
+
+  return (
+    <View style={{ width: '100%' }}>
+      <MetricRow columns={4}>
+        <MetricCard index={0} tone="blue" icon="users"
+                    label="Total Students" value={m.total ?? '—'} sub="All time" />
+        <MetricCard index={1} tone="green" icon="check" valueTone="success"
+                    label="Active Students" value={m.active ?? '—'} sub="Currently enrolled"
+                    link="View status →" onPress={() => router.push('/app/students?tab=status')} />
+        <MetricCard index={2} tone="orange" icon="alert" valueTone="accent"
+                    label="Inactive" value={m.inactive ?? '—'} sub="Suspended / Transferred" />
+        <MetricCard index={3} tone="purple" icon="cap"
+                    label="Graduated" value={m.graduated ?? '—'} sub="Completed school" />
+      </MetricRow>
+
+      <DashRow weights={[1.3, 1]}>
+        <SectionCard title="Students by Class"
+                     right={<Text style={styles.headNote}>
+                       {`${m.active || 0} active students across ${classes.length} classes`}
+                     </Text>}>
+          <BarList empty="No students admitted yet"
+                   items={classes.map(c => ({ label: c.name, value: c.count }))} />
+        </SectionCard>
+
+        <SectionCard title="Gender Distribution"
+                     right={<Text style={styles.headNote}>Active students</Text>}>
+          <View style={{ marginBottom: 14 }}>
+            <SplitRow color="#3B82F6" label="Male" count={m.male || 0} pct={m.male_pct || 0} />
+            <SplitRow color="#EC4899" label="Female" count={m.female || 0} pct={m.female_pct || 0} />
+          </View>
+          <SplitBar segments={[
+            { value: m.male || 0, color: '#3B82F6' },
+            { value: m.female || 0, color: '#EC4899' },
+          ]} />
+        </SectionCard>
+      </DashRow>
+
+      <SectionCard title="Recent Admissions" viewAll="Admit new student →"
+                   onViewAll={() => router.push('/app/students?tab=admissions')}>
+        {recent.length === 0
+          ? <EmptyLine>No admissions yet</EmptyLine>
+          : recent.map((r, i, arr) => (
+            <AdmissionRow key={r.id} student={r} last={i === arr.length - 1}
+                          onPress={() => router.push(`/app/students/${r.id}`)} />
+          ))}
+      </SectionCard>
+    </View>
+  );
+}
+
+function AdmissionRow({ student, onPress, last }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <Pressable onPress={onPress}
+               onHoverIn={() => setHover(true)} onHoverOut={() => setHover(false)}
+               style={[styles.admissionRow, last && { borderBottomWidth: 0 },
+                       hover && { backgroundColor: colors.surfaceAlt }]}>
+      <Avatar name={fullName(student)} photo={student.photo_path} size={38} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text numberOfLines={1} style={styles.admissionName}>{fullName(student)}</Text>
+        <Text numberOfLines={1} style={styles.admissionMeta}>
+          {`${student.index_number || '—'} · ${student.class_name || 'Unassigned'}`}
+        </Text>
+      </View>
+      <Text style={styles.admissionDate}>{dateLabel(student.admission_date)}</Text>
+    </Pressable>
+  );
+}
+
+// What a projection of the school can honestly show: the roll and the classes
+// it is spread across, from the summary every connection serves.
+function StudentsPlain({ d }) {
+  const roll = d.enrolment;
+  const classes = d.by_class || [];
+  const biggest = Math.max(1, ...classes.map(c => Number(c.pupils) || 0));
+  return (
+    <>
+      <StatRow>
+        <Stat index={0} label="On the roll" icon="users" tone="primary"
+              value={roll ? roll.total : '—'}
+              note={roll ? `${roll.boys || 0} boys · ${roll.girls || 0} girls` : 'Not available'} />
+        <Stat index={1} label="Classes" icon="layers" tone="data" value={classes.length}
+              note={classes.length ? `Largest: ${classes.reduce((a, c) => (c.pupils > (a.pupils || 0) ? c : a), {}).name || '—'}` : ''} />
+        {d.attendance ? (
+          <Stat index={2} label="Present today" icon="check"
+                tone={d.attendance.rate == null ? 'primary'
+                      : d.attendance.rate >= 90 ? 'success' : d.attendance.rate >= 75 ? 'warning' : 'danger'}
+                value={d.attendance.present}
+                note={d.attendance.rate == null ? 'No register marked yet'
+                                                : `${d.attendance.rate}% of those marked`} />
+        ) : null}
+        {d.attendance ? (
+          <Stat index={3} label="Registers marked" icon="note" tone="warning"
+                value={`${d.attendance.classes_marked} of ${d.attendance.classes_total}`}
+                note={d.attendance.classes_marked === d.attendance.classes_total
+                      ? 'Every class is in' : 'Some classes have not marked'} />
+        ) : null}
+      </StatRow>
+
+      <Panel title="Enrolment by class" subtitle="Active pupils, this term">
+        {classes.length === 0 ? (
+          <EmptyState icon="users" title="No classes yet"
+                      message="Set the school's classes up in Settings, then admit pupils into them." />
+        ) : classes.map((c) => (
+          <View key={c.id} style={{ marginBottom: spacing.md }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+              <Text style={{ ...type.small, fontWeight: '700', color: colors.text }}>{c.name}</Text>
+              <Text style={{ ...type.small, fontWeight: '700', color: colors.muted }}>{c.pupils}</Text>
+            </View>
+            <ProgressBar value={Number(c.pupils) || 0} max={biggest} />
+          </View>
+        ))}
+      </Panel>
+    </>
   );
 }
 
@@ -508,6 +606,16 @@ function SheetCell({ column, value, dirty, onChange }) {
 }
 
 const styles = {
+  headNote: { ...type.small, fontSize: 12, color: colors.muted },
+  admissionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 10, paddingHorizontal: 8, borderRadius: 6,
+    borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+  },
+  admissionName: { ...type.small, fontSize: 13, fontWeight: '600', color: colors.text },
+  admissionMeta: { ...type.small, fontSize: 11, color: colors.muted, marginTop: 2 },
+  admissionDate: { ...type.small, fontSize: 12, color: colors.muted, flexShrink: 0 },
+
   formGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.md },
   formCell: { minWidth: 220, flexGrow: 1, flexBasis: 220 },
 

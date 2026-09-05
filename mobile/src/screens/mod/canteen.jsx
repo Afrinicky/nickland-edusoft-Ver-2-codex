@@ -13,6 +13,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
@@ -23,18 +24,114 @@ import {
   CheckRow, SearchField, Field,
 } from '../../ui';
 import { Panel, Bar, StatRow, Stat } from '../../desk';
+import {
+  MetricCard, MetricRow, SectionCard, DashRow, DebtorRow, PaymentRow, Banner,
+  EmptyLine, ghs, fullName, dateLabel,
+} from '../../dash';
+import { useLayout } from '../../responsive';
 import { colors, spacing, type } from '../../theme';
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
 export function CanteenDashboard() {
-  const state = useOffice((t) => api.canteenDebtors(t));
-  const d = state.data;
+  const router = useRouter();
+  const layout = useLayout();
+  const wide = layout.isDesktop;
+
+  const state = useOffice(async (t) => {
+    const [debtors, rich] = await Promise.all([
+      api.canteenDebtors(t),
+      wide ? api.dashCanteen(t) : Promise.resolve(null),
+    ]);
+    return { debtors, rich: rich && rich.ok ? rich : null };
+  }, [wide]);
+
+  const rich = state.data?.rich;
+
+  return (
+    <OfficeScreen state={state} skeleton={4}>
+      {rich ? <CanteenFull d={rich} router={router} />
+        : state.data ? <CanteenPlain d={state.data.debtors} /> : null}
+    </OfficeScreen>
+  );
+}
+
+// ══ The installed application's Canteen → Dashboard ═════════════════════════
+//
+// What has been collected, what has not, the daily rate the arithmetic rests
+// on, and where today stands; then the biggest debtors and the last
+// collections.
+//
+// "Today's Status" is paid out of marked, not out of the roll. A pupil with no
+// entry for today has not been recorded either way, and counting them as
+// unpaid would invent arrears the school does not claim.
+
+function CanteenFull({ d, router }) {
+  const m = d.metrics || {};
+  const todayTotal = (m.today_paid || 0) + (m.today_unpaid || 0) + (m.today_exempt || 0);
+  const todayPct = todayTotal > 0 ? Math.round(((m.today_paid || 0) / todayTotal) * 100) : 0;
+
+  return (
+    <View style={{ width: '100%' }}>
+      <MetricRow columns={4}>
+        <MetricCard index={0} tone="green" icon="cash" valueTone="success"
+                    label="Collected This Term" value={ghs(m.total_collected)}
+                    sub={`${m.payment_count || 0} payments`} />
+        <MetricCard index={1} tone="red" icon="alert" valueTone="danger"
+                    label="Outstanding" value={ghs(m.amount_owed)}
+                    sub={`${m.unpaid_students || 0} students, ${m.unpaid_days_total || 0} days`} />
+        <MetricCard index={2} tone="blue" icon="calendar"
+                    label="Daily Rate" value={ghs(d.daily_rate)}
+                    sub={`${m.total_school_days || 0} school days`} />
+        <MetricCard index={3} tone="orange" icon="bell"
+                    label="Today's Status" value={`${m.today_paid || 0}/${todayTotal}`}
+                    sub={`paid (${todayPct}%) · ${m.today_exempt || 0} exempt`}
+                    link="Quick Pay →"
+                    onPress={() => router.push('/app/canteen?tab=quickpay')} />
+      </MetricRow>
+
+      {m.attendance_exempt_enabled ? (
+        <Banner>
+          ✓ Attendance-linked exemption is ON. Absent students will not be charged
+          canteen fees for that day.
+        </Banner>
+      ) : null}
+
+      <DashRow weights={[1, 1]}>
+        <SectionCard title="Top Canteen Debtors" viewAll="View all →"
+                     onViewAll={() => router.push('/app/canteen?tab=debtors')}>
+          {(d.top_debtors || []).length === 0
+            ? <EmptyLine>No debtors 🎉</EmptyLine>
+            : d.top_debtors.slice(0, 8).map((r, i, arr) => (
+              <DebtorRow key={r.student_id} person={r} amount={r.amount_owed}
+                         days={r.unpaid_days} last={i === arr.length - 1}
+                         onPress={() => router.push(`/app/students/${r.student_id}`)} />
+            ))}
+        </SectionCard>
+
+        <SectionCard title="Recent Payments">
+          {(d.recent_payments || []).length === 0
+            ? <EmptyLine>No payments yet</EmptyLine>
+            : d.recent_payments.slice(0, 8).map((p, i, arr) => (
+              <PaymentRow key={p.id} name={fullName(p)}
+                          note={`${p.class_code || ''} · ${p.days_covered || 0} day${p.days_covered === 1 ? '' : 's'}`}
+                          amount={ghs(p.amount)} when={dateLabel(p.payment_date)}
+                          last={i === arr.length - 1} />
+            ))}
+        </SectionCard>
+      </DashRow>
+    </View>
+  );
+}
+
+// ══ What the arrears list alone can show ════════════════════════════════════
+
+function CanteenPlain({ d }) {
   const rows = d?.debtors || d?.students || [];
   const owed = rows.reduce((n, r) => n + (Number(r.amount_owed ?? r.balance) || 0), 0);
 
   return (
-    <OfficeScreen state={state} skeleton={4}>
+    <>
       <StatRow>
         <Stat index={0} label="Owed to the canteen" icon="bowl" tone="danger" value={cedis(owed)}
               note={`${rows.length} pupil${rows.length === 1 ? '' : 's'} behind`} />
@@ -64,7 +161,7 @@ export function CanteenDashboard() {
               (Number(b.amount_owed ?? b.balance) || 0) - (Number(a.amount_owed ?? a.balance) || 0)).slice(0, 40)} />
         </View>
       </Panel>
-    </OfficeScreen>
+    </>
   );
 }
 

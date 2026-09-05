@@ -88,13 +88,19 @@ export function ModuleShell({ children }) {
   const role = profile.designation || 'Staff';
   const photo = profile.photo || profile.staff?.photo;
 
+  // Home is the one screen the installed application draws without a sidebar,
+  // and the browser draws it the same way. See DeskShell's `bare` for why.
+  const atHome = pathname === '/app' || pathname === '/app/' || pathname === '/app/index';
+
   if (layout.isDesktop) {
     return (
       <DeskShell
+        bare={atHome}
         items={items}
         school={school} motto={motto} logo={brand.logo}
         person={person} role={role} photo={photo}
         term={profile.term || brand.term}
+        session={profile.session}
         onSignOut={signOut}
         onSearch={(q) => q && go(`/app/students?tab=roll&q=${encodeURIComponent(q)}`)}
         status={{
