@@ -4,6 +4,7 @@
 // as "Books Arrears", visually separated from school fees.
 // Copyright © 2026 Nickland Sales. All rights reserved.
 const { postIncome } = require('./_ledger');
+const { autoReceiptForPayment, autoDeliverReceipt } = require('./receipts_engine');
 
 const { getNextReceiptNumber } = require('../utils/idgen');
 
@@ -127,37 +128,15 @@ module.exports = function registerBooksHandlers(ipcMain, db) {
     return { ok: true, id: bookId };
   });
 
-  // Generate books records for all students in a class (bulk template)
-  ipcMain.handle('books:generate-for-class', (_e, { classId, academicYearId, items }) => {
-    if (!items || items.length === 0) return { ok: false, error: 'no items provided' };
-    const students = db.prepare(`
-      SELECT id FROM students WHERE current_class_id = ? AND status = 'Active'
-    `).all(classId);
-    let created = 0;
-    const tx = db.transaction(() => {
-      for (const st of students) {
-        const totalAmount = items.reduce((s, it) => s + (parseFloat(it.amount) || 0), 0);
-        const existing = db.prepare(
-          'SELECT id FROM student_books WHERE student_id = ? AND academic_year_id = ?'
-        ).get(st.id, academicYearId);
-        if (existing) continue;
-        const r = db.prepare(`
-          INSERT INTO student_books
-            (student_id, academic_year_id, class_group_id, total_amount, total_paid, balance)
-          VALUES (?, ?, ?, ?, 0, ?)
-        `).run(st.id, academicYearId, classId, totalAmount, totalAmount);
-        const insItem = db.prepare(
-          'INSERT INTO student_books_items (student_books_id, title, amount, display_order) VALUES (?, ?, ?, ?)'
-        );
-        items.forEach((it, i) => {
-          insItem.run(r.lastInsertRowid, it.title, parseFloat(it.amount) || 0, it.display_order || i);
-        });
-        created++;
-      }
-    });
-    tx();
-    return { ok: true, created };
-  });
+  // Charge books to a class, several classes, or the whole school.
+  //
+  // Was class-only and skipped anybody who already had a record, which meant
+  // a school that got a title or a price wrong had no way to correct it: the
+  // second attempt silently did nothing and the wrong figures stayed on every
+  // pupil's account. `replace` rebuilds the charge instead — and, exactly as
+  // with the school fees bill, money already received is kept and the balance
+  // recomputed, so a parent who has paid is not billed for it again.
+  ipcMain.handle('books:generate-for-class', (_e, args = {}) => generateBooks(db, args));
 
   // Record a books payment
   ipcMain.handle('books:record-payment', (_e, data) => recordBooksPayment(db, data));
@@ -244,7 +223,102 @@ function recordBooksPayment(db, data) {
   });
 
   const paymentId = tx();
-  return { ok: true, payment_id: paymentId, receipt_number: receipt };
+  // A books receipt is a receipt. It was the only payment in the system that
+  // produced no durable record and never reached a parent — so a family who
+  // paid for textbooks had nothing to show for it but a line in a sheet.
+  let receiptRow = null;
+  try { receiptRow = autoReceiptForPayment(db, 'books', paymentId); } catch (_) {}
+  let delivery = null;
+  try { delivery = autoDeliverReceipt(db, 'books', paymentId); } catch (_) {}
+  return {
+    ok: true, payment_id: paymentId, id: paymentId, receipt_number: receipt,
+    receipt_id: receiptRow?.id || null, delivered: delivery?.channels || [],
+  };
 }
 
 module.exports.recordPayment = recordBooksPayment;
+
+// ── Charging the year's books ───────────────────────────────────────────────
+function generateBooks(db, { classId, classIds, scope, academicYearId, items, replace } = {}) {
+  const lines = (items || [])
+    .filter(i => String(i.title || '').trim())
+    .map((i, n) => ({
+      title: String(i.title).trim(),
+      amount: Math.round((parseFloat(i.amount) || 0) * 100) / 100,
+      display_order: i.display_order != null ? i.display_order : n,
+    }));
+  if (lines.length === 0) return { ok: false, error: 'Add at least one book with a title.' };
+
+  const yearId = academicYearId
+    || (db.prepare('SELECT id FROM academic_years WHERE is_current = 1').get() || {}).id;
+  if (!yearId) return { ok: false, error: 'No academic year is set.' };
+
+  const allClasses = db.prepare(
+    'SELECT id FROM class_groups WHERE is_active = 1 ORDER BY level_order').all().map(c => c.id);
+  let targets;
+  if (scope === 'school') targets = allClasses;
+  else if (Array.isArray(classIds) && classIds.length) targets = classIds.map(Number).filter(Boolean);
+  else if (classId) targets = [Number(classId)];
+  else targets = allClasses;
+
+  const marks = targets.map(() => '?').join(',');
+  const students = targets.length
+    ? db.prepare(`SELECT id, current_class_id FROM students
+                  WHERE status = 'Active' AND current_class_id IN (${marks})
+                  ORDER BY surname, first_name`).all(...targets)
+    : [];
+  if (!students.length) return { ok: false, error: 'There is nobody active in that scope.' };
+
+  const total = Math.round(lines.reduce((s, i) => s + i.amount, 0) * 100) / 100;
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  const tx = db.transaction(() => {
+    const insItem = db.prepare(
+      'INSERT INTO student_books_items (student_books_id, title, amount, display_order) VALUES (?, ?, ?, ?)');
+
+    for (const st of students) {
+      const existing = db.prepare(
+        'SELECT * FROM student_books WHERE student_id = ? AND academic_year_id = ?'
+      ).get(st.id, yearId);
+
+      if (existing && !replace) { skipped += 1; continue; }
+
+      if (existing) {
+        // Rebuild the charge in place. The row is UPDATEd rather than deleted
+        // so every books payment that points at it stays pointing at it, and
+        // what has been received is re-derived from the payments table rather
+        // than reset — a parent who paid GHS 200 of 440 owes 100 after the
+        // charge is corrected to 300, not 300 again.
+        db.prepare('DELETE FROM student_books_items WHERE student_books_id = ?').run(existing.id);
+        lines.forEach(l => insItem.run(existing.id, l.title, l.amount, l.display_order));
+        const paid = db.prepare(
+          'SELECT COALESCE(SUM(amount), 0) AS t FROM books_payments WHERE student_books_id = ?'
+        ).get(existing.id).t || 0;
+        db.prepare(`
+          UPDATE student_books
+             SET class_group_id = ?, total_amount = ?, total_paid = ?, balance = ?,
+                 updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?
+        `).run(st.current_class_id, total, Math.round(paid * 100) / 100,
+          Math.round((total - paid) * 100) / 100, existing.id);
+        updated += 1;
+        continue;
+      }
+
+      const r = db.prepare(`
+        INSERT INTO student_books
+          (student_id, academic_year_id, class_group_id, total_amount, total_paid, balance)
+        VALUES (?, ?, ?, ?, 0, ?)
+      `).run(st.id, yearId, st.current_class_id, total, total);
+      lines.forEach(l => insItem.run(r.lastInsertRowid, l.title, l.amount, l.display_order));
+      created += 1;
+    }
+  });
+  tx();
+
+  return { ok: true, created, updated, skipped, per_pupil: total, students: students.length };
+}
+
+module.exports.generateBooks = generateBooks;
