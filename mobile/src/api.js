@@ -1217,6 +1217,17 @@ export const api = {
     MODE === 'online' ? school.students(token, q)
       : MODE === 'cloud' ? hostOnly('The whole roll')()
                          : request(`/admin/students${qs(q)}`, { token }),
+  // The Students Sheet: the desktop's own query and its own column rules, so a
+  // correction made in a browser is the same operation as one made at the
+  // office PC — same columns, same validation.
+  studentsSheet: (token, q = {}) =>
+    MODE === 'online' ? school.studentsSheet(token, q)
+      : MODE === 'cloud' ? hostOnly('The students sheet')()
+                         : request(`/students/sheet${qs(q)}`, { token }),
+  studentsSheetCell: (token, body) =>
+    MODE === 'online' ? school.studentsSheetCell(token, body)
+      : MODE === 'cloud' ? hostOnly('Correcting the sheet')()
+                         : request('/students/sheet/cell', { method: 'POST', token, body }),
   adminAdmit: (token, body) =>
     MODE === 'online' ? school.admitStudent(token, body)
       : MODE === 'cloud' ? hostOnly('Admitting a pupil')()
@@ -1720,6 +1731,9 @@ export const school = {
   students: (token, query) => schoolRequest('/students', { token, query }),
   student: (token, id) => schoolRequest(`/students/${id}`, { token }),
   admitStudent: (token, body) => schoolRequest('/students', { method: 'POST', token, body }),
+  studentsSheet: (token, query) => schoolRequest('/students/sheet', { token, query }),
+  studentsSheetCell: (token, body) =>
+    schoolRequest('/students/sheet/cell', { method: 'POST', token, body }),
   updateStudent: (token, id, body) => schoolRequest(`/students/${id}`, { method: 'POST', token, body }),
   studentStatus: (token, id, status, reason) =>
     schoolRequest(`/students/${id}/status`, { method: 'POST', token, body: { status, reason } }),

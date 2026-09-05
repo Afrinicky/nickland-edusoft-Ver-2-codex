@@ -291,6 +291,72 @@ function req(base, method, p, { token, body } = {}) {
   } });
   ck('a pupil with no class is refused, as at the office PC', r.status === 400);
 
+  // ══ The pupils' sheet, in a browser ═══════════════════════════════════════
+  //
+  // The office PC has a spreadsheet of the whole roll that a clerk corrects in
+  // place. The browser had a narrower one of its own making: fewer columns, its
+  // own idea of which were free text, and no notion of which values a column
+  // would accept. So a correction typed on the school Wi-Fi could put a word in
+  // a column the office PC would have refused.
+
+  r = await req(base, 'GET', '/api/v1/students/sheet', { token: admin });
+  const sheetCols = (r.json && r.json.columns) || [];
+  ck('the browser reads the same sheet the office PC does',
+    r.status === 200 && Array.isArray(r.json.rows) && r.json.rows.length > 0);
+  ck('...with the office PC\'s own column rules, not a second list',
+    sheetCols.length >= 30
+    && sheetCols.some(c => c.field === 'blood_group' && Array.isArray(c.values))
+    && (sheetCols.find(c => c.field === 'status') || {}).values.join(',')
+       === require(path.join(ROOT, 'electron/ipc/_student_status.js')).VALUES.join(','));
+
+  const sheetPupil = (r.json.rows.find(x => x.surname === 'OWUSU') || r.json.rows[0]);
+  ck('...including the admission details the browser could not show at all',
+    Object.prototype.hasOwnProperty.call(sheetPupil, 'previous_school')
+    && Object.prototype.hasOwnProperty.call(sheetPupil, 'emergency_contact_phone'));
+
+  r = await req(base, 'POST', '/api/v1/students/sheet/cell',
+    { token: admin, body: { studentId: sheetPupil.id, field: 'hometown', value: 'Sunyani' } });
+  ck('a correction made in a browser is the same correction',
+    r.status === 200 && r.json.ok
+    && db.prepare('SELECT hometown FROM students WHERE id = ?').get(sheetPupil.id).hometown === 'Sunyani');
+
+  r = await req(base, 'POST', '/api/v1/students/sheet/cell',
+    { token: admin, body: { studentId: sheetPupil.id, field: 'blood_group', value: 'Purple' } });
+  ck('...and a value the office PC would refuse is refused here too',
+    r.status === 400 && /not allowed/i.test(r.json.error || ''));
+
+  r = await req(base, 'POST', '/api/v1/students/sheet/cell',
+    { token: bursar, body: { studentId: sheetPupil.id, field: 'hometown', value: 'Nowhere' } });
+  ck('...while somebody with no business editing pupils cannot', r.status === 403);
+
+  // ══ Taking a pupil off the roll, in a browser ═════════════════════════════
+  //
+  // The reason used to go only into the audit log, so a pupil withdrawn at the
+  // gate showed a blank Reason on the office PC's Status tab and nobody could
+  // see why they had gone.
+
+  r = await req(base, 'POST', `/api/v1/admin/students/${sheetPupil.id}/status`,
+    { token: admin, body: { status: 'Transferred', reason: 'Family moved to Kumasi' } });
+  const moved = db.prepare('SELECT status, inactive_reason FROM students WHERE id = ?').get(sheetPupil.id);
+  ck('a pupil can be transferred out from a browser — a status it could not even show before',
+    r.status === 200 && moved.status === 'Transferred');
+  ck('...and the reason is on the record, where the office PC reads it',
+    moved.inactive_reason === 'Family moved to Kumasi');
+
+  r = await req(base, 'POST', `/api/v1/admin/students/${sheetPupil.id}/status`,
+    { token: admin, body: { status: 'Gone', reason: 'Left' } });
+  ck('...a word that is not one of the six is refused', r.status === 400);
+
+  r = await req(base, 'POST', `/api/v1/admin/students/${sheetPupil.id}/status`,
+    { token: admin, body: { status: 'Withdrawn' } });
+  ck('...and nobody leaves the roll without saying why', r.status === 400);
+
+  r = await req(base, 'POST', `/api/v1/admin/students/${sheetPupil.id}/status`,
+    { token: admin, body: { status: 'Active' } });
+  ck('readmitting clears the reason rather than leaving a stale one',
+    r.status === 200
+    && db.prepare('SELECT inactive_reason FROM students WHERE id = ?').get(sheetPupil.id).inactive_reason === null);
+
   // ══ The counter, in a browser ═════════════════════════════════════════════
   //
   // A school does not have a fees counter, a books counter, a canteen counter

@@ -1647,11 +1647,23 @@ function createApiServer(db, opts = {}) {
     if (webapp.serveWebApp(req, res, parsed.pathname)) return;
 
     // find route
-    let route = null, routeParams = null;
+    //
+    // A literal beats a placeholder. Two patterns can both match one path —
+    // /students/sheet and /students/:id do — and the dispatcher used to take
+    // whichever module happened to register first, so a real route answered
+    // "Student not found" because a different file was loaded earlier. The
+    // path a request took should not depend on registration order, so of the
+    // patterns that match, the most specific one (fewest placeholders) wins.
+    let route = null, routeParams = null, routeSpecificity = Infinity;
     for (const r of routes) {
       if (r.method !== req.method) continue;
       const m = match(r.parts, reqParts);
-      if (m) { route = r; routeParams = m; break; }
+      if (!m) continue;
+      const placeholders = Object.keys(m).length;
+      if (placeholders < routeSpecificity) {
+        route = r; routeParams = m; routeSpecificity = placeholders;
+        if (placeholders === 0) break;
+      }
     }
     if (!route) return json(res, 404, { ok: false, error: 'Not found' });
 

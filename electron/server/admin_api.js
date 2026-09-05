@@ -338,20 +338,73 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     return json(res, 200, { ok: true });
   });
 
+  // ══ The Students Sheet ═════════════════════════════════════════════════════
+  //
+  // The desktop's spreadsheet view: a whole class on one screen, corrected in
+  // place, the way an office actually works through a pile of admission forms.
+  //
+  // The browser's version showed twelve columns and edited them through the
+  // ordinary update route, so it could not correct the status, the admission
+  // number, the address, the medical facts — most of what an admission form
+  // asks for — and it had no idea which columns were dates, which were a fixed
+  // list of choices, or what those choices were.
+  //
+  // It now reads the SAME data and the SAME column rules the desktop's sheet
+  // uses (electron/ipc/students_sheet.js), so a correction made in a browser
+  // on the school Wi-Fi and one made at the office PC are the same operation
+  // with the same validation.
+
+  add('GET', `${API}/students/sheet`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!adminGate(ctx, res, 'students')) return undefined;
+    const sheet = require('../ipc/students_sheet');
+    const rows = sheet.sheetData(db, {
+      classId: query && query.classId ? parseInt(query.classId, 10) : undefined,
+      status: (query && query.status) || undefined,
+      search: (query && query.search) || undefined,
+    });
+    return json(res, 200, { ok: true, rows, columns: sheet.sheetColumns() });
+  });
+
+  add('POST', `${API}/students/sheet/cell`, async (ctx, req, res, params, body) => {
+    if (!adminGate(ctx, res, 'students', 'edit')) return undefined;
+    const sheet = require('../ipc/students_sheet');
+    const out = sheet.updateCell(db, {
+      studentId: parseInt(body.studentId, 10),
+      field: String(body.field || ''),
+      value: body.value,
+    });
+    if (!out.ok) return bad(res, out.error);
+    try { require('./sync/outbox').enqueueStudentSnapshot(db, parseInt(body.studentId, 10)); } catch (_) {}
+    audit(db, ctx, 'student', parseInt(body.studentId, 10), 'sheet_edit',
+      `${body.field} corrected on the sheet`);
+    return json(res, 200, out);
+  });
+
   // Withdrawing, graduating or readmitting. A status change is what a parent
   // notices first — the app stops showing their child — so it is audited with
   // the reason, and the reason is required.
   add('POST', `${API}/admin/students/:id/status`, async (ctx, req, res, params, body) => {
     if (!adminGate(ctx, res, 'students', 'edit')) return undefined;
-    const allowed = ['Active', 'Withdrawn', 'Graduated', 'Suspended'];
+    // One vocabulary. The browser used to offer Active/Withdrawn/Graduated/
+    // Suspended while the office PC offered Active/Inactive/Graduated/
+    // Transferred, both writing the same column — so a pupil withdrawn at the
+    // gate did not appear under the office's "Inactive" filter and the two
+    // screens reported different roll sizes for the same school.
+    const studentStatus = require('../ipc/_student_status');
     const status = String(body.status || '');
-    if (!allowed.includes(status)) return bad(res, 'That is not a status a pupil can be put into.');
+    if (!studentStatus.isValid(status)) {
+      return bad(res, 'That is not a status a pupil can be put into.');
+    }
     const reason = String(body.reason || '').trim();
     if (status !== 'Active' && reason.length < 3) return bad(res, 'Give the reason.');
     const sid = parseInt(params.id, 10);
     const student = db.prepare('SELECT id, surname, first_name, status FROM students WHERE id = ?').get(sid);
     if (!student) return missing(res, 'That pupil is not on the roll.');
-    db.prepare('UPDATE students SET status = ? WHERE id = ?').run(status, sid);
+    // The reason goes on the RECORD, not only into the audit log. It used to go
+    // only to the log, so a pupil withdrawn in a browser showed a blank Reason
+    // on the office PC's Status tab and nobody could see why they had gone.
+    db.prepare('UPDATE students SET status = ?, inactive_reason = ? WHERE id = ?')
+      .run(status, status === 'Active' ? null : (reason || null), sid);
     try { require('./sync/outbox').enqueueStudentSnapshot(db, sid); } catch (_) {}
     audit(db, ctx, 'student', sid, 'student_status',
       `${student.surname} ${student.first_name}: ${student.status} → ${status}${reason ? ` (${reason})` : ''}`,
