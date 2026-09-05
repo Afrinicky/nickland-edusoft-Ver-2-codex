@@ -247,6 +247,27 @@ function recomputeBillTotals(db, billId) {
   return { totalBilled, totalPaid, balance: round2(totalBilled - totalPaid), extra: round2(sums.extra) };
 }
 
+// ── What has been received against a bill ──────────────────────────────
+// Narrower than recomputeBillTotals on purpose. Taking a payment must not
+// touch what a pupil was BILLED — that is decided by the schedule and the line
+// items, and re-deriving it here would rewrite the figure a parent was given
+// from whatever happens to be in bill_line_items. What a payment changes is
+// how much has been received, and that is always re-derived from the payments
+// table rather than incremented, so a reversal or a correction cannot leave a
+// balance drifting behind the money.
+function recomputeBillPaid(db, billId) {
+  const bill = db.prepare('SELECT * FROM student_bills WHERE id = ?').get(billId);
+  if (!bill) return null;
+  const paid = round2(db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS t FROM payments
+    WHERE student_id = ? AND term_id = ? AND COALESCE(is_reversed, 0) = 0
+  `).get(bill.student_id, bill.term_id).t || 0);
+  const balance = round2((bill.total_billed || 0) - paid);
+  db.prepare('UPDATE student_bills SET total_paid = ?, balance = ? WHERE id = ?')
+    .run(paid, balance, billId);
+  return { totalBilled: round2(bill.total_billed || 0), totalPaid: paid, balance };
+}
+
 // ── Projected income ───────────────────────────────────────────────────
 // "If all bills are paid" — the figure the Fees dashboard shows. Bills that
 // exist are authoritative (they include arrears, discounts and any
@@ -312,6 +333,7 @@ module.exports = {
   templateTotal,
   findConflictingSchoolFeesTemplate,
   recomputeBillTotals,
+  recomputeBillPaid,
   projectedIncomeForTerm,
   round2,
 };

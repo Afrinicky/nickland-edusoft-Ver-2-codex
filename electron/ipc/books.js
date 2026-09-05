@@ -160,58 +160,7 @@ module.exports = function registerBooksHandlers(ipcMain, db) {
   });
 
   // Record a books payment
-  ipcMain.handle('books:record-payment', (_e, data) => {
-    if (!data.student_id || !data.amount || data.amount <= 0) {
-      return { ok: false, error: 'student_id and positive amount required' };
-    }
-    const receipt = data.receipt_number || nextBooksReceipt(db);
-    const today = data.payment_date || new Date().toISOString().slice(0, 10);
-
-    const tx = db.transaction(() => {
-      const r = db.prepare(`
-        INSERT INTO books_payments
-          (student_id, student_books_id, amount, payment_date, payment_method,
-           reference, receipt_number, received_by, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        data.student_id, data.student_books_id || null,
-        data.amount, today,
-        data.payment_method || 'Cash',
-        data.reference || null, receipt,
-        data.received_by || null, data.notes || null
-      );
-
-      if (data.student_books_id) {
-        db.prepare(`
-          UPDATE student_books SET
-            total_paid = total_paid + ?,
-            balance = total_amount - (total_paid + ?),
-            updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(data.amount, data.amount, data.student_books_id);
-      }
-
-      // Auto-record income via central ledger helper.
-      postIncome(db, {
-        receipt_number: receipt,
-        category: 'books',
-        amount: data.amount,
-        description: `Books payment — ${data.notes || receipt}`,
-        payment_method: data.payment_method || 'Cash',
-        reference: data.reference || null,
-        date: today,
-        source: 'books_payment',
-        student_id: data.student_id,
-        recorded_by: data.received_by || null,
-        is_auto: 1,
-      });
-
-      return r.lastInsertRowid;
-    });
-
-    const paymentId = tx();
-    return { ok: true, payment_id: paymentId, receipt_number: receipt };
-  });
+  ipcMain.handle('books:record-payment', (_e, data) => recordBooksPayment(db, data));
 
   // Get all students in a class with books status for the bulk-pay sheet
   ipcMain.handle('books:class-payment-sheet', (_e, { classId, academicYearId }) => {
@@ -238,3 +187,64 @@ module.exports = function registerBooksHandlers(ipcMain, db) {
     `).all(year, classId);
   });
 };
+
+// ── Recording a books payment ───────────────────────────────────────────────
+//
+// Lifted out of the IPC handler so the payment desk — which takes money for
+// every purpose from one screen — posts books through THIS code rather than a
+// second copy. A second copy is how a payment reaches the books balance and
+// not the ledger, or the other way round.
+function recordBooksPayment(db, data) {
+  if (!data.student_id || !data.amount || data.amount <= 0) {
+    return { ok: false, error: 'student_id and positive amount required' };
+  }
+  const receipt = data.receipt_number || nextBooksReceipt(db);
+  const today = data.payment_date || new Date().toISOString().slice(0, 10);
+
+  const tx = db.transaction(() => {
+    const r = db.prepare(`
+      INSERT INTO books_payments
+        (student_id, student_books_id, amount, payment_date, payment_method,
+         reference, receipt_number, received_by, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.student_id, data.student_books_id || null,
+      data.amount, today,
+      data.payment_method || 'Cash',
+      data.reference || null, receipt,
+      data.received_by || null, data.notes || null
+    );
+
+    if (data.student_books_id) {
+      db.prepare(`
+        UPDATE student_books SET
+          total_paid = total_paid + ?,
+          balance = total_amount - (total_paid + ?),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(data.amount, data.amount, data.student_books_id);
+    }
+
+    // Auto-record income via central ledger helper.
+    postIncome(db, {
+      receipt_number: receipt,
+      category: 'books',
+      amount: data.amount,
+      description: `Books payment — ${data.notes || receipt}`,
+      payment_method: data.payment_method || 'Cash',
+      reference: data.reference || null,
+      date: today,
+      source: 'books_payment',
+      student_id: data.student_id,
+      recorded_by: data.received_by || null,
+      is_auto: 1,
+    });
+
+    return r.lastInsertRowid;
+  });
+
+  const paymentId = tx();
+  return { ok: true, payment_id: paymentId, receipt_number: receipt };
+}
+
+module.exports.recordPayment = recordBooksPayment;

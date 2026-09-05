@@ -3,6 +3,7 @@
 // Full MS Word formatting preserved (tables, letterheads, fonts, colors, watermarks, pictures)
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
+import { isElevated } from '../../lib/roles.js';
 import { fmtDate } from '../../lib/format.js';
 
 const TEMPLATE_TYPES = [
@@ -14,6 +15,10 @@ const TEMPLATE_TYPES = [
 
 export default function ReceiptTemplates() {
   const { currentUser } = useStore();
+  // What every receipt in the school prints on is not a per-clerk preference.
+  // A bursar changing it changes the paper for the whole counter, so it sits
+  // with the Proprietor and the Super Admin.
+  const mayChangePaper = isElevated(currentUser?.designation);
   const showToast = useStore(s => s.showToast);
   const [templates, setTemplates] = useState([]);
   const [activeType, setActiveType] = useState('fees');
@@ -21,7 +26,7 @@ export default function ReceiptTemplates() {
   const [loading, setLoading] = useState(true);
 
   const [printCfg, setPrintCfg] = useState({
-    receipt_paper_size: 'A4', receipt_auto_generate: 'true', receipt_footer_note: '',
+    receipt_paper_size: 'roll80', receipt_auto_generate: 'true', receipt_footer_note: '',
     receipt_delivery_enabled: 'false', receipt_delivery_channels: 'sms',
     receipt_delivery_contact: 'auto', receipt_delivery_email_source: 'auto',
   });
@@ -38,7 +43,7 @@ export default function ReceiptTemplates() {
     const p = allSettings.print || {};
     const n = allSettings.notifications || {};
     setPrintCfg({
-      receipt_paper_size: p.receipt_paper_size || 'A4',
+      receipt_paper_size: p.receipt_paper_size || 'roll80',
       receipt_auto_generate: p.receipt_auto_generate || 'true',
       receipt_footer_note: p.receipt_footer_note || '',
       receipt_delivery_enabled: n.receipt_delivery_enabled || 'false',
@@ -110,14 +115,20 @@ export default function ReceiptTemplates() {
           <div className="form-group">
             <label className="label">Paper size</label>
             <select className="select" value={printCfg.receipt_paper_size}
+              disabled={!mayChangePaper}
               onChange={e => savePrint('receipt_paper_size', e.target.value)}>
+              <option value="roll80">Thermal roll — 80 mm (standard)</option>
+              <option value="roll58">Thermal roll — 58 mm</option>
               <option value="A4">A4 (210 × 297 mm)</option>
               <option value="A5">A5 (148 × 210 mm)</option>
               <option value="Letter">Letter (8.5 × 11 in)</option>
-              <option value="roll80">Thermal roll — 80 mm</option>
-              <option value="roll58">Thermal roll — 58 mm</option>
             </select>
-            <div className="form-hint">80/58 mm print continuous receipts on POS/thermal printers.</div>
+            <div className="form-hint">
+              {mayChangePaper
+                ? 'Every receipt the system prints uses this. An 80 mm roll is the standard: '
+                  + 'it is what the printer beside a school counter takes.'
+                : 'The paper every receipt prints on is set by the Proprietor or the Super Admin.'}
+            </div>
           </div>
           <div className="form-group">
             <label className="label">Auto-generate receipts</label>

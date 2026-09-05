@@ -320,75 +320,7 @@ function registerFeesHandlers(ipcMain, db) {
   });
 
   // ===== Payments =====
-  ipcMain.handle('fees:record-payment', (_e, data) => {
-    const receiptCounter = getNextReceiptNumber(db);
-    const year = new Date().getFullYear().toString().slice(-2);
-    const receiptNo = `FE/${year}/${String(receiptCounter).padStart(5, '0')}`;
-    const payDate = data.payment_date || new Date().toISOString().slice(0, 10);
-
-    const tx = db.transaction(() => {
-      const result = db.prepare(`
-        INSERT INTO payments (student_id, student_bill_id, term_id, amount, payment_date,
-          payment_method, reference, received_by, notes, receipt_number)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        data.student_id, data.student_bill_id || null, data.term_id,
-        data.amount, payDate, data.payment_method || 'Cash',
-        data.reference || '', data.received_by || null, data.notes || '', receiptNo
-      );
-
-      // Update bill balance — using the CORRECT schema columns
-      if (data.student_bill_id) {
-        db.prepare(`
-          UPDATE student_bills SET
-            total_paid = total_paid + ?,
-            balance = total_billed - (total_paid + ?)
-          WHERE id = ?
-        `).run(data.amount, data.amount, data.student_bill_id);
-      }
-
-      // Auto-record into the finance ledger via the central posting helper.
-      // This guarantees transaction_date + term_id are always set, so the
-      // income can never fall out of the term-scoped finance reports.
-      postIncome(db, {
-        receipt_number: receiptNo,
-        category: 'fees',
-        amount: data.amount,
-        description: `School fees payment — ${receiptNo}`,
-        payment_method: data.payment_method || 'Cash',
-        reference: data.reference || null,
-        date: payDate,
-        source: 'student_payment',
-        student_id: data.student_id,
-        term_id: data.term_id || null,
-        linked_payment_id: result.lastInsertRowid,
-        recorded_by: data.received_by || null,
-        is_auto: 1,
-      });
-
-      return result.lastInsertRowid;
-    });
-
-    try {
-      const paymentId = tx();
-      // Auto-generate a durable receipt for every fee payment, and auto-deliver
-      // it to the parent by SMS/email if that's enabled in Settings (best-effort).
-      let receipt = null;
-      try { receipt = autoReceiptForPayment(db, 'fees', paymentId); } catch (_) {}
-      let delivery = null;
-      try { delivery = autoDeliverReceipt(db, 'fees', paymentId); } catch (_) {}
-      return { ok: true, id: paymentId, receipt_number: receiptNo, receipt_id: receipt?.id || null, delivered: delivery?.channels || [] };
-    } catch (e) {
-      // Log the failure to the audit trail instead of swallowing it
-      try {
-        db.prepare(`
-          INSERT INTO audit_log (entity_type, entity_id, action, justification, severity)
-          VALUES ('payment', ?, 'auto_record_failed', ?, 'high')
-        `).run(data.student_id || null, `Fees payment auto-record failed: ${e.message}`);
-      } catch (_) {}
-      return { ok: false, error: `Payment could not be recorded: ${e.message}` };
-    }
-  });
+  ipcMain.handle('fees:record-payment', (_e, data) => recordFeesPayment(db, data));
 
   ipcMain.handle('fees:list-payments', (_e, { studentId, termId }) => {
     let sql = `
@@ -594,6 +526,92 @@ function generateBillForStudent(db, studentId, termId) {
   return { ok: true, id };
 }
 
+
+// ── Recording a fees payment ────────────────────────────────────────────────
+//
+// Lifted out of the IPC handler so the payment desk, which takes money for
+// every purpose from one screen, posts school fees through THIS code rather
+// than a second copy of it. A second copy is how a payment ends up in the
+// receipts table and not in the ledger.
+//
+// `data.purpose` is carried for the receipt and the ledger description only:
+// an excursion paid for at the counter is still a payment against the term
+// bill, and must reduce the same balance, but the parent's receipt should say
+// what they handed the money over for.
+function recordFeesPayment(db, data) {
+  const receiptCounter = getNextReceiptNumber(db);
+  const year = new Date().getFullYear().toString().slice(-2);
+  const receiptNo = `FE/${year}/${String(receiptCounter).padStart(5, '0')}`;
+  const payDate = data.payment_date || new Date().toISOString().slice(0, 10);
+
+  const tx = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO payments (student_id, student_bill_id, term_id, amount, payment_date,
+        payment_method, reference, received_by, notes, receipt_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.student_id, data.student_bill_id || null, data.term_id,
+      data.amount, payDate, data.payment_method || 'Cash',
+      data.reference || '', data.received_by || null, data.notes || '', receiptNo
+    );
+
+    // The bill's totals are RE-DERIVED from the payments table rather than
+    // incremented. An increment drifts the moment anything else touches the
+    // bill — a reversal, a corrected line, a replaced schedule — and a
+    // balance that has drifted is a parent chased for money they have paid.
+    if (data.student_bill_id) {
+      billing.recomputeBillPaid(db, data.student_bill_id);
+    }
+
+    // What the parent handed the money over for, in the ledger and on the
+    // receipt. An excursion paid at the counter is still a payment against the
+    // term bill, but "School fees payment" on the paper is not what the parent
+    // asked for and not what they will recognise when they query it.
+    const purposeLabel = data.purpose === 'extra_charges' ? 'Extra charges' : 'School fees';
+
+    // Auto-record into the finance ledger via the central posting helper.
+    // This guarantees transaction_date + term_id are always set, so the
+    // income can never fall out of the term-scoped finance reports.
+    postIncome(db, {
+      receipt_number: receiptNo,
+      category: 'fees',
+      amount: data.amount,
+      description: `${purposeLabel} payment — ${receiptNo}`,
+      payment_method: data.payment_method || 'Cash',
+      reference: data.reference || null,
+      date: payDate,
+      source: 'student_payment',
+      student_id: data.student_id,
+      term_id: data.term_id || null,
+      linked_payment_id: result.lastInsertRowid,
+      recorded_by: data.received_by || null,
+      is_auto: 1,
+    });
+
+    return result.lastInsertRowid;
+  });
+
+  try {
+    const paymentId = tx();
+    // Auto-generate a durable receipt for every fee payment, and auto-deliver
+    // it to the parent by SMS/email if that's enabled in Settings (best-effort).
+    let receipt = null;
+    try { receipt = autoReceiptForPayment(db, 'fees', paymentId); } catch (_) {}
+    let delivery = null;
+    try { delivery = autoDeliverReceipt(db, 'fees', paymentId); } catch (_) {}
+    return { ok: true, id: paymentId, receipt_number: receiptNo, receipt_id: receipt?.id || null, delivered: delivery?.channels || [] };
+  } catch (e) {
+    // Log the failure to the audit trail instead of swallowing it
+    try {
+      db.prepare(`
+        INSERT INTO audit_log (entity_type, entity_id, action, justification, severity)
+        VALUES ('payment', ?, 'auto_record_failed', ?, 'high')
+      `).run(data.student_id || null, `Fees payment auto-record failed: ${e.message}`);
+    } catch (_) {}
+    return { ok: false, error: `Payment could not be recorded: ${e.message}` };
+  }
+}
+
 module.exports = registerFeesHandlers;
 // The browser raises bills through this same function. Before it was exported,
 // electron/server/office_api.js had its own copy of bill generation with a
@@ -604,3 +622,4 @@ module.exports = registerFeesHandlers;
 // preserved across a regeneration and the refusal to resurrect a withdrawn
 // bill are all in here; none of them was in the copy.
 module.exports.generateBillForStudent = generateBillForStudent;
+module.exports.recordPayment = recordFeesPayment;

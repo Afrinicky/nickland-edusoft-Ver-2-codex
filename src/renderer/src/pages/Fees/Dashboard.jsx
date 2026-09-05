@@ -39,6 +39,31 @@ export default function FeesDashboard({ onSwitchTab }) {
 
   return (
     <div className="fees-dashboard">
+      {/* ── The one thing this module is opened to do ─────────────────
+          Bills are raised three times a year. Money is taken every morning
+          of the term, and a bursar who has just opened Fees has almost always
+          come to take some. It is the first thing on the screen and it is
+          bold, because the alternative is reading four cards to find a tab. */}
+      <div className="card" style={{ marginBottom: 16, borderColor: 'var(--primary)' }}>
+        <div className="row gap-2" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 260px' }}>
+            <div className="card-title">Somebody at the counter?</div>
+            <div className="text-sm text-muted">
+              School fees, books, the canteen, the bus, an extra charge — one form
+              takes the money for any of it and prints the receipt straight away.
+            </div>
+          </div>
+          <button className="btn btn-primary"
+            style={{ fontSize: 16, padding: '14px 26px', fontWeight: 700 }}
+            onClick={() => onSwitchTab('takepayment')}>
+            + Take a Payment
+          </button>
+          <button className="btn btn-outline" onClick={() => onSwitchTab('bulkpay')}>
+            Collection day — bulk sheet
+          </button>
+        </div>
+      </div>
+
       {/* Metrics */}
       <div className="dash-metrics" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <div className="metric-card">
@@ -71,6 +96,7 @@ export default function FeesDashboard({ onSwitchTab }) {
             <div className="metric-label">Collected So Far</div>
             <div className="metric-value success">{fmtCedi(m.total_collected)}</div>
             <div className="metric-sub">{m.payment_count} payments</div>
+            <div className="metric-link" onClick={() => onSwitchTab('payments')}>See the register →</div>
           </div>
         </div>
         <div className="metric-card">

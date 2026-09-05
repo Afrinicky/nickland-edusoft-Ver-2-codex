@@ -61,7 +61,7 @@ module.exports = function registerReceiptTemplatesHandlers(ipcMain, db, userData
     const model = engine.buildReceiptModel(db, type, paymentId);
     if (!model) return { ok: false, error: 'Payment not found for receipt.' };
     const school = engine.schoolInfo(db, getResourcePath);
-    const paperSize = options.paperSize || getSetting(db, 'receipt_paper_size', 'A4');
+    const paperSize = options.paperSize || getSetting(db, 'receipt_paper_size', 'roll80');
     const html = engine.renderReceiptHtml(school, model, paperSize);
     const safeName = (model.receipt_number || `receipt_${type}_${paymentId}`).replace(/[/\\:*?"<>|]/g, '_');
     const outPath = path.join(receiptsDir(), `${safeName}.pdf`);

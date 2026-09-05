@@ -492,6 +492,17 @@ const api = {
     printToPdf:          (html, opts)        => ipcRenderer.invoke('reports:print-to-pdf', { html, options: opts }),
   },
 
+  // ── The payment desk ──────────────────────────────────
+  // One counter, every purpose. Dispatches to each module's own recorder.
+  payments: {
+    purposes:       ()      => ipcRenderer.invoke('payments:purposes'),
+    findStudents:   (f)     => ipcRenderer.invoke('payments:find-students', f || {}),
+    studentAccount: (d)     => ipcRenderer.invoke('payments:student-account', d),
+    take:           (d)     => ipcRenderer.invoke('payments:take', d),
+    receipt:        (d)     => ipcRenderer.invoke('payments:receipt', d),
+    register:       (f)     => ipcRenderer.invoke('payments:register', f || {}),
+  },
+
   // ── Settings ──────────────────────────────────────────
   settings: {
     getAll:            ()                    => ipcRenderer.invoke('settings:get-all'),

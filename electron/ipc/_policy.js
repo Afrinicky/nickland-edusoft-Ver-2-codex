@@ -174,6 +174,13 @@ const POLICY = {
   'books:class-payment-sheet':          ['fees', 'view'],
   'fees:bulk-pay-sheet':                ['fees', 'view'],
   'fees:bills-summary':                 ['fees', 'view'],
+  'payments:purposes':                  ['fees', 'view'],
+  'payments:find-students':             ['fees', 'view'],
+  'payments:student-account':           ['fees', 'view'],
+  'payments:receipt':                   ['fees', 'view'],
+  'payments:register':                  ['fees', 'view'],
+  // Taking money is a create, whatever it is for.
+  'payments:take':                      ['fees', 'create'],
   'fees:school-fees-plan':              ['fees', 'view'],
   'fees:frameworks':                    ['fees', 'view'],
   'reports:generate-canteen-bills':     ['fees', 'view'],
