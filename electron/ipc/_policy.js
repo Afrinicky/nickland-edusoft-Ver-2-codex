@@ -173,6 +173,11 @@ const POLICY = {
   // everybody so that these ten can through.
   'books:class-payment-sheet':          ['fees', 'view'],
   'fees:bulk-pay-sheet':                ['fees', 'view'],
+  'fees:bills-summary':                 ['fees', 'view'],
+  'fees:school-fees-plan':              ['fees', 'view'],
+  'fees:frameworks':                    ['fees', 'view'],
+  'reports:generate-canteen-bills':     ['fees', 'view'],
+  'reports:generate-books-bills':       ['fees', 'view'],
   'workbook:import-history':            ['finance', 'view'],
   'payroll:paid-summary':               ['payroll', 'view'],
   'payroll:bulk-preview':               ['payroll', 'view'],

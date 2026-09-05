@@ -22,6 +22,7 @@ const registerStudentsSheetHandlers = require('./ipc/students_sheet');
 const registerAcademicsHandlers = require('./ipc/academics');
 const registerFeesExtraHandlers = require('./ipc/fees_extra');
 const registerFeesBillingHandlers = require('./ipc/fees_billing');
+const registerSchoolFeesHandlers = require('./ipc/fees_schoolfees');
 const registerFinanceWorkbookHandlers = require('./ipc/finance_workbook');
 const registerCanteenExtraHandlers = require('./ipc/canteen_extra');
 const registerStaffHrHandlers = require('./ipc/staff_hr');
@@ -251,6 +252,8 @@ app.whenReady().then(async () => {
   mount('academics', () => registerAcademicsHandlers(guarded, db));
   mount('fees.extra', () => registerFeesExtraHandlers(guarded, db));
   mount('fees.billing', () => registerFeesBillingHandlers(guarded, db));
+  // Raising the term's school fees is one action, so it has one module.
+  mount('fees.schoolfees', () => registerSchoolFeesHandlers(guarded, db, require('./ipc/fees')));
   mount('finance.workbook', () => registerFinanceWorkbookHandlers(guarded, db, app, userDataPath));
   mount('canteen.extra', () => registerCanteenExtraHandlers(guarded, db));
   mount('staff.hr', () => registerStaffHrHandlers(guarded, db, userDataPath));

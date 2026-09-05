@@ -22,6 +22,16 @@ function registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath) {
   ipcMain.handle('reports:generate-receipt', async (_e, { paymentId, options }) => {
     return await generateReceipt(db, userDataPath, getResourcePath, paymentId, options || {});
   });
+  // Canteen and books bills print on the SAME stationery as the fees bill —
+  // same header, same part-sectioned layout, same amount-due box. A school that
+  // hands a parent three bills that look like three different schools' bills
+  // has a problem no feature makes up for.
+  ipcMain.handle('reports:generate-canteen-bills', async (_e, params) => {
+    return await generateCanteenBills(db, userDataPath, getResourcePath, params || {});
+  });
+  ipcMain.handle('reports:generate-books-bills', async (_e, params) => {
+    return await generateBooksBills(db, userDataPath, getResourcePath, params || {});
+  });
   ipcMain.handle('reports:debtors-list', async (_e, { termId, options }) => {
     return await generateDebtorsList(db, userDataPath, getResourcePath, termId, options || {});
   });
@@ -890,6 +900,226 @@ async function generateBillsPdf(db, userDataPath, getResourcePath, params) {
   if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
   await htmlToPdf(html, outPath);
   return { ok: true, path: outPath, count: pages.length };
+}
+
+// === Canteen bill ===
+//
+// The canteen is billed by the day: the daily rate times the feeding days on
+// the term's calendar, less whatever has already been paid for. It prints on
+// the fees bill's stationery, in the same part-sectioned layout, because to a
+// parent it is the same school asking for money on the same morning.
+async function generateCanteenBills(db, userDataPath, getResourcePath, params) {
+  const { termId, studentIds = [], dailyRate, colorMode = 'color' } = params;
+  const header = getSchoolHeader(db, getResourcePath, colorMode);
+
+  const term = db.prepare(`
+    SELECT t.*, y.label AS year_label FROM terms t
+    LEFT JOIN academic_years y ON y.id = t.academic_year_id WHERE t.id = ?`).get(termId);
+  if (!term) return { ok: false, error: 'Term not found' };
+
+  const rate = Number(dailyRate) || parseFloat(getSetting(db, 'canteen_daily_rate', '0')) || 0;
+  const days = db.prepare(`
+    SELECT date FROM school_calendar
+    WHERE term_id = ? AND day_type = 'school_day' ORDER BY date`).all(termId);
+  if (days.length === 0) {
+    return { ok: false, error: 'The term’s canteen calendar has not been laid out, so there is nothing to bill.' };
+  }
+  const first = days[0].date, last = days[days.length - 1].date;
+
+  const pages = [];
+  for (const id of studentIds) {
+    const student = db.prepare(`
+      SELECT s.*, c.name AS class_name FROM students s
+      LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?`).get(id);
+    if (!student) continue;
+
+    // What this pupil has already settled for the term's feeding period.
+    const paid = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS t FROM canteen_payments
+      WHERE student_id = ? AND payment_date BETWEEN ? AND ?`).get(id, first, last).t || 0;
+    const daysPaid = db.prepare(`
+      SELECT COUNT(*) AS n FROM canteen_day_status
+      WHERE student_id = ? AND status = 'paid' AND date BETWEEN ? AND ?`).get(id, first, last).n || 0;
+
+    pages.push(dayBillHtml(header, {
+      title: `CANTEEN BILL — ${(term.label || '').toUpperCase()}`,
+      sectionTitle: `PART A — Feeding, ${termFullLabel(term)}`,
+      student,
+      termLabel: termFullLabel(term),
+      period: `${first} to ${last}`,
+      rows: [
+        ['Feeding days on the term calendar', String(days.length)],
+        ['Daily rate', `GHS ${rate.toFixed(2)}`],
+        ['Days already settled', String(daysPaid)],
+      ],
+      total: Math.round(days.length * rate * 100) / 100,
+      paid: Math.round(paid * 100) / 100,
+      footnote: 'The canteen is charged for the days the school actually opens. '
+              + 'A day the school does not open is not billed.',
+    }));
+  }
+
+  const html = `<!doctype html><html><head><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
+  const outPath = path.join(userDataPath, 'reports', `canteen_bills_${Date.now()}.pdf`);
+  if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  await htmlToPdf(html, outPath);
+  return { ok: true, path: outPath, count: pages.length };
+}
+
+// === Books bill ===
+//
+// Books are charged once for the academic year and carried into Terms 2 and 3
+// as arrears, so the bill is a list of the titles issued and what is left to
+// pay on them.
+async function generateBooksBills(db, userDataPath, getResourcePath, params) {
+  const { academicYearId, studentIds = [], colorMode = 'color' } = params;
+  const header = getSchoolHeader(db, getResourcePath, colorMode);
+  const yearId = academicYearId
+    || (db.prepare('SELECT id FROM academic_years WHERE is_current = 1').get() || {}).id;
+  const year = db.prepare('SELECT * FROM academic_years WHERE id = ?').get(yearId);
+  if (!year) return { ok: false, error: 'No academic year is set.' };
+
+  const pages = [];
+  for (const id of studentIds) {
+    const student = db.prepare(`
+      SELECT s.*, c.name AS class_name FROM students s
+      LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?`).get(id);
+    if (!student) continue;
+    const record = db.prepare(
+      'SELECT * FROM student_books WHERE student_id = ? AND academic_year_id = ?').get(id, yearId);
+    const items = record
+      ? db.prepare('SELECT * FROM student_books_items WHERE student_books_id = ? ORDER BY display_order, id').all(record.id)
+      : [];
+
+    pages.push(itemisedBillHtml(header, {
+      title: `BOOKS BILL — ${year.label}`,
+      sectionTitle: `PART A — Books issued, ${year.label}`,
+      student,
+      termLabel: year.label,
+      items: items.map((it, n) => ({ item_number: n + 1, description: it.title, amount: it.amount })),
+      total: Math.round((record ? record.total_amount : 0) * 100) / 100,
+      paid: Math.round((record ? record.total_paid : 0) * 100) / 100,
+      footnote: 'Books are charged once for the academic year. Anything unpaid is '
+              + 'carried into the following terms as arrears on the school fees bill.',
+    }));
+  }
+
+  const html = `<!doctype html><html><head><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
+  const outPath = path.join(userDataPath, 'reports', `books_bills_${Date.now()}.pdf`);
+  if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  await htmlToPdf(html, outPath);
+  return { ok: true, path: outPath, count: pages.length };
+}
+
+/** A term named with its academic year, so two "First Term"s can be told apart. */
+function termFullLabel(term) {
+  if (!term) return '';
+  return term.year_label ? `${term.label} · ${term.year_label}` : term.label;
+}
+
+/** The identity block every bill in this system opens with. */
+function billIdentityHtml(student, extra) {
+  const fullName = `${student.surname || ''} ${student.first_name || ''} ${student.other_names || ''}`.trim();
+  return `
+    <table style="margin-bottom:2.5mm; border:0.5pt solid #bbb;">
+      <tr>
+        <td style="width:33%;"><b>Index No:</b> ${student.index_number || '—'}</td>
+        <td style="width:33%;"><b>Class:</b> ${student.class_name || '—'}</td>
+        <td><b>Issued:</b> ${new Date().toISOString().slice(0, 10)}</td>
+      </tr>
+      <tr><td colspan="3"><b>Student:</b> ${fullName.toUpperCase()}</td></tr>
+      ${extra ? `<tr><td colspan="3">${extra}</td></tr>` : ''}
+    </table>`;
+}
+
+/** The amount-due box the fees bill ends with, reused verbatim. */
+function billDueHtml(header, total, paid) {
+  const balance = Math.round((total - paid) * 100) / 100;
+  const red = '#b91c1c';
+  return `
+    <div class="bill-section" style="margin-top:3.5mm;">
+      <table style="border:1.2pt solid ${header.primaryColor};">
+        <tr class="bill-due" style="background:${tint(header.primaryColor)}; color:${header.primaryColor}; border-bottom:0.8pt solid ${header.primaryColor};">
+          <td class="bold">TOTAL AMOUNT DUE</td>
+          <td class="text-right bold">GHS ${total.toFixed(2)}</td>
+        </tr>
+        <tr><td class="text-right">Paid to date</td><td class="text-right">${paid.toFixed(2)}</td></tr>
+        <tr class="row-total" style="background:${balance > 0 ? tint(red) : tint('#15803D')}; color:${balance > 0 ? red : '#15803D'};">
+          <td class="text-right">BALANCE OUTSTANDING</td>
+          <td class="text-right" style="font-size:11pt;">GHS ${balance.toFixed(2)}</td>
+        </tr>
+      </table>
+    </div>`;
+}
+
+/** A bill whose body is a handful of stated figures (the canteen's). */
+function dayBillHtml(header, m) {
+  return `
+    <div class="page bill-page">
+      ${schoolHeaderHtml(header)}
+      <div class="bill-title-bar" style="background:${header.primaryColor}; color:#fff;">${m.title}</div>
+      ${billIdentityHtml(m.student, m.period ? `<b>Period:</b> ${m.period}` : '')}
+      <div class="bill-section">
+        <div class="bill-section-title" style="--accent:${header.primaryColor}; --accent-tint:${tint(header.primaryColor)};">
+          ${m.sectionTitle}
+        </div>
+        <table style="border:0.6pt solid #ccc;">
+          <tbody>
+            ${m.rows.map(([k, v]) => `<tr><td>${k}</td><td class="text-right">${v}</td></tr>`).join('')}
+            <tr class="row-total" style="background:${tint(header.primaryColor)};">
+              <td class="text-right">Charged for the term</td>
+              <td class="text-right">${m.total.toFixed(2)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      ${billDueHtml(header, m.total, m.paid)}
+      <div style="margin-top:4mm; font-size:8.5pt; color:#444; border-top:0.5pt dashed #999; padding-top:2mm;">
+        ${m.footnote} Payment may be made by Cash, Mobile Money, or Bank Transfer.
+      </div>
+    </div>`;
+}
+
+/** A bill whose body is a numbered list of particulars (the books bill's). */
+function itemisedBillHtml(header, m) {
+  return `
+    <div class="page bill-page">
+      ${schoolHeaderHtml(header)}
+      <div class="bill-title-bar" style="background:${header.primaryColor}; color:#fff;">${m.title}</div>
+      ${billIdentityHtml(m.student, '')}
+      <div class="bill-section">
+        <div class="bill-section-title" style="--accent:#0f766e; --accent-tint:${tint('#0f766e')};">
+          ${m.sectionTitle}
+        </div>
+        <table style="border:0.6pt solid #bcdad7;">
+          <thead>
+            <tr>
+              <th class="text-center" style="width:8%;">#</th>
+              <th>Description</th>
+              <th class="text-right" style="width:25%;">Amount (GHS)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${m.items.length === 0
+              ? `<tr><td colspan="3" class="text-center" style="color:#888; padding:3mm 0;">Nothing has been issued to this pupil</td></tr>`
+              : m.items.map(i => `
+                  <tr>
+                    <td class="text-center">${i.item_number}</td>
+                    <td>${i.description}</td>
+                    <td class="text-right">${(i.amount || 0).toFixed(2)}</td>
+                  </tr>`).join('')}
+            <tr class="row-total" style="background:${tint('#0f766e')};">
+              <td colspan="2" class="text-right">Total charged</td>
+              <td class="text-right">${m.total.toFixed(2)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      ${billDueHtml(header, m.total, m.paid)}
+      <div style="margin-top:4mm; font-size:8.5pt; color:#444; border-top:0.5pt dashed #999; padding-top:2mm;">
+        ${m.footnote}
+      </div>
+    </div>`;
 }
 
 // Ink budget for the bill.

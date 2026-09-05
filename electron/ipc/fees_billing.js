@@ -423,12 +423,13 @@ module.exports = function registerFeesBillingHandlers(ipcMain, db) {
   ipcMain.handle('fees:list-voided-bills', (_e, termId) => {
     return db.prepare(`
       SELECT b.*, s.index_number, s.surname, s.first_name,
-             c.name AS class_name, t.label AS term_label,
+             c.name AS class_name, t.label AS term_label, y.label AS year_label,
              u.full_name AS voided_by_name
       FROM student_bills b
       JOIN students s ON s.id = b.student_id
       LEFT JOIN class_groups c ON c.id = s.current_class_id
       JOIN terms t ON t.id = b.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
       LEFT JOIN users u ON u.id = b.voided_by
       WHERE COALESCE(b.status, 'active') = 'voided'
         AND (? IS NULL OR b.term_id = ?)

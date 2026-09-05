@@ -353,6 +353,11 @@ const api = {
     // Billing administration — issuing extras and withdrawing bills.
     // Every mutating call here is re-checked against the caller's designation
     // on the Node side; the permissions probe only drives what the UI shows.
+    // Raising the term's school fees, and the frameworks a bill starts from.
+    frameworks:        (billType)            => ipcRenderer.invoke('fees:frameworks', billType),
+    schoolFeesPlan:    (data)                => ipcRenderer.invoke('fees:school-fees-plan', data || {}),
+    raiseSchoolFees:   (data)                => ipcRenderer.invoke('fees:raise-school-fees', data),
+    billsSummary:      (termId)              => ipcRenderer.invoke('fees:bills-summary', termId),
     billingPermissions: ()                   => ipcRenderer.invoke('fees:billing-permissions'),
     billingOverview:   (termId)              => ipcRenderer.invoke('fees:billing-overview', termId),
     applySupplementary:(data)                => ipcRenderer.invoke('fees:apply-supplementary', data),
@@ -480,6 +485,8 @@ const api = {
     generateReceipt:     (paymentId, opts)   => ipcRenderer.invoke('reports:generate-receipt', { paymentId, options: opts }),
     generateStudentProfile: (studentId, opts) => ipcRenderer.invoke('reports:generate-student-profile', { studentId, options: opts }),
     generateAttestation: (studentId, kind, opts) => ipcRenderer.invoke('reports:generate-attestation', { studentId, kind, options: opts }),
+    generateCanteenBills: (params)           => ipcRenderer.invoke('reports:generate-canteen-bills', params),
+    generateBooksBills:  (params)            => ipcRenderer.invoke('reports:generate-books-bills', params),
     generateDebtorsList: (termId, opts)      => ipcRenderer.invoke('reports:debtors-list', { termId, options: opts }),
     generateClassList:   (classId, opts)     => ipcRenderer.invoke('reports:class-list', { classId, options: opts }),
     printToPdf:          (html, opts)        => ipcRenderer.invoke('reports:print-to-pdf', { html, options: opts }),

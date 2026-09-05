@@ -496,6 +496,86 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
     });
   });
 
+  // ══ Raising the term's school fees ═════════════════════════════════════════
+  //
+  // The browser gets the desktop's own engine, not a second implementation of
+  // it. Everything the rule depends on — one school fees bill per term,
+  // replacing rather than shadowing, money already received surviving a
+  // correction — lives in electron/ipc/fees_schoolfees.js, and a browser that
+  // did its own version of that would eventually disagree with the desktop
+  // about what a parent owes.
+
+  add('GET', `${API}/fees/frameworks`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const frameworks = require('../ipc/_frameworks');
+    return json(res, 200, {
+      ok: true,
+      frameworks: frameworks.listFrameworks((query && query.billType) || null),
+    });
+  });
+
+  // What raising would do, before anything is written: which schedule is being
+  // replaced, how many bills stand against it, and how much money is on them.
+  add('GET', `${API}/fees/school-fees/plan`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const sf = require('../ipc/fees_schoolfees');
+    const billing = require('../ipc/_billing');
+    const term = int(query && query.termId) || (currentTerm() || {}).id;
+    if (!term) return bad(res, 'No term is running, so there is nothing to bill for.');
+
+    const classIds = String((query && query.classIds) || '')
+      .split(',').map(v => parseInt(v, 10)).filter(Boolean);
+    const targets = sf.resolveClasses(db, { scope: query && query.scope, classId: int(query && query.classId), classIds });
+    const students = sf.studentsForClasses(db, targets.classIds, targets.wholeSchool);
+    const existing = sf.existingSchedules(db, term, targets);
+    const raised = db.prepare(`
+      SELECT COUNT(*) AS n, COALESCE(SUM(total_billed),0) AS billed, COALESCE(SUM(total_paid),0) AS paid
+      FROM student_bills WHERE term_id = ? AND COALESCE(status,'active') = 'active'`).get(term);
+    const t = billing.termWithYear(db, term);
+
+    return json(res, 200, {
+      ok: true,
+      term: { id: t.id, label: t.label, year_label: t.year_label, full_label: billing.termLabel(t) },
+      scope: targets.wholeSchool ? 'school' : 'classes',
+      class_names: targets.classNames,
+      student_count: students.length,
+      existing_schedules: existing,
+      replaces: existing.length > 0,
+      bills_already_raised: raised.n,
+      already_billed: num(raised.billed),
+      already_paid: num(raised.paid),
+    });
+  });
+
+  add('POST', `${API}/fees/school-fees`, async (ctx, req, res, params, body) => {
+    if (!gate(ctx, res, 'fees', 'create')) return undefined;
+    // Raising the term's fees changes what every family in the school is asked
+    // to pay. That is a different question from "may this person take a
+    // payment", and it is answered the same way on both hosts.
+    if (!elevated(ctx, res, "raise or replace a term's school fees")) return undefined;
+
+    const sf = require('../ipc/fees_schoolfees');
+    const fees = require('../ipc/fees');
+    const termId = int(body.termId) || (currentTerm() || {}).id;
+    const result = sf.raiseSchoolFees(db, fees, { ...body, termId });
+    if (!result.ok) {
+      return json(res, result.code === 'REPLACE_REQUIRED' ? 409 : 400, result);
+    }
+    audit(db, ctx, 'fee_template', null, 'raise_school_fees',
+      `${result.generated} bill(s) at GHS ${result.per_pupil} — ${result.term.full_label}`, 'high');
+    return json(res, 200, result);
+  });
+
+  // Everything a school has billed this term, one row per kind, with the
+  // debtors merged in. The Bills home is a screen, not five.
+  add('GET', `${API}/fees/bills/summary`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'fees')) return undefined;
+    const sf = require('../ipc/fees_schoolfees');
+    const summary = sf.billsSummary(db, int(query && query.termId) || (currentTerm() || {}).id);
+    if (!summary.ok) return bad(res, summary.error);
+    return json(res, 200, summary);
+  });
+
   /** What a granted discount takes off a bill of `total`. */
   function discountFor(studentId, total) {
     const d = db.prepare(`

@@ -1,180 +1,20 @@
-// Nickland Edusoft — Student Bills.
+// Nickland Edusoft — One pupil's bill.
 //
-// The list of what each pupil owes this term, and the one place a bill can be
-// issued, corrected or withdrawn. Bills have clearly-separated sections:
-//   1. School Fees (tuition and the standing levies — once per term)
-//   2. Additional charges raised during the term (excursion, sports week…)
-//   3. Books (billed once per academic year, carried into T2/T3 as Arrears)
-//
-// Correcting or withdrawing an issued bill is restricted to the Proprietor and
-// the Super Admin. A bill is what a parent was told they owe, so changing one
-// after the fact is a decision with consequences; the controls are hidden from
-// everyone else and the Node side refuses the call regardless.
+// The full printable view — school fees, the extras raised during the term,
+// and the books charged for the academic year — plus the controls for
+// correcting or withdrawing it, which only the Proprietor and the Super Admin
+// see. Lifted out of the bills LIST because the School Fees tab and the
+// pupil-account lookup both open the same thing, and two copies of a bill
+// layout is two bills that eventually disagree.
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { fmtCedi, fmtDate } from '../../lib/format.js';
-import { previewBills } from '../../lib/printHelpers.js';
 import Modal from '../../components/Modal.jsx';
+import { previewBills } from '../../lib/printHelpers.js';
 import { mediaUrl } from '../../lib/media.js';
 
-export default function BillsTab({ overview, perms = {}, onChanged, onGoToTemplates }) {
-  const currentTerm = useStore(s => s.currentTerm);
-  const classes = useStore(s => s.classes);
-  const showToast = useStore(s => s.showToast);
-  const [bills, setBills] = useState([]);
-  const [classFilter, setClassFilter] = useState('');
-  const [owingOnly, setOwingOnly] = useState(false);
-  const [openedBillId, setOpenedBillId] = useState(null);
-  const [busy, setBusy] = useState(false);
-
-  async function refresh() {
-    if (!currentTerm) return;
-    const list = await window.api.fees.listBills({
-      termId: currentTerm.id,
-      classId: classFilter || undefined,
-      owing: owingOnly || undefined,
-    });
-    setBills(list);
-  }
-  useEffect(() => { refresh(); }, [currentTerm, classFilter, owingOnly]);
-
-  async function bulkGen(scope) {
-    if (!currentTerm) return;
-    const label = scope === 'class'
-      ? (classes.find(c => String(c.id) === String(classFilter))?.name || 'this class')
-      : 'every active pupil';
-    if (!window.confirm(
-      `Generate this term's school fees bill for ${label}?\n\n` +
-      `Pupils who already have a bill will have theirs refreshed from the current ` +
-      `fee template. Payments already received, and any extra charges raised this ` +
-      `term, are kept.`
-    )) return;
-
-    setBusy(true);
-    const res = await window.api.fees.generateBillsBulk({
-      termId: currentTerm.id,
-      scope,
-      classId: scope === 'class' ? classFilter || undefined : undefined,
-    });
-    setBusy(false);
-    if (!res?.ok) return showToast(res?.error || 'Bills could not be generated', 'error');
-
-    if (res.generated > 0) showToast(`Generated ${res.generated} bill(s)`, 'success');
-    // Silent skips are how a school ends up with unbilled pupils and no idea
-    // why, so the reason is reported rather than counted and dropped.
-    if (res.skipped > 0) {
-      const reason = res.problems?.[0]?.reason || 'no reason recorded';
-      showToast(`${res.skipped} pupil(s) skipped — ${reason}`, res.generated > 0 ? 'warning' : 'error');
-    }
-    refresh();
-    onChanged?.();
-  }
-
-  if (openedBillId) {
-    return (
-      <BillDetail billId={openedBillId} perms={perms}
-        onClose={() => { setOpenedBillId(null); refresh(); onChanged?.(); }} />
-    );
-  }
-
-  const noTemplate = (overview?.coverage || []).some(c => c.template_scope === 'none' && c.active_students > 0);
-
-  return (
-    <div className="card">
-      <div className="toolbar">
-        <select className="select" value={classFilter}
-          onChange={e => setClassFilter(e.target.value)} style={{ maxWidth: 200 }}>
-          <option value="">All classes</option>
-          {classes.map(c => <option key={c.id} value={c.id ?? ''}>{c.name}</option>)}
-        </select>
-        <label className="row gap-2">
-          <input type="checkbox" checked={owingOnly} onChange={e => setOwingOnly(e.target.checked)} />
-          Owing only
-        </label>
-        <div className="flex-1"></div>
-        {bills.length > 0 && (
-          <button className="btn btn-ghost" onClick={async () => {
-            const r = await previewBills(bills.map(b => b.id));
-            if (!r.ok) showToast(r.error, 'error');
-          }}>🖨 Print {bills.length} bill(s)</button>
-        )}
-        <button className="btn btn-outline" disabled={busy} onClick={() => bulkGen('class')}
-          title={classFilter ? '' : 'Choose a class first'}>
-          Generate for class
-        </button>
-        <button className="btn btn-primary" disabled={busy} onClick={() => bulkGen('all')}>
-          {busy ? 'Working…' : 'Generate ALL bills'}
-        </button>
-      </div>
-
-      {noTemplate && (
-        <div className="text-sm" style={{ padding: '8px 12px', color: 'var(--danger)' }}>
-          Some classes have no fee template, so their pupils cannot be billed at all.
-          <button className="btn btn-ghost btn-sm" onClick={onGoToTemplates}>Fix in Fee Templates →</button>
-        </div>
-      )}
-
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Index No</th><th>Name</th><th>Class</th>
-              <th className="text-right">Total Billed</th>
-              <th className="text-right">Paid</th>
-              <th className="text-right">Balance</th>
-              <th>Generated</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {bills.map(b => (
-              <tr key={b.id} style={{ cursor: 'pointer' }} onClick={() => setOpenedBillId(b.id)}>
-                <td className="bold">{b.index_number}</td>
-                <td>
-                  {b.surname} {b.first_name}
-                  {(b.supplementary_total || 0) > 0 && (
-                    <span className="badge badge-muted" style={{ marginLeft: 6 }}
-                      title="Includes charges raised during the term">
-                      +{fmtCedi(b.supplementary_total)}
-                    </span>
-                  )}
-                </td>
-                <td>{b.class_name}</td>
-                <td className="text-right">{fmtCedi(b.total_billed || 0)}</td>
-                <td className="text-right">{fmtCedi(b.total_paid || 0)}</td>
-                <td className="text-right bold"
-                  style={{ color: (b.balance || 0) > 0 ? 'var(--danger)' : 'var(--success)' }}>
-                  {fmtCedi(b.balance || 0)}
-                </td>
-                <td className="text-sm text-muted">{fmtDate(b.generated_at)}</td>
-                <td><button className="btn btn-ghost btn-sm">Open →</button></td>
-              </tr>
-            ))}
-            {bills.length === 0 && (
-              <tr>
-                <td colSpan="8">
-                  <div className="empty-state">
-                    <h3>No bills for this term yet</h3>
-                    <p>
-                      Make sure the term's fee template is set up, then use
-                      <b> Generate ALL bills</b>.
-                    </p>
-                    <button className="btn btn-outline btn-sm" onClick={onGoToTemplates}>
-                      Open Fee Templates
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 // ── BillDetail: full printable view with Fees + Extras + Books sections ──
-function BillDetail({ billId, perms = {}, onClose }) {
+export default function BillDetail({ billId, perms = {}, onClose }) {
   const { settings } = useStore();
   const showToast = useStore(s => s.showToast);
   const [bill, setBill] = useState(null);
