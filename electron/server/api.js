@@ -21,6 +21,7 @@ const { registerStaffRoutes } = require('./staff_api');
 const { registerFinanceRoutes } = require('./finance_api');
 const { registerAdminRoutes } = require('./admin_api');
 const registerOfficeRoutes = require('./office_api');
+const { registerDashboardRoutes } = require('./dashboards_api');
 const { registerPaymentRoutes, onlinePaymentsEnabled } = require('./payments_api');
 const portals = require('../ipc/_portals');
 // Required at call-time (not destructured at load) to avoid a load-order
@@ -506,11 +507,45 @@ function createApiServer(db, opts = {}) {
         feature_paye_enabled:             getSetting(db, 'feature_paye_enabled', ''),
         staff_clockin_enabled:            getSetting(db, 'staff_clockin_enabled', ''),
       },
+      // The term the school is actually in, and whether it is sitting or on
+      // vacation. The desktop's top bar has carried both since the first
+      // release — the year and term in a pill on the right, and a green or
+      // amber chip beside it saying "School in Session" or "On Vacation ·
+      // Reopens in 4d". The browser's top bar had neither, so the one piece of
+      // chrome that tells somebody WHEN they are was missing from half the
+      // product.
+      //
+      // Read from the same calendar the desktop reads, with the same manual
+      // override honoured. Sent with the profile rather than as its own route
+      // because it changes at most once a day and the chrome already reloads
+      // the profile on resume; a poll every five minutes for a fact that turns
+      // over twice a term is a request a school pays for and does not need.
+      ...academicSession(),
       // So the phone insists on a new password before anything else, the same
       // way the desktop's login screen does.
       must_change_password: !!ctx.user.must_change_password,
     });
   });
+
+  // The term and the session, or nothing at all if the school has not set its
+  // calendar up. Nothing is the honest answer there: a top bar that invents
+  // "Third Term" for a school that has entered no terms is worse than a top
+  // bar with a gap in it.
+  function academicSession() {
+    try {
+      const s = require('../ipc/session').sessionStatus(db);
+      if (!s || !s.term) return {};
+      return {
+        term: s.term,
+        session: {
+          status: s.status,
+          days_to_vacation: s.days_to_vacation,
+          days_to_reopen: s.days_to_reopen,
+          next_term: s.next_term ? s.next_term.label : null,
+        },
+      };
+    } catch (_) { return {}; }
+  }
 
   add('POST', `${API}/auth/password`, async (ctx, req, res, params, body) => {
     // Staff only: a parent's password lives in the parents table and has its
@@ -1505,6 +1540,12 @@ function createApiServer(db, opts = {}) {
   // the notification log, activities, budgets and the cashbook — everything the
   // browser app needs on the school's own Wi-Fi that used to live behind IPC.
   registerOfficeRoutes({ add, db, json, can, API, getSetting, audit });
+
+  // The dashboards themselves — the installed application's own summary
+  // screens, served to the browser so the two are one product rather than two
+  // designs sharing a database. Read-only, one route per module, each behind
+  // the module permission the desktop checks. See server/dashboards_api.js.
+  registerDashboardRoutes({ add, db, json, can, API, getSetting });
 
   // Money moving in from outside the school: a parent's checkout, the
   // gateway's webhook, and the office's verification of a charge nobody heard

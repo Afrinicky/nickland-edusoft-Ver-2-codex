@@ -69,6 +69,34 @@ function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
 
+// The calendar reading, and the same reading with the manual override applied.
+// Exported because the browser app's top bar shows it too, and the office
+// should not be told the school is in session on one screen and on vacation on
+// another. The network-time hop stays behind the IPC handler: the desktop can
+// afford an HTTPS HEAD once every five minutes, and a LAN server answering
+// every page load cannot.
+function sessionStatus(db, date) {
+  const iso = todayISO(date);
+  const cal = computeCalendarStatus(db, iso);
+  const mode = getSetting(db, 'session_status_mode', 'auto');
+  const status = (mode === 'in_session' || mode === 'vacation') ? mode : cal.status;
+  return {
+    status,
+    source: (mode === 'in_session' || mode === 'vacation') ? 'manual' : 'auto',
+    today: iso,
+    term: cal.term ? {
+      id: cal.term.id, label: cal.term.label, term_number: cal.term.term_number,
+      year_label: cal.term.year_label, start_date: cal.term.start_date, end_date: cal.term.end_date,
+    } : null,
+    next_term: cal.next_term ? {
+      id: cal.next_term.id, label: cal.next_term.label,
+      start_date: cal.next_term.start_date, reopening_date: cal.next_term.reopening_date,
+    } : null,
+    days_to_vacation: cal.days_to_vacation ?? null,
+    days_to_reopen: cal.days_to_reopen ?? null,
+  };
+}
+
 module.exports = function registerSessionHandlers(ipcMain, db) {
   const security = require('./_security');
 
@@ -229,3 +257,6 @@ function classNextMap(db) {
   }
   return map;
 }
+
+module.exports.computeCalendarStatus = computeCalendarStatus;
+module.exports.sessionStatus = sessionStatus;

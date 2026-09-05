@@ -58,12 +58,17 @@ function ModuleGrid({ welcome = false }) {
   const cards = items.filter(m => m.key !== 'home' && m.key !== 'account');
   const who = firstName(profile?.user?.full_name || '', 'there');
 
+  // The installed application lays the grid out in five columns capped at
+  // 1100px and centres it in the window. Cards that grow to fill a 27-inch
+  // monitor stop looking like a menu and start looking like a wall.
+  const columns = layout.isDesktop ? 5 : layout.isTablet ? 3 : 2;
+
   return (
     <View style={{ width: '100%' }}>
       {welcome ? (
         <View style={styles.hero}>
           {!layout.isDesktop ? <Crest logo={brand.logo} size={54} /> : null}
-          <Text style={[styles.welcome, layout.isDesktop && { fontSize: 34 }]}>
+          <Text style={[styles.welcome, layout.isDesktop && { fontSize: 28 }]}>
             Welcome, {who}!
           </Text>
           <Text style={styles.ask}>What would you like to do today?</Text>
@@ -72,9 +77,10 @@ function ModuleGrid({ welcome = false }) {
         <Text style={styles.sectionTitle}>Everything you can open</Text>
       )}
 
-      <View style={styles.grid}>
+      <View style={[styles.grid, layout.isDesktop && styles.gridWide]}>
         {cards.map((m, i) => (
-          <Appear key={m.key} delay={Math.min(i, 8) * motion.stagger} distance={12}>
+          <Appear key={m.key} delay={Math.min(i, 8) * motion.stagger} distance={12}
+                  style={cellStyle(columns, layout.isDesktop)}>
             <ModuleCard module={m} compact={!layout.isDesktop}
                         onPress={() => router.push(m.href)} />
           </Appear>
@@ -90,8 +96,21 @@ function ModuleGrid({ welcome = false }) {
           </Text>
         </View>
       ) : null}
+
+      {welcome && layout.isDesktop ? (
+        <Text style={styles.copyright}>
+          {`© ${new Date().getFullYear()} Nickland Edusoft by Nickland Sales. All rights reserved.`}
+        </Text>
+      ) : null}
     </View>
   );
+}
+
+// One cell of the grid. `flexBasis` rather than a fixed width so the last row
+// of a short grid lines up with the rows above it instead of centring itself.
+function cellStyle(columns, isDesktop) {
+  if (!isDesktop) return null;
+  return { flexGrow: 0, flexShrink: 0, flexBasis: `${100 / columns}%`, padding: 10 };
 }
 
 /**
@@ -138,8 +157,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg,
     justifyContent: 'center',
   },
+  // Five across, 1100 wide, centred — the installed application's `.hp-grid`.
+  // `gap` gives way to per-cell padding so a percentage basis still adds up.
+  gridWide: {
+    gap: 0, width: '100%', maxWidth: 1120, marginHorizontal: 'auto',
+    justifyContent: 'flex-start', marginLeft: 'auto', marginRight: 'auto',
+  },
+  copyright: {
+    ...type.small, fontSize: 12, color: colors.muted, textAlign: 'center',
+    marginTop: spacing.xxl, paddingBottom: spacing.lg,
+  },
   card: {
-    width: 216, minHeight: 196,
+    width: '100%', minWidth: 176, minHeight: 196,
     backgroundColor: colors.card, borderRadius: radius.md,
     borderWidth: 1, borderColor: colors.border,
     paddingHorizontal: spacing.lg, paddingTop: spacing.xl, paddingBottom: spacing.lg,
@@ -148,7 +177,7 @@ const styles = StyleSheet.create({
   },
   // On a phone: two to a row, and shorter — the tile is a way in, not a card
   // to read. `sub` is dropped there rather than squeezed to one line.
-  cardCompact: { width: 156, minHeight: 132, paddingTop: spacing.lg },
+  cardCompact: { width: 156, minWidth: 0, minHeight: 132, paddingTop: spacing.lg },
   cardHover: { borderColor: colors.primaryLine, ...shadow.raised },
   cardIcon: {
     width: 68, height: 68, borderRadius: 34, marginBottom: 10,

@@ -2,7 +2,8 @@
 // Copyright © 2026 Nickland Sales. All rights reserved.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text } from 'react-native';
+import { View, Text, Pressable } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
@@ -13,26 +14,164 @@ import {
   Button, Sheet, Field, TextArea, SegmentedControl, Avatar, Divider, CheckRow,
 } from '../../ui';
 import { Panel, Bar, StatRow, Stat } from '../../desk';
-import { colors, spacing, type } from '../../theme';
+import {
+  MetricCard, MetricRow, SectionCard, DashRow, BarList, CardGrid, Banner,
+  EmptyLine, dateLabel, fullName,
+} from '../../dash';
+import { useLayout } from '../../responsive';
+import { colors, spacing, type, radius } from '../../theme';
 
 const STATUSES = ['Active', 'Inactive', 'Resigned', 'Retired'];
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
 export function StaffDashboard() {
-  const state = useOffice((t) => api.adminStaff(t, 'Active'));
-  const approvals = useOffice((t) => api.adminApprovals(t));
-  const rows = state.data?.staff || [];
-  const waiting = (approvals.data?.leave || []).length + (approvals.data?.lesson_notes || []).length;
+  const router = useRouter();
+  const layout = useLayout();
+  const wide = layout.isDesktop;
 
-  const byDesignation = useMemo(() => {
-    const m = new Map();
-    for (const s of rows) m.set(s.designation || 'Unassigned', (m.get(s.designation || 'Unassigned') || 0) + 1);
-    return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [rows]);
+  const state = useOffice(async (t) => {
+    const [roll, rich] = await Promise.all([
+      api.adminStaff(t, 'Active'),
+      wide ? api.dashStaff(t) : Promise.resolve(null),
+    ]);
+    return { roll, rich: rich && rich.ok ? rich : null };
+  }, [wide]);
+  const approvals = useOffice((t) => api.adminApprovals(t));
+
+  const rich = state.data?.rich;
 
   return (
     <OfficeScreen state={state} skeleton={4}>
+      {rich ? <StaffFull d={rich} router={router} />
+        : state.data ? <StaffPlain rows={state.data.roll?.staff || []} approvals={approvals} /> : null}
+    </OfficeScreen>
+  );
+}
+
+// ══ The installed application's Staff → Dashboard ═══════════════════════════
+//
+// Who is on the books, who turned up, what is waiting to be decided, and what
+// is about to expire; then the staff room by role, the documents running out,
+// and who has just joined.
+//
+// Two of these are conditional on purpose. Clocking in is a switch a school
+// turns on — a register of arrival times nobody asked for is a surveillance
+// feature that appeared by itself — so the attendance figure reads "—" and
+// says why when it is off, rather than showing a zero that looks like nobody
+// came to work.
+
+function StaffFull({ d, router }) {
+  const m = d.metrics || {};
+  const expiring = d.expiring_documents || [];
+  const marked = m.today_total_marked || m.total_active || 0;
+  const presentPct = m.today_total_marked > 0
+    ? Math.round((m.today_present / m.today_total_marked) * 100) : 0;
+
+  return (
+    <View style={{ width: '100%' }}>
+      <MetricRow columns={4}>
+        <MetricCard index={0} tone="blue" icon="badge"
+                    label="Active Staff" value={m.total_active ?? '—'}
+                    sub={`${m.total_inactive || 0} inactive · ${m.total_all || 0} all-time`} />
+        <MetricCard index={1} tone="green" icon="check" valueTone="success"
+                    label="Today's Attendance"
+                    value={m.clockin_enabled ? `${m.today_present || 0}/${marked}` : '—'}
+                    sub={m.clockin_enabled
+                      ? `${presentPct}% present · ${m.today_absent || 0} absent · ${m.today_late || 0} late`
+                      : 'Clock-in disabled'}
+                    link={m.clockin_enabled ? 'View attendance →' : null}
+                    onPress={() => router.push('/app/staff?tab=attendance')} />
+        <MetricCard index={2} tone="orange" icon="bell" valueTone="accent"
+                    label="Leave Requests" value={m.pending_leave ?? 0}
+                    sub={`Pending review · ${m.on_leave_today || 0} on leave today`}
+                    link="Review →" onPress={() => router.push('/app/staff?tab=leave')} />
+        <MetricCard index={3} tone="purple" icon="note"
+                    label="Expiring Documents" value={expiring.length} sub="In next 90 days"
+                    link={expiring.length ? 'Review →' : null}
+                    onPress={() => router.push('/app/staff?tab=roll')} />
+      </MetricRow>
+
+      {!m.clockin_enabled ? (
+        <Banner tone="warning">
+          ⚠ Staff clock-in is disabled. Enable it in Settings → Advanced Features if you
+          want to record daily attendance.
+        </Banner>
+      ) : null}
+
+      <DashRow weights={[1, 1]}>
+        <SectionCard title="Staff by Role">
+          <BarList empty="No staff yet"
+                   items={(d.by_role || []).map(r => ({ label: r.role, value: r.count }))} />
+        </SectionCard>
+
+        <SectionCard title="Documents Expiring Soon" right={<Muted>Next 90 days</Muted>}>
+          {expiring.length === 0
+            ? <EmptyLine>No documents expiring soon</EmptyLine>
+            : expiring.map((doc, i, arr) => {
+              const daysLeft = Math.ceil((new Date(doc.expiry_date) - new Date()) / 86400000);
+              return (
+                <View key={doc.id} style={[styles.expiringRow, i === arr.length - 1 && { borderBottomWidth: 0 }]}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text numberOfLines={1} style={styles.expiringTitle}>{doc.title}</Text>
+                    <Text numberOfLines={1} style={styles.expiringMeta}>
+                      {`${fullName(doc)} · ${doc.doc_type || ''}`}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end', flexShrink: 0 }}>
+                    <Text style={{ ...type.small, fontWeight: '700',
+                                   color: daysLeft <= 30 ? colors.danger : colors.warning }}>
+                      {`${daysLeft} days`}
+                    </Text>
+                    <Text style={styles.expiringMeta}>{dateLabel(doc.expiry_date)}</Text>
+                  </View>
+                </View>
+              );
+            })}
+        </SectionCard>
+      </DashRow>
+
+      <SectionCard title="Recent Hires" right={<Muted>Last 6 months</Muted>}>
+        {(d.recent_hires || []).length === 0
+          ? <EmptyLine>No recent hires</EmptyLine>
+          : <CardGrid min={220}>
+            {d.recent_hires.map(h => (
+              <HireCard key={h.id} person={h} onPress={() => router.push('/app/staff?tab=roll')} />
+            ))}
+          </CardGrid>}
+      </SectionCard>
+    </View>
+  );
+}
+
+function HireCard({ person, onPress }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <Pressable onPress={onPress}
+               onHoverIn={() => setHover(true)} onHoverOut={() => setHover(false)}
+               style={[styles.hireCard, hover && styles.hireCardHover]}>
+      <Avatar name={fullName(person)} photo={person.photo_path} size={46} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text numberOfLines={1} style={styles.hireName}>{fullName(person)}</Text>
+        <Text numberOfLines={1} style={styles.expiringMeta}>{person.role || ''}</Text>
+        <Text numberOfLines={1} style={styles.expiringMeta}>{`Hired ${dateLabel(person.hire_date)}`}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+// ══ What the staff register alone can show ══════════════════════════════════
+
+function StaffPlain({ rows, approvals }) {
+  const waiting = (approvals.data?.leave || []).length + (approvals.data?.lesson_notes || []).length;
+  const byDesignation = (() => {
+    const m = new Map();
+    for (const s of rows) m.set(s.designation || 'Unassigned', (m.get(s.designation || 'Unassigned') || 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  })();
+
+  return (
+    <>
       <StatRow>
         <Stat index={0} label="On the books" icon="badge" tone="primary" value={rows.length}
               note="Active members of staff" />
@@ -54,7 +193,7 @@ export function StaffDashboard() {
           ]}
           rows={byDesignation} />
       </Panel>
-    </OfficeScreen>
+    </>
   );
 }
 
@@ -664,3 +803,23 @@ export function StaffActivities() {
     </OfficeScreen>
   );
 }
+
+// The dashboard's own furniture. Everything else on this screen is built from
+// the shared kit; these three are the desktop's `.expiring-doc-row` and
+// `.recent-hire-card`, which exist nowhere else in the app.
+const styles = {
+  expiringRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.borderSoft,
+  },
+  expiringTitle: { ...type.small, fontSize: 13, fontWeight: '600', color: colors.text },
+  expiringMeta: { ...type.small, fontSize: 11, color: colors.muted, marginTop: 2 },
+
+  hireCard: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    padding: spacing.md, borderRadius: radius.control,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceAlt,
+  },
+  hireCardHover: { borderColor: colors.primaryLine, backgroundColor: colors.primarySoft },
+  hireName: { ...type.small, fontSize: 13, fontWeight: '700', color: colors.text },
+};

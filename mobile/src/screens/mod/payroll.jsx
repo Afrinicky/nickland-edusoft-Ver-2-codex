@@ -19,6 +19,8 @@ import {
   Sheet, Field, SearchField, Divider,
 } from '../../ui';
 import { Panel, Bar, StatRow, Stat } from '../../desk';
+import { MetricCard, MetricRow, ghs } from '../../dash';
+import { useLayout } from '../../responsive';
 import { printHtml } from '../../print';
 import { colors, spacing, type } from '../../theme';
 
@@ -52,11 +54,19 @@ function useMonth() {
 export function PayrollRun() {
   const { token, profile } = useAuth();
   const { month, year, picker } = useMonth();
+  const layout = useLayout();
+  const wide = layout.isDesktop;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(null);
   const [paying, setPaying] = useState(null);
-  const state = useOffice((t) => api.financePayroll(t, month, year), [month, year]);
+  const state = useOffice(async (t) => {
+    const [run, rich] = await Promise.all([
+      api.financePayroll(t, month, year),
+      wide ? api.dashPayroll(t, month, year) : Promise.resolve(null),
+    ]);
+    return { ...run, dash: rich && rich.ok ? rich : null };
+  }, [month, year, wide]);
 
   const mayRun = can(profile, 'payroll', 'create');
   const mayPay = can(profile, 'payroll', 'edit');
@@ -64,6 +74,7 @@ export function PayrollRun() {
   const gross = rows.reduce((n, r) => n + (Number(r.gross_salary ?? r.gross) || 0), 0);
   const net = rows.reduce((n, r) => n + (Number(r.net_salary ?? r.net) || 0), 0);
   const paid = rows.filter(r => r.payment_status === 'paid' || r.is_paid).length;
+  const dash = state.data?.dash;
 
   async function run() {
     setBusy(true); setError(null); setDone(null);
@@ -93,17 +104,41 @@ export function PayrollRun() {
       <ErrorNote message={error} />
       {done ? <SuccessNote message={done} /> : null}
 
-      <StatRow>
-        <Stat index={0} label="On this run" icon="users" tone="primary" value={rows.length}
-              note={`${MONTHS[month - 1]} ${year}`} />
-        <Stat index={1} label="Gross" icon="wallet" tone="data" value={cedis(gross)}
-              note="Before deductions" />
-        <Stat index={2} label="Net to pay" icon="cash" tone="success" value={cedis(net)}
-              note="What leaves the account" />
-        <Stat index={3} label="Paid" icon="check" tone={paid === rows.length && rows.length ? 'success' : 'warning'}
-              value={`${paid} of ${rows.length}`}
-              note={paid === rows.length && rows.length ? 'Everybody is paid' : 'Some are outstanding'} />
-      </StatRow>
+      {/* The installed application's own five figures, where there is room for
+          them: who is on the run, what it costs, what SSNIT and the GRA take,
+          and what actually leaves the account. SSNIT is split into worker and
+          employer under the combined figure because those are two separate
+          obligations and the return asks for both. */}
+      {dash ? (
+        <MetricRow columns={5}>
+          <MetricCard index={0} tone="blue" icon="users"
+                      label="Active Staff" value={dash.metrics.staff_on_run || rows.length}
+                      sub={`${MONTHS[month - 1]} ${year} · ${dash.metrics.eligible_staff || 0} on the books`} />
+          <MetricCard index={1} tone="green" icon="cash"
+                      label="Gross Payroll" value={ghs(dash.metrics.gross)}
+                      sub="Before deductions" />
+          <MetricCard index={2} tone="orange" icon="shield" valueTone="accent"
+                      label="SSNIT" value={ghs(dash.metrics.ssnit_combined)}
+                      sub={`${ghs(dash.metrics.ssnit_employee)} W + ${ghs(dash.metrics.ssnit_employer)} E`} />
+          <MetricCard index={3} tone="red" icon="note" valueTone="danger"
+                      label="PAYE Tax" value={ghs(dash.metrics.paye)} sub="To remit to GRA" />
+          <MetricCard index={4} tone="purple" icon="check" valueTone="success"
+                      label="Total Net Pay" value={ghs(dash.metrics.net)}
+                      sub={`Total employer cost: ${ghs(dash.metrics.employer_cost)}`} />
+        </MetricRow>
+      ) : (
+        <StatRow>
+          <Stat index={0} label="On this run" icon="users" tone="primary" value={rows.length}
+                note={`${MONTHS[month - 1]} ${year}`} />
+          <Stat index={1} label="Gross" icon="wallet" tone="data" value={cedis(gross)}
+                note="Before deductions" />
+          <Stat index={2} label="Net to pay" icon="cash" tone="success" value={cedis(net)}
+                note="What leaves the account" />
+          <Stat index={3} label="Paid" icon="check" tone={paid === rows.length && rows.length ? 'success' : 'warning'}
+                value={`${paid} of ${rows.length}`}
+                note={paid === rows.length && rows.length ? 'Everybody is paid' : 'Some are outstanding'} />
+        </StatRow>
+      )}
 
       <Bar left={picker}
            right={mayRun ? (
@@ -111,8 +146,9 @@ export function PayrollRun() {
                      icon="refresh" full={false} onPress={run} />
            ) : null} />
 
-      <Panel padded={false} title="The run"
-             subtitle="Gross, the deductions taken from it, and what each person actually receives.">
+      <Panel padded={false} title={`Payroll Detail — ${MONTHS[month - 1]} ${year}`}
+             subtitle="Gross, the deductions taken from it, and what each person actually receives."
+             right={<Muted>{`${paid} of ${rows.length} paid`}</Muted>}>
         <View style={{ padding: spacing.lg }}>
           <DataTable
             keyExtractor={(r, i) => String(r.id ?? i)}

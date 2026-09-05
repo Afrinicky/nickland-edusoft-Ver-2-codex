@@ -57,6 +57,66 @@ of modules under it, rather than a menu first and the work second. A teacher at
 ten past seven wants the register; somebody at a desk with a mouse wants the
 menu.
 
+### The dashboards are the installed application's
+
+Every module's Dashboard tab, and the main Dashboard, is now the same screen
+the installer draws — the same figures, the same arithmetic and the same
+layout, not a browser interpretation of them.
+
+* **Dashboard** — the school's name and motto, five metric cards (roll, income,
+  outstanding fees, canteen owed, staff), income against expenditure as a
+  filled line chart, the fee collection donut, the last five receipts of either
+  kind, the two debtor lists and the school day.
+* **Students** — the roll by status, pupils per class as bars, the boy/girl
+  split, and who was admitted last.
+* **Academics** — what has been marked, class averages with a bar per row, the
+  term's top ten, and the four things the module is opened to do.
+* **Fees** — expected income (with the pupils nobody has billed yet called
+  out), collected, outstanding, the rate; then collection class by class, the
+  biggest debtors and the last receipts.
+* **Canteen** — collected, owed, the daily rate the arithmetic rests on, where
+  today stands, and the two lists.
+* **Staff** — the staff room, today's attendance, what is waiting to be
+  decided, documents about to expire, and who has just joined.
+* **Payroll** — the run's five figures above it: who is on it, gross, SSNIT
+  split into worker and employer, PAYE, and net.
+* **Finance** — the four coloured cards, five figures across the term, income
+  and expenditure by category, and the last entries of each.
+
+They are served by `electron/server/dashboards_api.js` — one `GET /dash/*`
+route per dashboard, each running the same query as the desktop's IPC handler
+and behind the same module permission. A connection that does not serve them —
+the thin hosted portal holds a projection of the school and has no expenditure
+ledger to chart — falls back to the summary it can build from the ordinary
+endpoints, rather than showing empty frames or a page of zeroes.
+
+The two charts are real SVG. React Native Web renders through react-dom, so a
+lowercase `svg` element in the tree is a real SVG element: the browser gets the
+installer's own chart with nothing added to the bundle, and a handset gets the
+same figures as bars and a dial. No charting dependency, no native module, no
+larger APK.
+
+### Home has no sidebar
+
+At desktop width `/app` draws what the installer's Home draws: a wider top bar,
+the welcome, and the grid of what this account may open — five across, centred,
+with the copyright under it. No sidebar, and no status strip.
+
+That is deliberate rather than an omission. Home **is** the navigation, and a
+menu drawn twice — once as a column of eleven links and again as a grid of
+eleven cards — is a screen that cannot decide what it is for. The sidebar's job
+everywhere else is to get you back here.
+
+### The top bar says when you are
+
+Beside the search box the bar now carries what the installer has always
+carried: a green or amber chip reading **School in Session · 26d to vacation**
+or **On Vacation · Reopens in 4d**, and the year and term in a pill. Both come
+from `/api/v1/me`, read from the same calendar and the same manual override the
+desktop reads. A Ghanaian school year is three terms with long breaks between
+them, and half the questions an office asks the system have "the school is on
+vacation" as their answer.
+
 ### What is still done on the office computer
 
 Four things, and each for the same reason: they are about that machine, not

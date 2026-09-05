@@ -42,7 +42,7 @@ student's guardian contact on file; otherwise an admin provisions the account.
 ### Authenticated (Bearer)
 | Method | Path | Role | Purpose |
 |--------|------|------|---------|
-| GET | `/me` | any | Current subject + scope/permissions. |
+| GET | `/me` | any | Current subject + scope/permissions. For staff it also carries `term` (the year and term the top bar shows) and `session` (`in_session` or `vacation`, with the days to the next change) — read from the same calendar and the same manual override the desktop reads, so the two chromes cannot disagree about what week the school is in. |
 | POST | `/auth/logout` | any | Revoke the calling token. |
 | GET | `/parent/children` | parent | Children with fee + canteen balances, the class teacher's name, and the child's photograph. |
 | GET | `/parent/children/:id` | parent | One child: recent receipts, attendance summary. |
@@ -154,6 +154,44 @@ way the desktop always has, so somebody holding Students at Manage is shown
 Students and the sheet inside it whether or not they also hold the staff
 register — and a portal check here would refuse the very screen the module
 system just drew for them.
+
+### Staff — the dashboards
+
+The installed application's own summary screens, one route each
+(`electron/server/dashboards_api.js`). They exist because the browser's
+dashboards used to be assembled from whatever the general-purpose endpoints
+happened to return — four counts where the desktop shows five metric cards, a
+progress bar where it draws a collection donut, and no chart of income against
+expenditure at all.
+
+Each route runs the **same query** as the desktop's IPC handler and returns the
+same shape. Where a figure is computed rather than read — canteen owed is
+unpaid days × the daily rate; a collection percentage is collected ÷ billed —
+the arithmetic is copied rather than re-derived, so the two cannot drift apart
+by a rounding rule.
+
+All are `GET`, all are read-only, and each is behind the same module permission
+at `view` that the desktop checks. An account without the module is refused
+once rather than handed a page of zeroes.
+
+| Method | Path | Needs | Purpose |
+|--------|------|-------|---------|
+| GET | `/dash/main` | `dashboard` | The five metric cards, the monthly income and expenditure series, the collection split, the last five receipts of either kind, both debtor lists, and the school day. `?termId=` for a past term. |
+| GET | `/dash/students` | `students` | The roll by status, the boy/girl split (reading `M`/`Male`/`boy` alike, because six years of typing contains all of them), pupils per class, and the last admissions. |
+| GET | `/dash/academics` | `academics` | Scores entered, pupils assessed, exam papers and the question bank; class averages from `student_term_summary` — the table the broadsheet is compiled from, not a fresh average that would disagree with the printed reports — and the term's top ten. |
+| GET | `/dash/fees` | `fees` | Expected income (bills that exist plus pupils projected through the template bill generation would use, so raising the missing bills does not move it), collected, outstanding, the rate, collection class by class, the biggest debtors and the last receipts. |
+| GET | `/dash/canteen` | `canteen` | Collected, owed as days × rate, the daily rate, school days in the term, today's paid/unpaid/exempt, the biggest debtors and the last collections. |
+| GET | `/dash/staff` | `staff` | Active and inactive, today's register (and whether clock-in is even switched on), leave waiting, documents expiring inside ninety days, the staff room by role, and recent hires. |
+| GET | `/dash/payroll` | `payroll` | One month's run: who is on it, gross, SSNIT as worker, employer and their sum, PAYE, net, what has been paid and what is still owing. `?month=&year=`; a month outside 1–12 is refused rather than guessed. |
+| GET | `/dash/finance` | `finance` | Expected and actual income, expenditure, the net position, active staff, both category breakdowns, and the last five entries each side. |
+
+A connection that does not serve them answers nothing rather than throwing: the
+thin hosted portal holds a projection of the school and has no expenditure
+ledger to chart, so the client (`dash()` in `mobile/src/api.js`) resolves
+`null` and the screen draws the summary it can build from the ordinary
+endpoints. A 404 from an older desktop installation lands in the same place,
+which is the point — a school that has not updated sees the app it had, not an
+error.
 
 ### Staff — their own employment
 Everything under `/hr` is about the signed-in person and nobody else. There is
