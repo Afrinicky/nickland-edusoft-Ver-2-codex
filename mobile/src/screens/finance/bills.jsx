@@ -11,7 +11,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { OfficeScreen, cedis, useOffice } from '../../office';
+import { OfficeScreen, cedis, termLabel, useOffice } from '../../office';
 import {
   Card, Section, Muted, Button, Sheet, Field, Select, ErrorNote, InfoNote,
   EmptyState, ListRow, SearchField, Badge,
@@ -115,7 +115,7 @@ export default function Bills() {
           <Card padded={false}>
             {d.templates.map((t, i) => (
               <ListRow key={t.id} title={t.name}
-                subtitle={[t.class_name || 'Every class', t.term_label || 'Every term',
+                subtitle={[t.class_name || 'Every class', termLabel(t, 'Every term'),
                            `${t.items} line${t.items === 1 ? '' : 's'}`].join(' · ')}
                 right={<Text style={{ ...type.small, fontWeight: '800',
                                       fontVariant: ['tabular-nums'] }}>{cedis(t.total)}</Text>}

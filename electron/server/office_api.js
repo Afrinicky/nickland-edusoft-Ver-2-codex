@@ -337,12 +337,13 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
     return json(res, 200, {
       ok: true,
       templates: db.prepare(`
-        SELECT ft.*, c.name AS class_name, t.label AS term_label,
+        SELECT ft.*, c.name AS class_name, t.label AS term_label, y.label AS year_label,
                (SELECT COALESCE(SUM(amount),0) FROM fee_line_items WHERE fee_template_id = ft.id) AS total,
                (SELECT COUNT(*) FROM fee_line_items WHERE fee_template_id = ft.id) AS items
         FROM fee_templates ft
         LEFT JOIN class_groups c ON c.id = ft.class_group_id
         LEFT JOIN terms t ON t.id = ft.term_id
+        LEFT JOIN academic_years y ON y.id = t.academic_year_id
         WHERE COALESCE(ft.is_active, 1) = 1
           AND (? IS NULL OR COALESCE(ft.bill_type, 'school_fees') = ?)
         ORDER BY c.name, t.label, ft.id
@@ -354,10 +355,11 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
     if (!gate(ctx, res, 'fees')) return undefined;
     const id = int(params.id);
     const template = db.prepare(`
-      SELECT ft.*, c.name AS class_name, t.label AS term_label
+      SELECT ft.*, c.name AS class_name, t.label AS term_label, y.label AS year_label
       FROM fee_templates ft
       LEFT JOIN class_groups c ON c.id = ft.class_group_id
       LEFT JOIN terms t ON t.id = ft.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
       WHERE ft.id = ?`).get(id);
     if (!template) return missing(res, 'No such template.');
     template.items = db.prepare(
@@ -481,11 +483,13 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
     }
 
     const failed = [...problems.entries()].map(([reason, count]) => ({ reason, count }));
+    const billing = require('../ipc/_billing');
+    const termName = billing.termLabel(billing.termWithYear(db, term.id)) || term.label;
     audit(db, ctx, 'student_bill', null, 'raise_bills',
-      `${generated} of ${students.length} — ${term.label}`, 'high');
+      `${generated} of ${students.length} — ${termName}`, 'high');
     return json(res, 200, {
       ok: true, generated, skipped: students.length - generated,
-      problems: failed, failed, term: term.label,
+      problems: failed, failed, term: termName,
       // Kept so an older browser build that reads `raised` still shows a
       // figure rather than "undefined bills raised".
       raised: generated,
@@ -730,11 +734,13 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
       bills: db.prepare(`
         SELECT b.*, s.index_number, s.surname, s.first_name,
                TRIM(COALESCE(s.surname,'') || ' ' || COALESCE(s.first_name,'')) AS student_name,
-               c.name AS class_name, t.label AS term_label, u.full_name AS voided_by_name
+               c.name AS class_name, t.label AS term_label, y.label AS year_label,
+               u.full_name AS voided_by_name
         FROM student_bills b
         JOIN students s ON s.id = b.student_id
         LEFT JOIN class_groups c ON c.id = s.current_class_id
         JOIN terms t ON t.id = b.term_id
+        LEFT JOIN academic_years y ON y.id = t.academic_year_id
         LEFT JOIN users u ON u.id = b.voided_by
         WHERE COALESCE(b.status,'active') = 'voided' AND (? IS NULL OR b.term_id = ?)
         ORDER BY b.voided_at DESC LIMIT 400`).all(termId, termId),

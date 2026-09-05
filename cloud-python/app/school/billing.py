@@ -48,6 +48,69 @@ def resolve_fee_template(db, class_group_id, term_id):
     return None
 
 
+def term_label(term):
+    """Name a term so two of them can be told apart.
+
+    Every academic year has a "First Term". A bare term name in a dropdown
+    therefore appears twice, and a fee schedule saved against next year's First
+    Term while the school is running this year's Third Term looks identical to
+    the right one — until bill generation reports "no template applies" and
+    nobody can see why. Every term shown to a user carries its academic year.
+    """
+    if not term:
+        return ""
+    label = term.get("label") or term.get("term_label") or ""
+    if not label:
+        return ""
+    year = term.get("year_label") or term.get("academic_year_label") or ""
+    return f"{label} · {year}" if year else label
+
+
+def term_with_year(db, term_id):
+    if not term_id:
+        return None
+    return db.one("""
+      SELECT t.*, y.label AS year_label
+        FROM terms t LEFT JOIN academic_years y ON y.id = t.academic_year_id
+       WHERE t.id = %s""", (term_id,))
+
+
+def no_template_message(db, student, term_id):
+    """What a school can act on when nothing covers a pupil.
+
+    Names the term in full and reads back the schedules that DO exist, because
+    the answer is nearly always "it was written against the wrong term".
+    """
+    term = term_with_year(db, term_id)
+    klass = None
+    if student and student.get("current_class_id"):
+        klass = db.one("SELECT name FROM class_groups WHERE id = %s",
+                       (student["current_class_id"],))
+    where = f"{klass['name']} in {term_label(term)}" if klass else term_label(term)
+
+    others = db.all("""
+      SELECT ft.name, c.name AS class_name, t.label AS term_label, y.label AS year_label
+        FROM fee_templates ft
+        LEFT JOIN class_groups c ON c.id = ft.class_group_id
+        LEFT JOIN terms t ON t.id = ft.term_id
+        LEFT JOIN academic_years y ON y.id = t.academic_year_id
+       WHERE ft.is_active = 1 AND COALESCE(ft.bill_type, 'school_fees') = 'school_fees'
+       ORDER BY ft.id DESC LIMIT 4""")
+
+    msg = f"No school fees schedule covers {where}."
+    if others:
+        listed = "; ".join(
+            f"“{o['name']}” ({o['class_name'] or 'all classes'}, "
+            f"{term_label(o) if o.get('term_label') else 'all terms'})"
+            for o in others)
+        msg += (f" The schedules you have are: {listed}."
+                " Check the term each one is written against — every academic year"
+                " has a term by the same name.")
+    else:
+        msg += " Create one under Fees → Bills → School Fees."
+    return msg
+
+
 def template_items(db, template_id):
     return db.all("SELECT * FROM fee_line_items WHERE fee_template_id = %s ORDER BY item_number, id",
                   (template_id,))
@@ -215,7 +278,7 @@ def generate_bill(db, student_id, term_id):
     template = resolve_fee_template(db, student["current_class_id"], term_id)
     if not template:
         return {"ok": False, "status": 400,
-                "error": "No fee template applies to this pupil and term. Create one first."}
+                "error": no_template_message(db, student, term_id)}
     items = template_items(db, template["id"])
 
     # Unpaid arrears from previous terms. A bill the school WITHDREW must not

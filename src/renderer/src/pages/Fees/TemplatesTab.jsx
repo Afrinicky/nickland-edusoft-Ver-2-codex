@@ -14,7 +14,7 @@
 // Ghanaian schools actually bill, or type it out.
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
-import { fmtCedi } from '../../lib/format.js';
+import { fmtCedi, termLabel } from '../../lib/format.js';
 import Modal from '../../components/Modal.jsx';
 
 const SCHOOL_FEES = 'school_fees';
@@ -141,7 +141,7 @@ function TemplateTable({ rows, onEdit, onDelete, emptyHint }) {
           <tr key={t.id}>
             <td className="bold">{t.name}</td>
             <td>{t.class_name || 'All classes'}</td>
-            <td>{t.term_label || 'All terms'}</td>
+            <td>{termLabel(t, 'All terms')}</td>
             <td className="text-right">{t.item_count ?? '—'}</td>
             <td className="text-right bold">{fmtCedi(t.total_amount || 0)}</td>
             <td>
@@ -244,7 +244,7 @@ function TemplateEditor({ template, terms, onClose, onSaved }) {
         }}>
           <div className="bold">A school fees schedule already exists for this term</div>
           <div className="text-sm" style={{ margin: '4px 0 10px' }}>
-            “{clash.name}” already covers {clash.class_name || 'all classes'} for {clash.term_label}.
+            “{clash.name}” already covers {clash.class_name || 'all classes'} for {termLabel(clash)}.
             A term can only have one school fees bill.
           </div>
           <div className="row gap-2">
@@ -296,11 +296,12 @@ function TemplateEditor({ template, terms, onClose, onSaved }) {
           <select className="select" value={data.term_id || ''}
             onChange={e => setData({ ...data, term_id: parseInt(e.target.value) || null })}>
             <option value="">— All terms (standing default) —</option>
-            {terms.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            {terms.map(t => <option key={t.id} value={t.id}>{termLabel(t)}</option>)}
           </select>
           <div className="text-xs text-muted">
             Pick the term when the amounts are specific to it. "All terms" is a fallback
-            used by any term with no schedule of its own.
+            used by any term with no schedule of its own. Every academic year has a term
+            by the same name, so check the year beside it.
           </div>
         </div>
       </div>
@@ -417,7 +418,7 @@ function CopyForwardModal({ terms, onClose, onDone }) {
           <option value="">— Choose a template —</option>
           {sources.map(s => (
             <option key={s.id} value={s.id}>
-              {s.name} · {s.class_name || 'All classes'} · {s.term_label || 'All terms'} · {fmtCedi(s.total_amount || 0)}
+              {s.name} · {s.class_name || 'All classes'} · {termLabel(s, 'All terms')} · {fmtCedi(s.total_amount || 0)}
             </option>
           ))}
         </select>
@@ -432,7 +433,7 @@ function CopyForwardModal({ terms, onClose, onDone }) {
           <label className="label">For which term</label>
           <select className="select" value={termId} onChange={e => setTermId(e.target.value)}>
             <option value="">— All terms —</option>
-            {terms.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            {terms.map(t => <option key={t.id} value={t.id}>{termLabel(t)}</option>)}
           </select>
         </div>
       </div>

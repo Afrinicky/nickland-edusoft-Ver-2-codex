@@ -21,7 +21,7 @@ import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
 import { useOfficeClasses } from '../../pickers';
-import { OfficeScreen, cedis, shortDate, useOffice } from '../../office';
+import { OfficeScreen, cedis, shortDate, termLabel, useOffice } from '../../office';
 import {
   Select, SearchField, DataTable, Muted, Badge, EmptyState, ErrorNote, SuccessNote,
   Button, Sheet, Field, Loading, ProgressBar, Divider, CheckRow, SegmentedControl,
@@ -353,8 +353,8 @@ export function FeeTemplates() {
                   ) },
                   { key: 'class_name', label: 'Class', width: 150,
                     render: (r) => r.class_name || 'Every class' },
-                  { key: 'term_label', label: 'Term', width: 150,
-                    render: (r) => r.term_label || 'Any term' },
+                  { key: 'term_label', label: 'Term', width: 170,
+                    render: (r) => termLabel(r, 'Any term') },
                   { key: 'items', label: 'Lines', align: 'right', width: 80 },
                   { key: 'total', label: 'Total', align: 'right', width: 140,
                     render: (r) => cedis(r.total) },
@@ -931,7 +931,8 @@ export function VoidedBills() {
                       <Muted numberOfLines={1}>{[r.class_name, r.index_number].filter(Boolean).join(' · ')}</Muted>
                     </View>
                   ) },
-                  { key: 'term_label', label: 'Term', width: 140 },
+                  { key: 'term_label', label: 'Term', width: 170,
+                    render: (r) => termLabel(r) },
                   { key: 'total_billed', label: 'Was billed', align: 'right', width: 130,
                     render: (r) => cedis(r.total_billed) },
                   { key: 'total_paid', label: 'Paid', align: 'right', width: 120,

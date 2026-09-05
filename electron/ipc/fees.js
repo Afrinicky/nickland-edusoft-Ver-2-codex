@@ -8,13 +8,15 @@ function registerFeesHandlers(ipcMain, db) {
   // ===== Templates =====
   ipcMain.handle('fees:list-templates', (_e, filters = {}) => {
     let sql = `
-      SELECT ft.*, c.name AS class_name, t.label AS term_label,
+      SELECT ft.*, c.name AS class_name, t.label AS term_label, y.label AS year_label,
+             t.term_number,
              COALESCE(ft.bill_type, 'school_fees') AS bill_type,
              (SELECT COUNT(*) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS item_count,
              (SELECT COALESCE(SUM(amount), 0) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS total_amount
       FROM fee_templates ft
       LEFT JOIN class_groups c ON c.id = ft.class_group_id
       LEFT JOIN terms t ON t.id = ft.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
       WHERE 1=1
     `;
     const params = [];
@@ -30,10 +32,11 @@ function registerFeesHandlers(ipcMain, db) {
   ipcMain.handle('fees:get-template', (_e, id) => {
     const template = db.prepare(`
       SELECT ft.*, COALESCE(ft.bill_type, 'school_fees') AS bill_type,
-             c.name AS class_name, t.label AS term_label
+             c.name AS class_name, t.label AS term_label, y.label AS year_label
       FROM fee_templates ft
       LEFT JOIN class_groups c ON c.id = ft.class_group_id
       LEFT JOIN terms t ON t.id = ft.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
       WHERE ft.id = ?
     `).get(id);
     if (!template) return null;
@@ -64,11 +67,12 @@ function registerFeesHandlers(ipcMain, db) {
         return {
           ok: false,
           code: 'DUPLICATE_SCHOOL_FEES',
-          error: `A school fees bill already exists for ${clash.term_label || 'this term'}` +
+          error: `A school fees bill already exists for ${billing.termLabel(clash) || 'this term'}` +
                  `${clash.class_name ? ` (${clash.class_name})` : ''}: "${clash.name}".`,
           existing: {
             id: clash.id, name: clash.name,
-            class_name: clash.class_name, term_label: clash.term_label,
+            class_name: clash.class_name,
+            term_label: clash.term_label, year_label: clash.year_label,
           },
         };
       }
@@ -234,11 +238,12 @@ function registerFeesHandlers(ipcMain, db) {
   ipcMain.handle('fees:list-bills', (_e, filters = {}) => {
     let sql = `
       SELECT b.*, s.index_number, s.surname, s.first_name, s.other_names,
-             c.name AS class_name, t.label AS term_label
+             c.name AS class_name, t.label AS term_label, y.label AS year_label
       FROM student_bills b
       JOIN students s ON s.id = b.student_id
       LEFT JOIN class_groups c ON c.id = s.current_class_id
       JOIN terms t ON t.id = b.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
       WHERE 1=1
     `;
     const params = [];
@@ -429,7 +434,12 @@ function generateBillForStudent(db, studentId, termId) {
   // can never disagree: class+term → class → term → global.
   const template = billing.resolveFeeTemplate(db, student.current_class_id, termId);
   if (!template) {
-    throw new Error('No fee template applies to this student/term. Create one under Fees → Bills → Fee Templates.');
+    // "No template applies" is true but useless on its own. The commonest
+    // cause by far is a schedule written against the same-named term in a
+    // DIFFERENT academic year — every year has a "First Term" — so the message
+    // names the term being billed in full and lists the schedules that do
+    // exist, which is what tells the office it picked the wrong term.
+    throw new Error(billing.noTemplateMessage(db, student, termId));
   }
 
   const items = billing.templateItems(db, template.id);

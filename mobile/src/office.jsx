@@ -119,6 +119,21 @@ export function shortDate(value) {
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
+/** A term named so two of them can be told apart.
+ *
+ *  Every academic year has a "First Term". A bare term name in a picker
+ *  therefore appears twice, and a fee schedule saved against next year's First
+ *  Term while the school is running this year's Third Term looks identical to
+ *  the right one — until bill generation reports "no schedule applies" and
+ *  nobody can see why. Every term shown to a user carries its academic year. */
+export function termLabel(term, fallback = '') {
+  if (!term) return fallback;
+  const label = term.label || term.term_label || '';
+  if (!label) return fallback;
+  const year = term.year_label || term.academic_year_label || '';
+  return year ? `${label} · ${year}` : label;
+}
+
 /** A stale figure, named as one. A number without a date is a number nobody
  *  can act on when the connection has been down since Friday. */
 export function AsOf({ at }) {

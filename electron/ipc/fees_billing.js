@@ -59,8 +59,9 @@ module.exports = function registerFeesBillingHandlers(ipcMain, db) {
   // the school-fees schedule is set up, and anything that needs attention.
   ipcMain.handle('fees:billing-overview', (_e, termId) => {
     const term = termId
-      ? db.prepare('SELECT * FROM terms WHERE id = ?').get(termId)
-      : db.prepare('SELECT * FROM terms WHERE is_current = 1').get();
+      ? billing.termWithYear(db, termId)
+      : billing.termWithYear(db,
+          (db.prepare('SELECT id FROM terms WHERE is_current = 1').get() || {}).id);
     if (!term) return { ok: false, error: 'No current term is set.' };
 
     const projected = billing.projectedIncomeForTerm(db, term.id);
@@ -103,21 +104,28 @@ module.exports = function registerFeesBillingHandlers(ipcMain, db) {
     });
 
     const schoolFeesTemplate = db.prepare(`
-      SELECT ft.*, c.name AS class_name
+      SELECT ft.*, c.name AS class_name, t.label AS term_label, y.label AS year_label,
+             (SELECT COALESCE(SUM(amount), 0) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS total_amount,
+             (SELECT COUNT(*) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS item_count
       FROM fee_templates ft
       LEFT JOIN class_groups c ON c.id = ft.class_group_id
+      LEFT JOIN terms t ON t.id = ft.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
       WHERE ft.is_active = 1 AND COALESCE(ft.bill_type, 'school_fees') = 'school_fees'
         AND (ft.term_id = ? OR ft.term_id IS NULL)
       ORDER BY (ft.term_id IS NULL), ft.id DESC
     `).all(term.id);
 
     const supplementary = db.prepare(`
-      SELECT ft.*, c.name AS class_name,
+      SELECT ft.*, c.name AS class_name, t.label AS term_label, y.label AS year_label,
              (SELECT COALESCE(SUM(amount), 0) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS total_amount,
+             (SELECT COUNT(*) FROM fee_line_items li WHERE li.fee_template_id = ft.id) AS item_count,
              (SELECT COUNT(DISTINCT bli.student_bill_id) FROM bill_line_items bli
                WHERE bli.source_template_id = ft.id AND bli.charge_type = 'extra') AS applied_to
       FROM fee_templates ft
       LEFT JOIN class_groups c ON c.id = ft.class_group_id
+      LEFT JOIN terms t ON t.id = ft.term_id
+      LEFT JOIN academic_years y ON y.id = t.academic_year_id
       WHERE ft.is_active = 1 AND COALESCE(ft.bill_type, 'school_fees') = 'supplementary'
         AND (ft.term_id = ? OR ft.term_id IS NULL)
       ORDER BY ft.created_at DESC
@@ -125,7 +133,13 @@ module.exports = function registerFeesBillingHandlers(ipcMain, db) {
 
     return {
       ok: true,
-      term: { id: term.id, label: term.label, term_number: term.term_number },
+      term: {
+        id: term.id, label: term.label, term_number: term.term_number,
+        year_label: term.year_label || null,
+        // The name to print in a heading: "Third Term · 2025/2026". A bare
+        // "Third Term" is what let a schedule be written against the wrong year.
+        full_label: billing.termLabel(term),
+      },
       projected,
       counts,
       coverage,
@@ -135,7 +149,7 @@ module.exports = function registerFeesBillingHandlers(ipcMain, db) {
       // being left for someone to notice.
       warnings: [
         ...(coverage.filter(c => c.template_scope === 'none' && c.active_students > 0)
-          .map(c => ({ level: 'error', message: `${c.class_name}: no fee template applies, so its ${c.active_students} pupil(s) cannot be billed.` }))),
+          .map(c => ({ level: 'error', message: `${c.class_name}: no school fees schedule covers it for ${billing.termLabel(term)}, so its ${c.active_students} pupil(s) cannot be billed.` }))),
         ...(coverage.filter(c => c.template_scope !== 'none' && c.billed_students < c.active_students)
           .map(c => ({ level: 'warn', message: `${c.class_name}: ${c.active_students - c.billed_students} of ${c.active_students} pupil(s) have no bill for this term yet.` }))),
         ...(schoolFeesTemplate.filter(t => t.term_id === null).length > 1
