@@ -13,16 +13,39 @@ import { api } from './api';
 import { Select, Button, Field, InfoNote } from './ui';
 import { spacing } from './theme';
 
-/** The classes this teacher may open, loaded once per screen. */
+/**
+ * The classes this TEACHER may open — the register, the mark sheet, the
+ * broadsheet. The server filters to their own assignments.
+ */
 export function useClasses(token) {
+  return useClassList(token, api.classes);
+}
+
+/**
+ * The classes the OFFICE may open — billing, the canteen collection, the roll,
+ * a notice to a class, the timetable.
+ *
+ * Not the same question, and asking the teaching one was the fault behind
+ * every empty picker in the browser: an accountant has no teaching
+ * assignments, so "Nothing to choose from" was the honest answer to a question
+ * nobody meant to ask. The server answers this one with every class the school
+ * runs — or, for somebody who IS a teacher and holds nothing the office runs
+ * on, with theirs.
+ */
+export function useOfficeClasses(token) {
+  return useClassList(token, api.officeClasses);
+}
+
+function useClassList(token, load) {
   const [classes, setClasses] = useState(null);
   const [error, setError] = useState(null);
   useEffect(() => {
     let live = true;
-    api.classes(token)
+    load(token)
       .then(r => { if (live) setClasses(r.classes || []); })
       .catch(e => { if (live) { setError(e.message); setClasses([]); } });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
   return { classes, error };
 }
@@ -109,7 +132,8 @@ function inSchoolOrder(classes) {
     .map(([c]) => c);
 }
 
-export function ClassPicker({ classes, value, onChange, label = 'Class', hint, placeholder = 'Which class?' }) {
+export function ClassPicker({ classes, value, onChange, label = 'Class', hint,
+                              placeholder = 'Which class?', emptyMessage }) {
   // A field that says it is loading, rather than a line of text that is then
   // replaced by a field — the form keeps its height and nothing jumps.
   if (classes === null) {
@@ -118,7 +142,8 @@ export function ClassPicker({ classes, value, onChange, label = 'Class', hint, p
   }
   if (classes.length === 0) {
     return (
-      <InfoNote message="No classes are assigned to you yet. Ask the school office to set your teaching assignments — until then there is nothing here for you to open." />
+      <InfoNote message={emptyMessage
+        || 'No classes are assigned to you yet. Ask the school office to set your teaching assignments — until then there is nothing here for you to open.'} />
     );
   }
   return (

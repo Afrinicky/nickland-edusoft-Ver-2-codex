@@ -18,7 +18,7 @@ import { View, Text } from 'react-native';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { useClasses } from '../../pickers';
+import { useOfficeClasses } from '../../pickers';
 import { OfficeScreen, shortDate, useOffice } from '../../office';
 import {
   Select, DataTable, Muted, Badge, EmptyState, ErrorNote, SuccessNote, Button,
@@ -31,7 +31,7 @@ import { colors, spacing, type } from '../../theme';
 
 export function Compose() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [channel, setChannel] = useState('notice');
   const [audience, setAudience] = useState('parents');
   const [classId, setClassId] = useState('');

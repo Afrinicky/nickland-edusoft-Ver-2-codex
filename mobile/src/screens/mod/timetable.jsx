@@ -29,7 +29,7 @@ import { View, Text, ScrollView, Pressable } from 'react-native';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { useClasses, useSubjects } from '../../pickers';
+import { useOfficeClasses, useSubjects } from '../../pickers';
 import { OfficeScreen, useOffice } from '../../office';
 import {
   Select, Button, Muted, Badge, EmptyState, ErrorNote, SuccessNote, Sheet,
@@ -120,7 +120,7 @@ function MyWeek({ token }) {
 
 function ClassWeek({ token, mayEdit }) {
   const layout = useLayout();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const subjects = useSubjects(token, classId || null);
   const [grid, setGrid] = useState(null);        // { periods, entries }

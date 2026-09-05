@@ -46,6 +46,218 @@ function isPAYEEnabled(db) {
   return db.prepare("SELECT value FROM settings WHERE key = 'feature_paye_enabled'").get()?.value !== 'false';
 }
 
+// ── The month, worked out ───────────────────────────────────────────────────
+//
+// These three were written inside the IPC closure, which meant only the
+// installed application could reach them: `POST /payroll/run` answered 501 and
+// the browser's Payroll module showed "Running payroll is done on the school's
+// own system" to an office that WAS on the school's own system. A school with
+// one office PC and a laptop could run the month on one of them and not the
+// other, for no reason a bursar could see.
+//
+// They are module-level functions now, and both callers use them — the IPC
+// handler below and electron/server/office_api.js — so a run started in a
+// browser and one started at the office PC compute the same figures from the
+// same rates and write the same rows.
+//
+// None of them checks a permission. That is deliberate: the IPC handler checks
+// the desktop session and the HTTP route checks the bearer token's module, and
+// a function that also checked would be checking the wrong thing for one of
+// them. Authorisation belongs to the caller; arithmetic belongs here.
+
+/** One person's month, from their base salary and the school's rates. */
+function computeSalary(db, staffRow, { month, year, rates, payeOn }) {
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevYear = month === 1 ? year - 1 : year;
+  const prev = db.prepare(
+    'SELECT carry_over_to_next FROM staff_salaries WHERE staff_id = ? AND month = ? AND year = ?'
+  ).get(staffRow.id, prevMonth, prevYear);
+  const arrear = (prev && prev.carry_over_to_next) || 0;
+
+  const gross = staffRow.base_salary;
+  const ssnitWorker = staffRow.ssnit_enrolled ? Math.round(gross * rates.worker * 100) / 100 : 0;
+  const ssnitEmployer = staffRow.ssnit_enrolled ? Math.round(gross * rates.employer * 100) / 100 : 0;
+  const taxable = Math.max(0, gross - ssnitWorker);
+  const paye = payeOn ? calculatePAYE(taxable) : 0;
+  const net = Math.round((gross - ssnitWorker - paye) * 100) / 100;
+  return { gross, ssnitWorker, ssnitEmployer, paye, net, arrear };
+}
+
+/** Everybody on the payroll for a month, worked out but not written. */
+function bulkPreview(db, { month, year }) {
+  const payeOn = isPAYEEnabled(db);
+  const rates = getSSNITRates(db);
+  const staff = db.prepare(`
+    SELECT s.id, s.staff_number, s.surname, s.first_name, s.role,
+           s.base_salary, s.ssnit_enrolled
+    FROM staff s
+    WHERE s.status = 'Active' AND s.base_salary > 0
+    ORDER BY s.surname, s.first_name
+  `).all();
+
+  const previews = [];
+  let totalGross = 0, totalSSNITWorker = 0, totalSSNITEmployer = 0, totalPAYE = 0, totalNet = 0;
+
+  for (const s of staff) {
+    const c = computeSalary(db, s, { month, year, rates, payeOn });
+    const existing = db.prepare(
+      'SELECT * FROM staff_salaries WHERE staff_id = ? AND month = ? AND year = ?'
+    ).get(s.id, month, year);
+
+    previews.push({
+      staff_id: s.id, staff_number: s.staff_number,
+      surname: s.surname, first_name: s.first_name, role: s.role,
+      gross_salary: c.gross,
+      ssnit_worker: c.ssnitWorker, ssnit_employer: c.ssnitEmployer,
+      paye_tax: c.paye, net_salary: c.net,
+      arrear_brought_forward: c.arrear,
+      existing_id: (existing && existing.id) || null,
+      is_paid: (existing && existing.is_paid) || 0,
+    });
+
+    totalGross += c.gross;
+    totalSSNITWorker += c.ssnitWorker;
+    totalSSNITEmployer += c.ssnitEmployer;
+    totalPAYE += c.paye;
+    totalNet += c.net;
+  }
+
+  const r2 = (n) => Math.round(n * 100) / 100;
+  return {
+    month, year, previews,
+    totals: {
+      staff_count: staff.length,
+      total_gross: r2(totalGross),
+      total_ssnit_worker: r2(totalSSNITWorker),
+      total_ssnit_employer: r2(totalSSNITEmployer),
+      total_ssnit_combined: r2(totalSSNITWorker + totalSSNITEmployer),
+      total_paye: r2(totalPAYE),
+      total_net: r2(totalNet),
+      total_employer_cost: r2(totalGross + totalSSNITEmployer),
+    },
+  };
+}
+
+/**
+ * Write the month.
+ *
+ * Idempotent by construction: a salary row already there is UPDATED rather
+ * than inserted again, so running the month twice does not pay anybody twice.
+ * `payment_date` is only filled in where it was empty — a row already marked
+ * paid keeps the date it was actually paid on.
+ *
+ * Staff with no base salary are not on the run at all, which is why the answer
+ * carries `skipped`: "0 created, 0 updated" on a school with five teachers is
+ * a screen nobody can act on, and "5 have no salary set" is.
+ */
+function bulkRun(db, { month, year, paymentDate }) {
+  const payeOn = isPAYEEnabled(db);
+  const rates = getSSNITRates(db);
+  const staff = db.prepare(`
+    SELECT id, base_salary, ssnit_enrolled FROM staff
+    WHERE status = 'Active' AND base_salary > 0
+  `).all();
+  const withoutSalary = db.prepare(`
+    SELECT COUNT(*) AS c FROM staff
+    WHERE status = 'Active' AND COALESCE(base_salary, 0) <= 0
+  `).get().c;
+
+  let created = 0, updated = 0;
+  const tx = db.transaction(() => {
+    for (const s of staff) {
+      const c = computeSalary(db, s, { month, year, rates, payeOn });
+      const existing = db.prepare(
+        'SELECT id FROM staff_salaries WHERE staff_id = ? AND month = ? AND year = ?'
+      ).get(s.id, month, year);
+
+      if (existing) {
+        db.prepare(`
+          UPDATE staff_salaries SET
+            gross_salary = ?, arrear_brought_forward = ?,
+            ssnit_worker = ?, ssnit_employer = ?, paye_tax = ?,
+            net_salary = ?, payment_date = COALESCE(payment_date, ?)
+          WHERE id = ?
+        `).run(c.gross, c.arrear, c.ssnitWorker, c.ssnitEmployer, c.paye, c.net,
+               paymentDate, existing.id);
+        updated += 1;
+      } else {
+        db.prepare(`
+          INSERT INTO staff_salaries
+            (staff_id, month, year, gross_salary, arrear_brought_forward,
+             ssnit_worker, ssnit_employer, paye_tax, net_salary, payment_date, is_paid)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        `).run(s.id, month, year, c.gross, c.arrear, c.ssnitWorker, c.ssnitEmployer,
+               c.paye, c.net, paymentDate);
+        created += 1;
+      }
+    }
+  });
+  tx();
+  return { ok: true, created, updated, skipped: withoutSalary, month, year };
+}
+
+/**
+ * Record what actually left the account.
+ *
+ * The difference between what was due and what was handed over carries into
+ * next month rather than being forgiven silently — that is what
+ * `carry_over_to_next` is, and it is why a part payment is a legitimate thing
+ * to record rather than an error.
+ */
+function markPaid(db, { id, actualAmount, paymentMethod, paymentReference, paymentDate, paidBy }) {
+  const { postExpense, nextCounter } = require('./_ledger');
+  const salary = db.prepare('SELECT * FROM staff_salaries WHERE id = ?').get(id);
+  if (!salary) return { ok: false, error: 'Salary not found' };
+
+  const expected = salary.net_salary + (salary.arrear_brought_forward || 0);
+  const actual = parseFloat(actualAmount) || 0;
+  // A salary cannot be "paid" for nothing: that state reports the staff member
+  // as settled while the ledger records no money leaving the school, which is
+  // exactly the mismatch the Finance audit flags.
+  if (!(actual > 0)) {
+    return { ok: false, error: 'Enter the amount actually paid. To record an unpaid salary, leave it pending.' };
+  }
+  const carryOver = expected - actual;
+  const when = paymentDate || new Date().toISOString().slice(0, 10);
+
+  db.prepare(`
+    UPDATE staff_salaries SET
+      actual_amount_paid = ?, carry_over_to_next = ?,
+      payment_date = ?, payment_method = ?, payment_reference = ?,
+      is_paid = 1
+    WHERE id = ?
+  `).run(actual, Math.max(0, carryOver), when, paymentMethod || 'Bank', paymentReference || null, id);
+
+  // Auto-record expense via the central ledger helper (idempotent on
+  // linked_salary_id, so this can never double-post even if the legacy
+  // staff:save-salary path also ran).
+  try {
+    const staffRow = db.prepare('SELECT surname, first_name FROM staff WHERE id = ?').get(salary.staff_id);
+    postExpense(db, {
+      transaction_number: nextCounter(db, 'transaction_counter', 'SAL'),
+      category: 'salary',
+      amount: actual,
+      description: `Salary ${salary.month}/${salary.year}`,
+      payee_name: `${staffRow.surname} ${staffRow.first_name}`.trim(),
+      payment_method: paymentMethod || 'Bank',
+      reference: paymentReference || null,
+      date: when,
+      linked_salary_id: id,
+      recorded_by: paidBy || null,
+      is_auto: 1,
+    });
+  } catch (e) {
+    try {
+      db.prepare(`
+        INSERT INTO audit_log (entity_type, entity_id, action, justification, severity)
+        VALUES ('salary', ?, 'auto_record_failed', ?, 'high')
+      `).run(id || null, `Salary expense auto-record failed: ${e.message}`);
+    } catch (_) {}
+  }
+
+  return { ok: true, expected, actual, carry_over: Math.max(0, carryOver) };
+}
+
 module.exports = function registerPayrollHandlers(ipcMain, db) {
   const security = require('./_security');
   const { postExpense, nextCounter } = require('./_ledger');
@@ -99,195 +311,22 @@ module.exports = function registerPayrollHandlers(ipcMain, db) {
   ipcMain.handle('payroll:paid-summary', (_e, { termId } = {}) => paidSummaryForTerm(db, termId));
 
   // ── Bulk preview (calculate all active staff for a month) ──
-  ipcMain.handle('payroll:bulk-preview', (_e, { month, year }) => {
-    const payeOn = isPAYEEnabled(db);
-    const staff = db.prepare(`
-      SELECT s.id, s.staff_number, s.surname, s.first_name, s.role,
-             s.base_salary, s.ssnit_enrolled
-      FROM staff s
-      WHERE s.status = 'Active' AND s.base_salary > 0
-      ORDER BY s.surname, s.first_name
-    `).all();
-
-    const rates = getSSNITRates(db);
-    const previews = [];
-    let totalGross = 0, totalSSNITWorker = 0, totalSSNITEmployer = 0;
-    let totalPAYE = 0, totalNet = 0;
-
-    for (const s of staff) {
-      // Carry-over from previous month
-      const prevMonth = month === 1 ? 12 : month - 1;
-      const prevYear = month === 1 ? year - 1 : year;
-      const prevSalary = db.prepare(
-        'SELECT carry_over_to_next FROM staff_salaries WHERE staff_id = ? AND month = ? AND year = ?'
-      ).get(s.id, prevMonth, prevYear);
-      const arrear = prevSalary?.carry_over_to_next || 0;
-
-      // Existing entry for this month
-      const existing = db.prepare(
-        'SELECT * FROM staff_salaries WHERE staff_id = ? AND month = ? AND year = ?'
-      ).get(s.id, month, year);
-
-      const gross = s.base_salary;
-      const ssnitWorker = s.ssnit_enrolled ? Math.round(gross * rates.worker * 100) / 100 : 0;
-      const ssnitEmployer = s.ssnit_enrolled ? Math.round(gross * rates.employer * 100) / 100 : 0;
-      const taxable = Math.max(0, gross - ssnitWorker);
-      const paye = payeOn ? calculatePAYE(taxable) : 0;
-      const net = gross - ssnitWorker - paye;
-
-      previews.push({
-        staff_id: s.id,
-        staff_number: s.staff_number,
-        surname: s.surname,
-        first_name: s.first_name,
-        role: s.role,
-        gross_salary: gross,
-        ssnit_worker: ssnitWorker,
-        ssnit_employer: ssnitEmployer,
-        paye_tax: paye,
-        net_salary: Math.round(net * 100) / 100,
-        arrear_brought_forward: arrear,
-        existing_id: existing?.id || null,
-        is_paid: existing?.is_paid || 0,
-      });
-
-      totalGross += gross;
-      totalSSNITWorker += ssnitWorker;
-      totalSSNITEmployer += ssnitEmployer;
-      totalPAYE += paye;
-      totalNet += net;
-    }
-
-    return {
-      month, year,
-      previews,
-      totals: {
-        staff_count: staff.length,
-        total_gross: Math.round(totalGross * 100) / 100,
-        total_ssnit_worker: Math.round(totalSSNITWorker * 100) / 100,
-        total_ssnit_employer: Math.round(totalSSNITEmployer * 100) / 100,
-        total_ssnit_combined: Math.round((totalSSNITWorker + totalSSNITEmployer) * 100) / 100,
-        total_paye: Math.round(totalPAYE * 100) / 100,
-        total_net: Math.round(totalNet * 100) / 100,
-        total_employer_cost: Math.round((totalGross + totalSSNITEmployer) * 100) / 100,
-      },
-    };
-  });
+  ipcMain.handle('payroll:bulk-preview', (_e, { month, year }) => bulkPreview(db, { month, year }));
 
   // ── Bulk run (commit all calculated salaries for a month) ──
   ipcMain.handle('payroll:bulk-run', (_e, { month, year, paymentDate }) => {
     if (!security.checkPermission(db, 'payroll', 'edit')) {
       return { ok: false, error: 'Access denied. You do not have permission to run payroll.' };
     }
-    const payeOn = isPAYEEnabled(db);
-    const staff = db.prepare(`
-      SELECT id, base_salary, ssnit_enrolled
-      FROM staff WHERE status = 'Active' AND base_salary > 0
-    `).all();
-
-    const rates = getSSNITRates(db);
-    let created = 0, updated = 0;
-
-    const tx = db.transaction(() => {
-      for (const s of staff) {
-        const prevMonth = month === 1 ? 12 : month - 1;
-        const prevYear = month === 1 ? year - 1 : year;
-        const prevSalary = db.prepare(
-          'SELECT carry_over_to_next FROM staff_salaries WHERE staff_id = ? AND month = ? AND year = ?'
-        ).get(s.id, prevMonth, prevYear);
-        const arrear = prevSalary?.carry_over_to_next || 0;
-
-        const gross = s.base_salary;
-        const ssnitWorker = s.ssnit_enrolled ? Math.round(gross * rates.worker * 100) / 100 : 0;
-        const ssnitEmployer = s.ssnit_enrolled ? Math.round(gross * rates.employer * 100) / 100 : 0;
-        const taxable = Math.max(0, gross - ssnitWorker);
-        const paye = payeOn ? calculatePAYE(taxable) : 0;
-        const net = gross - ssnitWorker - paye;
-
-        const existing = db.prepare(
-          'SELECT id FROM staff_salaries WHERE staff_id = ? AND month = ? AND year = ?'
-        ).get(s.id, month, year);
-
-        if (existing) {
-          db.prepare(`
-            UPDATE staff_salaries SET
-              gross_salary = ?, arrear_brought_forward = ?,
-              ssnit_worker = ?, ssnit_employer = ?, paye_tax = ?,
-              net_salary = ?, payment_date = COALESCE(payment_date, ?)
-            WHERE id = ?
-          `).run(gross, arrear, ssnitWorker, ssnitEmployer, paye, net, paymentDate, existing.id);
-          updated++;
-        } else {
-          db.prepare(`
-            INSERT INTO staff_salaries
-              (staff_id, month, year, gross_salary, arrear_brought_forward,
-               ssnit_worker, ssnit_employer, paye_tax, net_salary, payment_date, is_paid)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-          `).run(s.id, month, year, gross, arrear, ssnitWorker, ssnitEmployer, paye, net, paymentDate);
-          created++;
-        }
-      }
-    });
-    tx();
-
-    return { ok: true, created, updated };
+    return bulkRun(db, { month, year, paymentDate });
   });
 
   // ── Mark salary as paid ──────────────────────────────
-  ipcMain.handle('payroll:mark-paid', (_e, { id, actualAmount, paymentMethod, paymentReference, paymentDate, paidBy }) => {
+  ipcMain.handle('payroll:mark-paid', (_e, args) => {
     if (!security.checkPermission(db, 'payroll', 'edit')) {
       return { ok: false, error: 'Access denied. You do not have permission to mark salaries paid.' };
     }
-    const salary = db.prepare('SELECT * FROM staff_salaries WHERE id = ?').get(id);
-    if (!salary) return { ok: false, error: 'Salary not found' };
-
-    const expected = salary.net_salary + (salary.arrear_brought_forward || 0);
-    const actual = parseFloat(actualAmount) || 0;
-    // A salary cannot be "paid" for nothing: that state reports the staff member
-    // as settled while the ledger records no money leaving the school, which is
-    // exactly the mismatch the Finance audit flags.
-    if (!(actual > 0)) {
-      return { ok: false, error: 'Enter the amount actually paid. To record an unpaid salary, leave it pending.' };
-    }
-    const carryOver = expected - actual;
-
-    db.prepare(`
-      UPDATE staff_salaries SET
-        actual_amount_paid = ?, carry_over_to_next = ?,
-        payment_date = ?, payment_method = ?, payment_reference = ?,
-        is_paid = 1
-      WHERE id = ?
-    `).run(actual, Math.max(0, carryOver), paymentDate, paymentMethod || 'Bank', paymentReference || null, id);
-
-    // Auto-record expense via the central ledger helper (idempotent on
-    // linked_salary_id, so this can never double-post even if the legacy
-    // staff:save-salary path also ran).
-    try {
-      const staffRow = db.prepare('SELECT surname, first_name FROM staff WHERE id = ?').get(salary.staff_id);
-      const txnNo = nextCounter(db, 'transaction_counter', 'SAL');
-      postExpense(db, {
-        transaction_number: txnNo,
-        category: 'salary',
-        amount: actual,
-        description: `Salary ${salary.month}/${salary.year}`,
-        payee_name: `${staffRow.surname} ${staffRow.first_name}`.trim(),
-        payment_method: paymentMethod || 'Bank',
-        reference: paymentReference || null,
-        date: paymentDate,
-        linked_salary_id: id,
-        recorded_by: paidBy || null,
-        is_auto: 1,
-      });
-    } catch (e) {
-      try {
-        db.prepare(`
-          INSERT INTO audit_log (entity_type, entity_id, action, justification, severity)
-          VALUES ('salary', ?, 'auto_record_failed', ?, 'high')
-        `).run(id || null, `Salary expense auto-record failed: ${e.message}`);
-      } catch (_) {}
-    }
-
-    return { ok: true, expected, actual, carry_over: Math.max(0, carryOver) };
+    return markPaid(db, args);
   });
 
   // ── Year-to-date summary for a staff member ──────────
@@ -441,3 +480,12 @@ function paidSummaryForTerm(db, termId) {
 }
 
 module.exports.paidSummaryForTerm = paidSummaryForTerm;
+// What the browser needs too. See the note above `computeSalary`: one
+// calculation, two callers, so the month is the same month whichever machine
+// the office ran it from.
+module.exports.bulkPreview = bulkPreview;
+module.exports.bulkRun = bulkRun;
+module.exports.markPaid = markPaid;
+module.exports.calculatePAYE = calculatePAYE;
+module.exports.getSSNITRates = getSSNITRates;
+module.exports.isPAYEEnabled = isPAYEEnabled;

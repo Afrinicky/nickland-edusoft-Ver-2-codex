@@ -8,7 +8,6 @@
 import React from 'react';
 import { View, Text } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { AsOf, OfficeScreen, cedis, shortDate, useOffice } from '../../office';
 import {
@@ -23,17 +22,16 @@ import { colors, spacing, type } from '../../theme';
 
 export default function FinanceOverview() {
   const router = useRouter();
-  const { mode } = useAuth();
   const layout = useLayout();
   const wide = layout.isDesktop;
 
   const state = useOffice(async (token) => {
     const [overview, rich] = await Promise.all([
-      mode === 'online' ? api.school.feesOverview(token) : api.financeOverview(token),
+      api.financeOverview(token),
       wide ? api.dashFinance(token) : Promise.resolve(null),
     ]);
     return { overview, rich: rich && rich.ok ? rich : null };
-  }, [mode, wide]);
+  }, [wide]);
 
   if (state.data && state.data.rich) {
     return (

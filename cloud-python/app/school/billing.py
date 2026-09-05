@@ -59,6 +59,66 @@ def template_total(db, template_id):
         (template_id,), 0))
 
 
+def projected_income_for_term(db, term_id):
+    """What the term is worth, whether or not the bills have been raised.
+
+    A school that has not yet raised this term's bills is not a school with no
+    income — it is a school with no bills yet. The offline dashboard has always
+    shown the projection (``electron/ipc/_billing.js``), so the online one
+    shows the same one, computed the same way:
+
+      * bills that EXIST are authoritative, including what has been paid
+        against them and any discount already applied;
+      * every other active pupil is put through the template bill generation
+        would use, so raising the missing bills does not move the figure;
+      * a pupil no template covers is counted separately rather than as zero —
+        "nobody owes anything" and "nobody has been told what they owe" are
+        different things, and only one of them is a problem to fix today.
+    """
+    billed = db.one("""
+      SELECT COALESCE(SUM(total_billed), 0) AS total, COUNT(*) AS count
+        FROM student_bills
+       WHERE term_id = %s AND COALESCE(status, 'active') = 'active'""", (term_id,))
+
+    unbilled = db.all("""
+      SELECT s.id, s.current_class_id
+        FROM students s
+       WHERE s.status = 'Active'
+         AND NOT EXISTS (
+           SELECT 1 FROM student_bills b
+            WHERE b.student_id = s.id AND b.term_id = %s
+              AND COALESCE(b.status, 'active') = 'active')""", (term_id,))
+
+    # One template lookup per CLASS, not per pupil: a school of nine hundred in
+    # twelve classes is twelve lookups, and the answer cannot differ within a
+    # class anyway.
+    cache = {}
+    projected = 0.0
+    projected_count = 0
+    unresolved = 0
+    for s in unbilled:
+        key = s["current_class_id"]
+        if key not in cache:
+            tpl = resolve_fee_template(db, key, term_id)
+            cache[key] = template_total(db, tpl["id"]) if tpl else None
+        amount = cache[key]
+        if amount is None:
+            unresolved += 1
+            continue
+        projected += amount
+        projected_count += 1
+
+    total = round2((billed["total"] or 0) + projected)
+    return {
+        "total": total,
+        "billed_total": round2(billed["total"] or 0),
+        "billed_count": billed["count"] or 0,
+        "projected_total": round2(projected),
+        "projected_count": projected_count,
+        "unresolved_count": unresolved,
+    }
+
+
 def recompute_paid(tx, bill_id):
     """Recompute what has been PAID, and nothing else.
 

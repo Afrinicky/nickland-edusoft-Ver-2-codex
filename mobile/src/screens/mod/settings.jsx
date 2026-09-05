@@ -19,6 +19,7 @@ import { View, Text, Platform } from 'react-native';
 import { useAuth } from '../../auth';
 import { useBranding } from '../../brand';
 import { api } from '../../api';
+import { FilePicker } from '../../filepick';
 import { can } from '../../guard';
 import { isSuperAdmin } from '../../modules';
 import { OfficeScreen, shortDate, useOffice } from '../../office';
@@ -140,6 +141,8 @@ export function Appearance() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
+  const [logoSaved, setLogoSaved] = useState(false);
+  const [signSaved, setSignSaved] = useState(false);
   const may = can(profile, 'settings', 'edit');
 
   const settings = state.data?.settings;
@@ -218,6 +221,62 @@ export function Appearance() {
             ) : null}
           </>
         )}
+      </Panel>
+
+      {/* The crest heads every screen, every receipt and every report card.
+          Setting it needed the office PC, which meant a school could rebrand
+          everything except from the machine most of them actually sit at. */}
+      <Panel title="The school's crest"
+             subtitle="What heads every screen, every receipt and every report card.">
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg, flexWrap: 'wrap' }}>
+          <Crest logo={brand.logo} size={72} />
+          <View style={{ flex: 1, minWidth: 220, gap: 6 }}>
+            {logoSaved ? <SuccessNote message="The crest is in use everywhere — here, on the phone and on the office PC." /> : null}
+            {may ? (
+              <FilePicker
+                label={brand.logo ? 'Replace the crest' : 'Upload a crest'}
+                accept="image/*" maxEdge={512}
+                hint="A square PNG or JPEG. It is shrunk to 512 pixels before it is stored."
+                onPick={async (uri) => {
+                  await api.uploadLogo(token, uri);
+                  setLogoSaved(true);
+                  if (brand.reload) brand.reload();
+                }} />
+            ) : <Muted>You can see the crest but not change it.</Muted>}
+          </View>
+        </View>
+      </Panel>
+
+      {/* The two signatures that go on a report card, an attestation and a
+          statutory schedule. Uploading one needed the office PC — so a school
+          could print a report card from the browser with nobody's name under
+          it, and had to walk to the machine in the corner to fix that. */}
+      <Panel title="Signatures"
+             subtitle="What goes under a report card, an attestation and a printed schedule.">
+        {signSaved ? <SuccessNote message="Saved. It will appear on documents the assigned signer prints." /> : null}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg }}>
+          {[['proprietor', "The proprietor's signature",
+             'Official documents, attestations, testimonials and financial reports.'],
+            ['headmaster', "The head teacher's signature",
+             'Report cards, end of term reports and academic correspondence.']].map(
+            ([role, label, why]) => (
+              <View key={role} style={{ flex: 1, minWidth: 260, gap: 6 }}>
+                <Text style={{ ...type.label }}>{label}</Text>
+                <Muted>{why}</Muted>
+                {may ? (
+                  <FilePicker
+                    label={`Upload the ${role === 'proprietor' ? "proprietor's" : "head teacher's"} signature`}
+                    accept="image/*" maxEdge={600}
+                    hint="A PNG with a transparent background prints best."
+                    onPick={async (uri) => {
+                      await api.uploadSignature(token, { role, file: uri });
+                      setSignSaved(true);
+                      state.reload();
+                    }} />
+                ) : <Muted>You can see this setting but not change it.</Muted>}
+              </View>
+            ))}
+        </View>
       </Panel>
 
       <Panel title="Where these apply"
@@ -324,7 +383,7 @@ export function Terms() {
 
 export function Classes() {
   const { token } = useAuth();
-  const state = useOffice((t) => api.classes(t));
+  const state = useOffice((t) => api.officeClasses(t));
   const rows = state.data?.classes || [];
   return (
     <OfficeScreen state={state} skeleton={4}>
@@ -351,7 +410,7 @@ export function Classes() {
 export function Subjects() {
   const { token } = useAuth();
   const [classId, setClassId] = useState('');
-  const classes = useOffice((t) => api.classes(t));
+  const classes = useOffice((t) => api.officeClasses(t));
   const state = useOffice(
     (t) => (classId ? api.subjects(t, classId) : api.subjects(t)),
     [classId]);

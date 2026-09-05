@@ -51,6 +51,280 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
     return row ? row.id : null;
   };
 
+  /** Any one of these, at view, is enough to need the school's own lists. */
+  const anyOf = (ctx, modules) => modules.some(m => can(ctx, m, 'view'));
+
+  // ══ The lists the whole office picks from ══════════════════════════════════
+  //
+  // Every screen in the office starts by naming a class or a pupil: raise this
+  // class's bills, take this pupil's payment, work down this class on the bulk
+  // pay sheet, chase this class's canteen arrears.
+  //
+  // ── The fault these routes fix ─────────────────────────────────────────────
+  //
+  // They used to name them through `/classes` and `/students`, which are the
+  // TEACHING lists: both are filtered to the caller's own staff_assignments,
+  // because a subject teacher who takes one lesson in Basic 6 has no business
+  // marking its register. That is right for teaching and wrong for the office.
+  // An accountant has no teaching assignments at all, so every class picker in
+  // the browser read "Nothing to choose from" and every pupil search came back
+  // empty — the bulk pay sheet, the payment sheet, billing, the canteen sheet.
+  // The installed application has no such filter on those screens, so the same
+  // person could do the work at the office PC and not on the laptop beside it.
+  //
+  // So: two lists, unfiltered by teaching, gated on the modules that actually
+  // need to name somebody. `/classes` and `/students` are unchanged and still
+  // mean "the ones that are yours".
+  //
+  // The pupil list carries what a receipt carries — name, admission number,
+  // class — and nothing else. Naming a child you are about to take money from
+  // is not reading their record; the record stays behind `students`.
+  const OFFICE_MODULES = ['students', 'fees', 'canteen', 'finance', 'academics', 'staff', 'payroll'];
+
+  add('GET', `${API}/office/classes`, async (ctx, req, res) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    if (!anyOf(ctx, OFFICE_MODULES)) return deny(res);
+    const classes = db.prepare(`
+      SELECT id, name, short_code, level_category, level_order,
+             (SELECT COUNT(*) FROM students s
+               WHERE s.current_class_id = class_groups.id AND s.status = 'Active') AS pupils
+      FROM class_groups
+      WHERE COALESCE(is_active, 1) = 1
+      ORDER BY level_order, name
+    `).all();
+    return json(res, 200, { ok: true, classes });
+  });
+
+  add('GET', `${API}/office/students`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    if (!anyOf(ctx, ['students', 'fees', 'canteen', 'finance'])) return deny(res);
+
+    const status = ['Active', 'Inactive', 'Withdrawn', 'Graduated', 'Suspended'].includes(query.status)
+      ? query.status : 'Active';
+    const p = [status];
+    let sql = `
+      SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names, s.gender,
+             s.current_class_id, c.name AS class_name, c.short_code AS class_code
+      FROM students s LEFT JOIN class_groups c ON c.id = s.current_class_id
+      WHERE s.status = ?`;
+    if (query.classId) { sql += ' AND s.current_class_id = ?'; p.push(int(query.classId)); }
+    if (query.q) {
+      sql += ` AND (s.surname LIKE ? OR s.first_name LIKE ? OR s.other_names LIKE ?
+                    OR s.index_number LIKE ?)`;
+      const like = `%${String(query.q).slice(0, 60)}%`;
+      p.push(like, like, like, like);
+    }
+    sql += ' ORDER BY s.surname, s.first_name LIMIT 500';
+    return json(res, 200, {
+      ok: true, status,
+      students: db.prepare(sql).all(...p).map(r => ({
+        ...r, name: `${r.surname || ''} ${r.first_name || ''}`.trim(),
+      })),
+    });
+  });
+
+  // The staff room, for the same reason: payroll and the activities board both
+  // start by naming somebody, and a payroll clerk holds `payroll`, not `staff`.
+  add('GET', `${API}/office/staff`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    if (!anyOf(ctx, ['staff', 'payroll'])) return deny(res);
+    const status = ['Active', 'Inactive', 'Resigned', 'Retired'].includes(query.status)
+      ? query.status : 'Active';
+    return json(res, 200, {
+      ok: true, status,
+      staff: db.prepare(`
+        SELECT id, staff_number, surname, first_name, role, status, phone
+        FROM staff WHERE status = ? ORDER BY surname, first_name
+      `).all(status).map(r => ({ ...r, name: `${r.surname || ''} ${r.first_name || ''}`.trim() })),
+    });
+  });
+
+  // ══ Staff training, and a year's pay ═══════════════════════════════════════
+  //
+  // Two small things the installed application could do and the browser could
+  // not. Neither is complicated; both were simply never given a route, which
+  // is how a capability gap usually looks from the inside.
+
+  add('GET', `${API}/staff/:id/training`, async (ctx, req, res, params) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    const id = int(params.id);
+    // Your own training record is yours to read. Anybody else's is the staff
+    // module — a courses list is part of somebody's employment file.
+    const own = ctx.user && ctx.user.staff_id && Number(ctx.user.staff_id) === id;
+    if (!own && !can(ctx, 'staff', 'view')) return deny(res);
+    return json(res, 200, {
+      ok: true,
+      training: db.prepare(`
+        SELECT id, title, provider, start_date, end_date, notes
+        FROM staff_training WHERE staff_id = ? ORDER BY start_date DESC, id DESC
+      `).all(id),
+      may_edit: can(ctx, 'staff', 'edit'),
+    });
+  });
+
+  add('POST', `${API}/staff/:id/training`, async (ctx, req, res, params, body) => {
+    if (!gate(ctx, res, 'staff', 'edit')) return undefined;
+    const id = int(params.id);
+    if (!db.prepare('SELECT id FROM staff WHERE id = ?').get(id)) {
+      return missing(res, 'No such member of staff.');
+    }
+    const title = String(body.title || '').trim();
+    if (!title) return bad(res, 'What was the course called?');
+    const vals = [title, String(body.provider || '').trim() || null,
+                  body.startDate || null, body.endDate || null,
+                  String(body.notes || '').trim() || null];
+
+    if (body.id) {
+      db.prepare(`UPDATE staff_training SET title = ?, provider = ?, start_date = ?,
+                    end_date = ?, notes = ? WHERE id = ? AND staff_id = ?`)
+        .run(...vals, int(body.id), id);
+      audit(db, ctx, 'staff_training', int(body.id), 'save_training', title, 'normal');
+      return json(res, 200, { ok: true, id: int(body.id) });
+    }
+    const r = db.prepare(`INSERT INTO staff_training
+        (staff_id, title, provider, start_date, end_date, notes)
+        VALUES (?, ?, ?, ?, ?, ?)`).run(id, ...vals);
+    audit(db, ctx, 'staff_training', r.lastInsertRowid, 'save_training', title, 'normal');
+    return json(res, 200, { ok: true, id: r.lastInsertRowid });
+  });
+
+  add('DELETE', `${API}/staff/training/:trainingId`, async (ctx, req, res, params) => {
+    if (!gate(ctx, res, 'staff', 'edit')) return undefined;
+    const id = int(params.trainingId);
+    const row = db.prepare('SELECT * FROM staff_training WHERE id = ?').get(id);
+    if (!row) return missing(res, 'No such training record.');
+    db.prepare('DELETE FROM staff_training WHERE id = ?').run(id);
+    audit(db, ctx, 'staff_training', id, 'delete_training', row.title || '', 'normal');
+    return json(res, 200, { ok: true });
+  });
+
+  // A year of pay, month by month — what somebody needs for a loan application
+  // or a tax query, and what the desktop has always been able to print.
+  add('GET', `${API}/payroll/:staffId/year`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    const staffId = int(params.staffId);
+    // A person may always read their own year, whatever their modules say —
+    // the same rule the payslip route follows.
+    const own = ctx.user && ctx.user.staff_id && Number(ctx.user.staff_id) === staffId;
+    if (!own && !can(ctx, 'payroll', 'view')) return deny(res);
+    const year = int(query.year) || new Date().getFullYear();
+
+    const months = db.prepare(`
+      SELECT month, gross_salary, ssnit_worker, ssnit_employer, paye_tax,
+             other_deductions, net_salary, actual_amount_paid, is_paid
+      FROM staff_salaries WHERE staff_id = ? AND year = ? ORDER BY month
+    `).all(staffId, year);
+    const sum = (k) => num(months.reduce((n, r) => n + (Number(r[k]) || 0), 0));
+    return json(res, 200, {
+      ok: true, staff_id: staffId, year, months,
+      totals: {
+        gross: sum('gross_salary'), ssnit_worker: sum('ssnit_worker'),
+        ssnit_employer: sum('ssnit_employer'), paye: sum('paye_tax'),
+        other_deductions: sum('other_deductions'), net: sum('net_salary'),
+        actual: sum('actual_amount_paid'),
+        paid_months: months.filter(m => m.is_paid).length,
+      },
+    });
+  });
+
+  // ══ The school calendar ════════════════════════════════════════════════════
+  //
+  // Which days are school days. Every canteen figure in the system rests on
+  // it: what a pupil owes is the number of SCHOOL DAYS they have not paid for
+  // times the daily rate, so a term with no calendar set up has no arrears at
+  // all and a term with the wrong one has the wrong arrears.
+  //
+  // It was reachable only from the installed application, which meant a school
+  // could read the consequences of the calendar in the browser and not set it
+  // — the Canteen module's Calendar tab could edit the rate and nothing else.
+
+  add('GET', `${API}/calendar`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    if (!can(ctx, 'canteen', 'view') && !can(ctx, 'settings', 'view')) return deny(res);
+    const termId = query.termId ? int(query.termId) : (currentTerm() || {}).id || null;
+    const days = termId
+      ? db.prepare('SELECT * FROM school_calendar WHERE term_id = ? ORDER BY date').all(termId)
+      : db.prepare('SELECT * FROM school_calendar ORDER BY date LIMIT 500').all();
+    const counts = days.reduce((a, d) => {
+      a[d.day_type] = (a[d.day_type] || 0) + 1; return a;
+    }, {});
+    return json(res, 200, {
+      ok: true, term_id: termId, days, counts,
+      school_days: counts.school_day || 0,
+      may_edit: can(ctx, 'canteen', 'edit') || can(ctx, 'settings', 'edit'),
+    });
+  });
+
+  // One day, changed. A public holiday declared on Tuesday afternoon is the
+  // ordinary case, and it must not cost anybody the whole term's calendar.
+  add('POST', `${API}/calendar/day`, async (ctx, req, res, params, body) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    if (!can(ctx, 'canteen', 'edit') && !can(ctx, 'settings', 'edit')) return deny(res);
+    const date = String(body.date || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return bad(res, 'Which day? Use YYYY-MM-DD.');
+    const dayType = ['school_day', 'holiday', 'weekend', 'vacation'].includes(body.dayType)
+      ? body.dayType : 'school_day';
+    const termId = body.termId ? int(body.termId) : (currentTerm() || {}).id || null;
+    const label = String(body.label || '').slice(0, 120);
+
+    const existing = db.prepare('SELECT id FROM school_calendar WHERE date = ?').get(date);
+    if (existing) {
+      db.prepare('UPDATE school_calendar SET day_type = ?, label = ?, term_id = ? WHERE date = ?')
+        .run(dayType, label, termId, date);
+    } else {
+      db.prepare('INSERT INTO school_calendar (date, day_type, label, term_id) VALUES (?, ?, ?, ?)')
+        .run(date, dayType, label, termId);
+    }
+    audit(db, ctx, 'school_calendar', null, 'set_calendar_day', `${date} → ${dayType}`, 'normal');
+    return json(res, 200, { ok: true, date, day_type: dayType, label });
+  });
+
+  // The whole term at once: weekdays are school days, weekends are not, and
+  // the holidays the office names are taken out. The desktop's own generator,
+  // so a term set up in a browser and one set up at the office PC produce the
+  // same calendar and therefore the same arrears.
+  add('POST', `${API}/calendar/term`, async (ctx, req, res, params, body) => {
+    if (!ctx || ctx.role !== 'staff') return deny(res, 'Staff only.');
+    if (!can(ctx, 'canteen', 'edit') && !can(ctx, 'settings', 'edit')) return deny(res);
+    const term = body.termId ? db.prepare('SELECT * FROM terms WHERE id = ?').get(int(body.termId))
+                             : currentTerm();
+    if (!term) return bad(res, 'No term is running, so there is nothing to lay out.');
+    const startDate = String(body.startDate || term.start_date || '').slice(0, 10);
+    const endDate = String(body.endDate || term.end_date || '').slice(0, 10);
+    if (!startDate || !endDate || startDate > endDate) {
+      return bad(res, "That term has no dates. Set them in Settings → Terms first.");
+    }
+    const excludeWeekends = body.excludeWeekends !== false;
+    const holidays = Array.isArray(body.holidays) ? body.holidays : [];
+    const holidayBy = new Map(holidays
+      .filter(h => h && h.date)
+      .map(h => [String(h.date).slice(0, 10), String(h.label || 'Holiday').slice(0, 120)]));
+
+    let school = 0, off = 0;
+    const tx = db.transaction(() => {
+      const ins = db.prepare(`INSERT OR REPLACE INTO school_calendar (date, day_type, label, term_id)
+                              VALUES (?, ?, ?, ?)`);
+      const end = new Date(`${endDate}T00:00:00Z`);
+      for (const d = new Date(`${startDate}T00:00:00Z`); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+        const iso = d.toISOString().slice(0, 10);
+        const dow = d.getUTCDay();
+        let dayType = 'school_day';
+        let label = '';
+        if (excludeWeekends && (dow === 0 || dow === 6)) {
+          dayType = 'holiday';
+          label = dow === 0 ? 'Sunday' : 'Saturday';
+        }
+        if (holidayBy.has(iso)) { dayType = 'holiday'; label = holidayBy.get(iso); }
+        ins.run(iso, dayType, label, term.id);
+        if (dayType === 'school_day') school += 1; else off += 1;
+      }
+    });
+    tx();
+    audit(db, ctx, 'school_calendar', term.id, 'setup_term_calendar',
+      `${term.label}: ${school} school days, ${off} off`, 'high');
+    return json(res, 200, { ok: true, term: term.label, school_days: school, off_days: off });
+  });
+
   // ══ Billing ════════════════════════════════════════════════════════════════
 
   add('GET', `${API}/fees/templates`, async (ctx, req, res, params, body, ip, tokenId, query) => {
@@ -152,6 +426,21 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
    * TOLD they owe, and quietly rewriting one after they have paid against it is
    * how a school ends up arguing with a receipt it issued itself.
    */
+  // Raising a class's bills — through the desktop's own generator.
+  //
+  // This route used to carry its own copy of bill generation, and the copy
+  // resolved templates more strictly than the real thing: it matched only
+  // `term_id = ?`, so a school whose fee template said "Every class / Any
+  // term" — which is what a small school actually sets up — got "no template"
+  // for every pupil and could not raise a bill from the browser at all.
+  //
+  // The copy was also missing everything the desktop's generator does around
+  // the edges: book charges carried into Terms 2 and 3, supplementary charges
+  // preserved when a bill is regenerated, the refusal to quietly resurrect a
+  // bill the school withdrew, and recomputing `total_paid` from the payments
+  // table rather than resetting it to zero. Each of those is money.
+  //
+  // So there is one generator now, in electron/ipc/fees.js, and this calls it.
   add('POST', `${API}/fees/bills`, async (ctx, req, res, params, body) => {
     if (!gate(ctx, res, 'fees', 'create')) return undefined;
     const term = body.termId ? db.prepare('SELECT * FROM terms WHERE id = ?').get(int(body.termId))
@@ -160,70 +449,47 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
 
     const classId = body.classId ? int(body.classId) : null;
     const studentId = body.studentId ? int(body.studentId) : null;
-    if (!classId && !studentId) return bad(res, 'Which class, or which pupil?');
+    const scope = String(body.scope || (studentId ? 'student' : classId ? 'class' : 'all'));
 
-    const students = studentId
-      ? db.prepare("SELECT * FROM students WHERE id = ? AND status = 'Active'").all(studentId)
-      : db.prepare("SELECT * FROM students WHERE current_class_id = ? AND status = 'Active' ORDER BY surname, first_name")
-          .all(classId);
+    let students;
+    if (scope === 'student' || studentId) {
+      students = db.prepare("SELECT id FROM students WHERE id = ? AND status = 'Active'").all(studentId);
+    } else if (scope === 'class' || classId) {
+      students = db.prepare(`SELECT id FROM students WHERE current_class_id = ? AND status = 'Active'
+                             ORDER BY surname, first_name`).all(classId);
+    } else if (scope === 'owing') {
+      students = db.prepare(`
+        SELECT DISTINCT s.id FROM students s JOIN student_bills b ON b.student_id = s.id
+        WHERE s.status = 'Active' AND b.balance > 0`).all();
+    } else {
+      students = db.prepare("SELECT id FROM students WHERE status = 'Active' ORDER BY surname, first_name").all();
+    }
     if (!students.length) return bad(res, 'There is nobody active to bill.');
 
-    let raised = 0; let skipped = 0; let noTemplate = 0;
-    const tx = db.transaction(() => {
-      for (const s of students) {
-        const existing = db.prepare('SELECT id FROM student_bills WHERE student_id = ? AND term_id = ?')
-          .get(s.id, term.id);
-        if (existing) { skipped += 1; continue; }
-
-        const template = db.prepare(`
-          SELECT * FROM fee_templates
-          WHERE COALESCE(is_active,1) = 1 AND term_id = ?
-            AND (class_group_id = ? OR class_group_id IS NULL)
-          ORDER BY class_group_id IS NULL LIMIT 1`).get(term.id, s.current_class_id);
-        if (!template) { noTemplate += 1; continue; }
-
-        const lines = db.prepare(
-          'SELECT * FROM fee_line_items WHERE fee_template_id = ? ORDER BY item_number, id').all(template.id);
-        const total = num(lines.reduce((n, l) => n + Number(l.amount || 0), 0));
-
-        // Anything unpaid from a previous term travels with the new bill, so a
-        // parent sees one figure rather than being chased by two.
-        const arrears = num(db.prepare(`
-          SELECT COALESCE(SUM(balance), 0) AS b FROM student_bills
-          WHERE student_id = ? AND term_id <> ? AND COALESCE(status,'active') = 'active'
-        `).get(s.id, term.id).b);
-
-        // A discount the school has granted this pupil, applied as it is billed.
-        const discount = discountFor(s.id, total);
-
-        const billed = num(Math.max(0, total - discount) + arrears);
-        const r = db.prepare(`
-          INSERT INTO student_bills
-            (student_id, term_id, template_id, total_billed, total_paid, balance,
-             arrears_from_prev, discount_amount, discount_reason, generated_at)
-          VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`)
-          .run(s.id, term.id, template.id, billed, billed, arrears,
-               discount, discount ? 'Granted discount' : null, todayISO());
-
-        let n = 0;
-        for (const l of lines) {
-          n += 1;
-          db.prepare(`INSERT INTO bill_line_items (student_bill_id, item_number, description, amount, is_arrear)
-                      VALUES (?, ?, ?, ?, 0)`).run(r.lastInsertRowid, n, l.description, num(l.amount));
-        }
-        if (arrears > 0) {
-          db.prepare(`INSERT INTO bill_line_items (student_bill_id, item_number, description, amount, is_arrear)
-                      VALUES (?, ?, ?, ?, 1)`)
-            .run(r.lastInsertRowid, n + 1, 'Brought forward from a previous term', arrears);
-        }
-        raised += 1;
+    const fees = require('../ipc/fees');
+    let generated = 0;
+    // Reasons, counted. A school that sees "Generated 0 bills" and nothing
+    // else cannot tell a missing template from a withdrawn bill from a pupil
+    // with no class, and those are three different jobs.
+    const problems = new Map();
+    for (const s of students) {
+      try { fees.generateBillForStudent(db, s.id, term.id); generated += 1; }
+      catch (e) {
+        const msg = String((e && e.message) || e);
+        problems.set(msg, (problems.get(msg) || 0) + 1);
       }
-    });
-    tx();
+    }
 
+    const failed = [...problems.entries()].map(([reason, count]) => ({ reason, count }));
     audit(db, ctx, 'student_bill', null, 'raise_bills',
-      `${raised} raised, ${skipped} already billed, ${noTemplate} with no template — ${term.label}`, 'high');
-    return json(res, 200, { ok: true, raised, skipped, no_template: noTemplate, term: term.label });
+      `${generated} of ${students.length} — ${term.label}`, 'high');
+    return json(res, 200, {
+      ok: true, generated, skipped: students.length - generated,
+      problems: failed, failed, term: term.label,
+      // Kept so an older browser build that reads `raised` still shows a
+      // figure rather than "undefined bills raised".
+      raised: generated,
+    });
   });
 
   /** What a granted discount takes off a bill of `total`. */
@@ -889,36 +1155,71 @@ module.exports = function registerOfficeRoutes({ add, db, json, can, API, getSet
 
   // ══ Payroll ════════════════════════════════════════════════════════════════
 
+  // Running the month. The desktop's own calculation — the same PAYE bands,
+  // the same SSNIT rates, the same carry-over arithmetic — so a run started in
+  // a browser and one started at the office PC write identical rows.
+  //
+  // It used to answer 501 unconditionally, because the calculation lived
+  // inside the payroll IPC closure and `payroll.bulkRun` was never a function.
+  // The browser told an office standing at the school's own server that
+  // payroll "is done on the school's own system". See electron/ipc/payroll.js.
   add('POST', `${API}/payroll/run`, async (ctx, req, res, params, body) => {
     if (!gate(ctx, res, 'payroll', 'create')) return undefined;
     const now = new Date();
     const month = int(body.month) || (now.getMonth() + 1);
     const year = int(body.year) || now.getFullYear();
-    // The desktop's own calculation, so a run started in a browser and one
-    // started at the office PC produce identical rows.
-    const payroll = require('../ipc/payroll');
-    if (typeof payroll.bulkRun !== 'function') {
-      return json(res, 501, { ok: false, host_only: true,
-        error: 'Running payroll is done on the school’s own system.' });
+    if (!(month >= 1 && month <= 12) || !(year >= 1970 && year <= 2999)) {
+      return bad(res, 'Which month?');
     }
-    const r = payroll.bulkRun(db, { month, year, paymentDate: todayISO() });
-    audit(db, ctx, 'payroll', null, 'run_payroll', `${month}/${year}`, 'high');
-    return json(res, 200, { ok: true, ...(r || {}) });
+    const payroll = require('../ipc/payroll');
+    const r = payroll.bulkRun(db, {
+      month, year, paymentDate: body.paymentDate || todayISO(),
+    });
+    audit(db, ctx, 'payroll', null, 'run_payroll',
+      `${month}/${year} — ${r.created} created, ${r.updated} updated`, 'high');
+    return json(res, 200, r);
   });
 
+  // The month as it WOULD be, before anybody commits to it. The desktop shows
+  // this above its run button and the browser needs the same: a payroll clerk
+  // checks the figures before writing them, and a preview that only one of the
+  // two machines can produce is a check only one of them can make.
+  add('GET', `${API}/payroll/preview`, async (ctx, req, res, params, body, ip, tokenId, query) => {
+    if (!gate(ctx, res, 'payroll')) return undefined;
+    const now = new Date();
+    const month = int(query.month) || (now.getMonth() + 1);
+    const year = int(query.year) || now.getFullYear();
+    if (!(month >= 1 && month <= 12) || !(year >= 1970 && year <= 2999)) {
+      return bad(res, 'Which month?');
+    }
+    const payroll = require('../ipc/payroll');
+    return json(res, 200, { ok: true, ...payroll.bulkPreview(db, { month, year }) });
+  });
+
+  // Marking a salary paid, through the desktop's own function rather than a
+  // second UPDATE written here. That matters for two things this route used to
+  // get wrong: the expense is posted to the ledger (so Finance shows the money
+  // leaving, and the audit's ledger-vs-module comparison balances), and the
+  // shortfall on a part payment carries into next month instead of being
+  // silently forgiven.
   add('POST', `${API}/payroll/:id/paid`, async (ctx, req, res, params, body) => {
     if (!gate(ctx, res, 'payroll', 'edit')) return undefined;
     const id = int(params.id);
     const row = db.prepare('SELECT * FROM staff_salaries WHERE id = ?').get(id);
     if (!row) return missing(res, 'No such salary row.');
-    db.prepare(`UPDATE staff_salaries
-                   SET is_paid = 1, actual_amount_paid = ?, payment_method = ?,
-                       payment_reference = ?, payment_date = ?
-                 WHERE id = ?`)
-      .run(num(body.amount ?? row.net_salary), body.method || 'Bank Transfer',
-           body.reference || null, body.date || todayISO(), id);
-    audit(db, ctx, 'salary', id, 'mark_salary_paid', String(num(body.amount ?? row.net_salary)), 'high');
-    return json(res, 200, { ok: true });
+    const payroll = require('../ipc/payroll');
+    const r = payroll.markPaid(db, {
+      id,
+      actualAmount: body.amount != null ? num(body.amount) : row.net_salary,
+      paymentMethod: body.method || 'Bank Transfer',
+      paymentReference: body.reference || null,
+      paymentDate: body.date || todayISO(),
+      paidBy: ctx.user ? ctx.user.id : null,
+    });
+    if (!r.ok) return bad(res, r.error);
+    audit(db, ctx, 'salary', id, 'mark_salary_paid',
+      `${r.actual}${r.carry_over ? ` — ${r.carry_over} carried over` : ''}`, 'high');
+    return json(res, 200, r);
   });
 
   add('GET', `${API}/payroll/schedule/:kind`, async (ctx, req, res, params, body, ip, tokenId, query) => {

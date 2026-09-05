@@ -85,10 +85,14 @@ layout, not a browser interpretation of them.
 
 They are served by `electron/server/dashboards_api.js` — one `GET /dash/*`
 route per dashboard, each running the same query as the desktop's IPC handler
-and behind the same module permission. A connection that does not serve them —
-the thin hosted portal holds a projection of the school and has no expenditure
-ledger to chart — falls back to the summary it can build from the ordinary
-endpoints, rather than showing empty frames or a page of zeroes.
+and behind the same module permission — and, for a school hosted rather than
+running its own server, by `cloud-python/app/school/dashboards.py`, which is
+the same eight readings translated to Postgres: same query, same field names,
+same arithmetic, in the same order, so the two can be read side by side. A
+connection that does not serve them — the thin hosted portal holds a projection
+of the school and has no expenditure ledger to chart — falls back to the
+summary it can build from the ordinary endpoints, rather than showing empty
+frames or a page of zeroes.
 
 The two charts are real SVG. React Native Web renders through react-dom, so a
 lowercase `svg` element in the tree is a real SVG element: the browser gets the
@@ -117,6 +121,27 @@ desktop reads. A Ghanaian school year is three terms with long breaks between
 them, and half the questions an office asks the system have "the school is on
 vacation" as their answer.
 
+### A photograph no longer waits on a cable
+
+The installer attaches a face by opening the operating system's file dialog and
+copying the file off that machine's disk. A browser cannot do that, so a
+photograph taken at admission waited until somebody carried a cable to the
+office PC — which is also why so many rolls have no faces on them.
+
+`mobile/src/filepick.jsx` is the other half: the file is read in the page,
+shrunk to 800 pixels on the long edge and re-encoded as JPEG before it goes
+anywhere, and sent as bytes. That turns a six-megabyte upload on a rural
+connection into about eighty kilobytes. The same picker sets a pupil's or a
+member of staff's photograph, attaches a certificate to an employment file, and
+sets the school's crest and the two signatures that go under a report card.
+
+Where the bytes end up is the one thing that differs between the two servers.
+The school's own server writes them where the desktop keeps its media, so both
+machines read one another's uploads. The online school runs on a container that
+is replaced on every deploy, so a file written during admission would be gone
+by Thursday — there the column that holds a path holds the picture instead, at
+a tighter size limit, because that column is billed by the megabyte.
+
 ### What is still done on the office computer
 
 Four things, and each for the same reason: they are about that machine, not
@@ -130,12 +155,12 @@ about the school.
   can keep trading in Excel and import the result back. Both halves are files
   on that machine. The tab is there and says so rather than drawing nothing.
 
-Receipt layouts and the signatures printed on report cards are also set on the
-desktop. Everything else a school does — billing, the extra charges a term
-throws up, withdrawing a bill and putting it back, discounts, book charges, the
-store room, the buses, the payroll run and its statutory schedules, staff
-records and what each person teaches, the timetable, question papers, notices
-and the audit trail — is in the browser.
+Receipt layouts are also set on the desktop. Everything else a school does —
+billing, the extra charges a term throws up, withdrawing a bill and putting it
+back, discounts, book charges, the store room, the buses, the payroll run and
+its statutory schedules, staff records and what each person teaches, the school
+calendar, the timetable, question papers, notices, the crest and the two
+signatures printed on report cards, and the audit trail — is in the browser.
 
 ### The colours are the school's
 

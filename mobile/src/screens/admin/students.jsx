@@ -19,7 +19,7 @@ export default function Students() {
   const [status, setStatus] = useState('Active');
   const [q, setQ] = useState('');
   const state = useOffice((t) => api.adminStudents(t, { status }), [status]);
-  const classes = useOffice((t) => api.classes(t));
+  const classes = useOffice((t) => api.officeClasses(t));
 
   const [admitting, setAdmitting] = useState(false);
   const [surname, setSurname] = useState('');

@@ -26,7 +26,7 @@ import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
 import { OfficeScreen, shortDate, useOffice } from '../../office';
-import { useClasses } from '../../pickers';
+import { useOfficeClasses } from '../../pickers';
 import {
   SearchField, DataTable, Muted, EmptyState, Badge, Button, Sheet, Field, Select,
   ErrorNote, SuccessNote, SegmentedControl, ProgressBar, Avatar,
@@ -197,7 +197,7 @@ export function StudentsRoll({ initialQuery = '' }) {
   const { token } = useAuth();
   const [classId, setClassId] = useState('');
   const [q, setQ] = useState(initialQuery);
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const state = useOffice((t) => api.adminStudents(t, { status: 'Active', classId: classId || undefined }), [classId]);
   const d = state.data;
 
@@ -262,7 +262,7 @@ function filterPupils(list, q) {
 
 export function StudentsAdmissions() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const state = useOffice((t) => api.adminStudents(t, { status: 'Active' }));
   const [form, setForm] = useState(blankAdmission());
   const [busy, setBusy] = useState(false);
@@ -472,7 +472,7 @@ const SHEET_COLUMNS = [
 export function StudentsSheet() {
   const { token, profile } = useAuth();
   const layout = useLayout();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const state = useOffice(
     (t) => (classId ? api.adminStudents(t, { status: 'Active', classId }) : Promise.resolve({ ok: true, students: [] })),

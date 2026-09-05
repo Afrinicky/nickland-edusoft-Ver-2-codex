@@ -116,6 +116,12 @@ routes that used to live behind an IPC handler on the one PC in the office
 school performs (`cloud-python/app/school/*.py`) against SQLite instead of
 Postgres, so the two answer the same shapes.
 
+The online school answers all of these too, at `/api/v1/school/…`: the eight
+dashboards, the three office pickers, the payroll preview, the school calendar,
+a training record, a year's pay and the approvals queue. Where a table below
+says a route is host-only, it means the thin cloud PROJECTION — which holds a
+summary of a school rather than a school — and not the online school.
+
 Every one of them names its module and its action and is refused by the same
 `can()` the rest of the API uses. **None of them is a bridge to an arbitrary
 IPC channel** — that would be a hole in the middle of the access system,
@@ -124,7 +130,7 @@ however convenient.
 | Method | Path | Needs | Purpose |
 |--------|------|-------|---------|
 | GET/POST | `/fees/templates`, `/fees/templates/:id` | `fees` / `fees:edit` | The bill a class is charged, and its line items. `?billType=` selects school fees (the default), `supplementary`, or `all`. A second school-fees template for the same class and term is refused. |
-| POST | `/fees/bills` | `fees:create` | Raise the bills for a whole class from its template — arrears carried forward, discounts applied, anybody already billed skipped. |
+| POST | `/fees/bills` | `fees:create` | Raise bills — `scope: student\|class\|owing\|all`, or just `classId`/`studentId`. It calls the installed application's own generator (`electron/ipc/fees.generateBillForStudent`), so a template that says "Every class / Any term" raises here exactly as it does at the office PC, arrears carry forward, discounts apply, and re-raising UPDATES the bill in place rather than discarding money already received. The answer counts what was generated and names the reason for anything that was not. |
 | GET/POST | `/discounts` | `fees` / **elevated** | Who has been forgiven what, and by whom. Granting one needs the Proprietor or the Super Admin: a bursar with Fees at Full may take money and may not forgive it. |
 | GET/POST | `/fees/supplementary`, `/fees/supplementary/remove` | `fees` / **elevated** | The extra charges a term throws up — excursion, sports week, mock exams. Applied onto bills that already exist, so a parent keeps one bill; idempotent per (bill, charge), and withdrawable from every bill it was added to. |
 | GET | `/fees/bills/voided` | `fees` | What was withdrawn, by whom, and on what stated grounds. Readable by anybody who may see fees — that is the point of the screen. |
@@ -135,7 +141,9 @@ however convenient.
 | GET | `/canteen/debtors` | `canteen` | Canteen arrears at the rate the school set. |
 | GET | `/admin/staff-register` | `staff` | Who is in today. |
 | GET/POST | `/activities`, `/activities/:id/acknowledge` | `staff` | Staff activities and duties, and acknowledging one. |
-| POST | `/payroll/run`, `/payroll/:id/paid` | `payroll:create`, `payroll:edit` | Run the month, and mark a salary paid. |
+| GET | `/payroll/preview` | `payroll` | What the month WOULD come to, without writing anything: every payslip, and the totals under them. A payroll is the largest single payment a school makes, and checking it against the bank before committing it is the difference between a mistake and a bounced salary. `?month=&year=`. |
+| POST | `/payroll/run`, `/payroll/:id/paid` | `payroll:create`, `payroll:edit` | Run the month, and mark a salary paid. Both call the installed application's own code (`electron/ipc/payroll.js`), so the browser and the office PC compute the same figures; the run is idempotent — a second run pays nobody twice — and marking a salary paid posts the expense to the ledger and carries any shortfall into next month. |
+| GET | `/payroll/:staffId/year` | own, or `payroll` | A year of pay, month by month, with the totals a loan application or a tax query needs. **A person may always read their own year.** |
 | GET | `/payroll/schedule/ssnit\|paye` | `payroll` | The two statutory schedules a school files monthly. |
 | GET | `/payroll/:staffId/payslip` | own, or `payroll` | **A person may always read their own payslip**, whatever their modules say. Anybody else's needs payroll. |
 | POST | `/finance/income`, `/finance/expenses/:id/approve` | `finance:create`, `finance:edit` | Money in, and approving money out — never your own. |
@@ -147,6 +155,13 @@ however convenient.
 | GET/POST | `/exams/papers`, `/exams/sections`, `/exams/questions`, `/exams/papers/:id/from-bank` | `academics` / `academics:edit` | Question papers, their sections and questions, and copying from the bank. |
 | POST | `/admin/students/:id` | `students:edit` | Correct a pupil's record — the students sheet. The admission number is not the sheet's to change. |
 | POST | `/admin/staff` | `staff:create` / `staff:edit` | Put somebody on the roll, or amend their record. The pay columns are only written by an account that may edit payroll — one that could set a salary it cannot read back is worse than one that can read it. |
+| GET | `/office/classes`, `/office/students`, `/office/staff` | any office module | The lists the office picks from, **unfiltered by teaching assignments**. `/classes` and `/students` elsewhere are the TEACHING lists — filtered to the caller's own assignments, because a subject teacher who takes one lesson in Basic 6 does not mark its register. An accountant has no assignments at all, so that filter answered "nothing" and every class picker, pupil search and bulk pay sheet in the browser came back empty. These are separate routes rather than a widened scope, so that "not a teacher" can never become "may open anybody's register". |
+| GET | `/calendar` | `canteen` or `settings` | Which days are school days, with the counts and whether this account may change them. |
+| POST | `/calendar/day`, `/calendar/term` | `canteen:edit` or `settings:edit` | One day changed — a public holiday declared on Tuesday afternoon is the ordinary case — or a whole term laid out: weekdays are school days, weekends are not, and the holidays the office names are taken out. Every canteen arrears figure counts against this table, so a term with no calendar has no arrears and a term with the wrong one has the wrong arrears. |
+| GET/POST | `/staff/:id/training`, DELETE `/staff/training/:id` | own (read), `staff:edit` (write) | The courses somebody has been on. A person may always read their own. |
+| GET | `/admin/approvals` | `staff` or `academics` | Leave requests and lesson notes waiting to be decided, in ONE request. It used to be two, and an account holding one queue but not the other got a 403 for the half it may not see — swallowed by the client, so the count came back quietly short. Each half is returned only to an account that holds it, and `may_see` says which halves those are. |
+| POST | `/students/:id/photo`, `/staff/:id/photo`, `/settings/logo`, `/settings/signature` | the module at `edit` | Attaching a picture from a browser. The file arrives as a data URI, and the extension comes from the declared MIME type and never from a client filename. Anything that is not an image is refused by name; anything over 6MB is refused with its size; anything over the route's request limit is answered 413 rather than having its connection dropped — the socket used to be destroyed, which a browser reports as a network error, so the one person who needed to know the file was too big was told nothing at all. **Your own face is yours to set**, whatever your modules say. Where the bytes go differs by system and by nothing else: the school's own server writes them where the desktop keeps its media (`electron/server/uploads_api.js`); the online school has no durable disk, so the column that holds a path there holds the picture here (`cloud-python/app/school/media.py`), with a tighter limit, because that column is billed by the megabyte. |
+| GET/POST | `/staff/:id/documents`, DELETE `/staff/documents/:id` | `staff` / `staff:edit` | Certificates and contracts against an employment file — the things the Staff module's "Documents expiring soon" panel counts. Reading that panel in the browser while being unable to add to it was the shape of the gap. The stored file is never returned in the list: a browser has no use for a folder on the school's disk, and no list needs the document itself. |
 | POST | `/admin/staff/:id/assignments` | `staff:edit` | Which classes and subjects somebody teaches. The teaching scope is built from this, so it decides whose marks they can touch; replaced wholesale, and a class keeps exactly one class teacher. |
 
 The gate on these is the **module**, not a portal. The app hands out modules the
@@ -184,6 +199,13 @@ once rather than handed a page of zeroes.
 | GET | `/dash/staff` | `staff` | Active and inactive, today's register (and whether clock-in is even switched on), leave waiting, documents expiring inside ninety days, the staff room by role, and recent hires. |
 | GET | `/dash/payroll` | `payroll` | One month's run: who is on it, gross, SSNIT as worker, employer and their sum, PAYE, net, what has been paid and what is still owing. `?month=&year=`; a month outside 1–12 is refused rather than guessed. |
 | GET | `/dash/finance` | `finance` | Expected and actual income, expenditure, the net position, active staff, both category breakdowns, and the last five entries each side. |
+
+The **online school** serves all eight as well, at
+`/api/v1/school/dash/*` (`cloud-python/app/school/dashboards.py`) — the same
+queries translated to Postgres, and checked against a real one by
+`cloud-python/tests/test_dashboards.py`, which asserts the figures rather than
+the shapes: a dashboard returning the right keys full of zeroes is the failure
+worth catching, because the office reads the zero and believes it.
 
 A connection that does not serve them answers nothing rather than throwing: the
 thin hosted portal holds a projection of the school and has no expenditure

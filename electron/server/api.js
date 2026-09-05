@@ -22,6 +22,7 @@ const { registerFinanceRoutes } = require('./finance_api');
 const { registerAdminRoutes } = require('./admin_api');
 const registerOfficeRoutes = require('./office_api');
 const { registerDashboardRoutes } = require('./dashboards_api');
+const { registerUploadRoutes } = require('./uploads_api');
 const { registerPaymentRoutes, onlinePaymentsEnabled } = require('./payments_api');
 const portals = require('../ipc/_portals');
 // Required at call-time (not destructured at load) to avoid a load-order
@@ -45,12 +46,37 @@ function json(res, code, obj) {
   res.end(body);
 }
 
-function readBody(req) {
+// One megabyte is plenty for a form and nowhere near enough for a photograph,
+// so a route that receives a file says how much it will take. The default
+// stays where it was: a route that has not thought about it cannot be used to
+// post ten megabytes at the school's server.
+const DEFAULT_MAX_BODY = 1e6;
+
+// What a body over the limit resolves to. It is a symbol rather than a shape
+// so no handler can be fooled by a request that happens to post {tooBig:true}.
+const TOO_BIG = Symbol('body over the limit');
+
+function readBody(req, limit = DEFAULT_MAX_BODY) {
   return new Promise((resolve) => {
-    let data = ''; let tooBig = false;
-    req.on('data', (c) => { data += c; if (data.length > 1e6) { tooBig = true; req.destroy(); } });
-    req.on('end', () => { if (tooBig) return resolve({}); try { resolve(data ? JSON.parse(data) : {}); } catch { resolve({}); } });
-    req.on('error', () => resolve({}));
+    let data = ''; let seen = 0; let tooBig = false;
+    // Read past the limit rather than tearing the socket down on the first
+    // byte over it. Destroying it mid-upload is what a browser reports as a
+    // network error, so somebody attaching a photograph at the counter was
+    // told nothing at all about why it would not go — and the obvious guess,
+    // that the school's connection had dropped, was wrong. The slack is
+    // bounded, so a deliberate flood is still cut off; within it the request
+    // finishes and the answer below can say what was wrong with it.
+    const ceiling = limit + 2e6;
+    req.on('data', (c) => {
+      seen += c.length;
+      if (seen > limit) { tooBig = true; data = ''; if (seen > ceiling) req.destroy(); return; }
+      data += c;
+    });
+    req.on('end', () => {
+      if (tooBig) return resolve(TOO_BIG);
+      try { resolve(data ? JSON.parse(data) : {}); } catch { resolve({}); }
+    });
+    req.on('error', () => resolve(tooBig ? TOO_BIG : {}));
   });
 }
 
@@ -269,10 +295,13 @@ function createApiServer(db, opts = {}) {
   // arrived, unparsed. Only the gateway webhook needs that, and it needs it
   // absolutely: a signature is over the bytes that were sent, and JSON that
   // has been through a parser and back is a different string.
+  // `maxBody` raises the request-size limit for a route that receives a file.
+  // See readBody: everything else keeps the one-megabyte default.
   const add = (method, pattern, handler, routeOpts = {}) =>
     routes.push({
       method, parts: pattern.split('/').filter(Boolean), handler,
       public: !!routeOpts.public, rawBody: !!routeOpts.rawBody,
+      maxBody: routeOpts.maxBody || DEFAULT_MAX_BODY,
     });
 
   const match = (parts, reqParts) => {
@@ -288,7 +317,45 @@ function createApiServer(db, opts = {}) {
   // The signed-in teacher's class/subject scope. Cheap enough per request —
   // a handful of rows — and always re-read, so an assignment changed in the
   // office takes effect on the next tap rather than the next sign-in.
+  //
+  // ── Why an accountant is not restricted by it ─────────────────────────────
+  //
+  // The teaching scope answers one question: whose marks, whose register. It
+  // is built from `staff_assignments`, and an accountant has none — so it
+  // answered "nothing", and every route that filters by it handed the office
+  // an empty list. In the browser that read as: no classes in any picker, no
+  // pupils in any search, "Nothing to choose from" on the bulk pay sheet, and
+  // an empty roll behind the payment sheet. The installed application has no
+  // such filter on those screens, so the same person could do the work at the
+  // office PC and not on the laptop next to it.
+  //
+  // Absence of teaching assignments is not "restricted to nothing" — it means
+  // this account is not a teacher, and the teaching scope has nothing to say
+  // about it. So somebody with NO assignments who holds a module the office
+  // runs on is not narrowed by it.
+  //
+  // The `hasAssignments` guard is the point of the rule, not an optimisation:
+  // a class teacher who also collects the canteen money keeps their own
+  // classes, and their register stays theirs. Nothing here grants a module —
+  // every route still checks `can()` — it only stops a filter meant for
+  // teachers from silencing people who are not teachers.
+  // ── ...and why it still is on a register ──────────────────────────────────
+  //
+  // The relaxation is asked for by name, route by route, and only the office
+  // routes ask: the roll, the debtors, the canteen money. A register, a mark
+  // sheet, a broadsheet, a timetable and a homework sheet keep the strict
+  // scope, because "not a teacher" is not a reason to be handed somebody's
+  // class. An accountant holding Students so they can find a pupil to bill
+  // must not thereby be able to open that pupil's register by typing its
+  // address — which is exactly what a single widened scope did.
+  const OFFICE_MODULES = ['fees', 'finance', 'payroll', 'staff', 'settings'];
   const scopeOf = (ctx) => scopeLib.scopeFor(db, ctx.user.id);
+  const officeScopeOf = (ctx) => {
+    const scope = scopeOf(ctx);
+    if (scope.unrestricted || scope.hasAssignments) return scope;
+    if (OFFICE_MODULES.some(m => can(ctx, m, 'view'))) return { ...scope, unrestricted: true };
+    return scope;
+  };
 
   // ── Public ──
   add('GET', `${API}/health`, async (ctx, req, res) => json(res, 200, { ok: true, name: getSetting(db, 'school_name', 'School'), api: 'v1' }), { public: true });
@@ -1008,7 +1075,7 @@ function createApiServer(db, opts = {}) {
     // The roll a teacher may read is the roll of the classes that are theirs.
     // Filtering in SQL rather than after the LIMIT, so a teacher of one class
     // is not handed the first 500 pupils in the school and then shown four.
-    const visible = scopeLib.visibleClassIds(db, scopeOf(ctx));
+    const visible = scopeLib.visibleClassIds(db, officeScopeOf(ctx));
     if (visible) {
       if (visible.size === 0) return json(res, 200, { ok: true, students: [] });
       sql += ` AND s.current_class_id IN (${[...visible].map(() => '?').join(',')})`;
@@ -1058,7 +1125,7 @@ function createApiServer(db, opts = {}) {
     if (!can(ctx, 'students', 'view') && !can(ctx, 'academics', 'view') && !can(ctx, 'canteen', 'view')) {
       return json(res, 403, { ok: false, error: 'Access denied.' });
     }
-    const scope = scopeOf(ctx);
+    const scope = officeScopeOf(ctx);
     const visible = scopeLib.visibleClassIds(db, scope);
     let classes = db.prepare('SELECT id, name, short_code, level_category FROM class_groups ORDER BY level_order, name').all();
     // A teacher is not offered Basic 6 and then told access denied on choosing
@@ -1240,7 +1307,7 @@ function createApiServer(db, opts = {}) {
     if (!s) return json(res, 404, { ok: false, error: 'Student not found.' });
     // Which pupils are in another class is not this teacher's to learn either,
     // so an out-of-scope lookup answers not-found rather than forbidden.
-    if (!scopeLib.canAccessStudent(db, scopeOf(ctx), sid)) return json(res, 404, { ok: false, error: 'Student not found.' });
+    if (!scopeLib.canAccessStudent(db, officeScopeOf(ctx), sid)) return json(res, 404, { ok: false, error: 'Student not found.' });
     const term = db.prepare('SELECT id, label FROM terms WHERE is_current = 1').get();
     const rate = parseFloat(getSetting(db, 'canteen_daily_rate', '5'));
     const unpaidDays = term ? db.prepare(`
@@ -1261,7 +1328,7 @@ function createApiServer(db, opts = {}) {
     if (!can(ctx, 'canteen', 'create')) return json(res, 403, { ok: false, error: 'Access denied.' });
     const sid = parseInt(body.student_id, 10);
     if (!sid) return json(res, 400, { ok: false, error: 'student_id is required.' });
-    if (!scopeLib.canAccessStudent(db, scopeOf(ctx), sid)) return json(res, 404, { ok: false, error: 'Student not found.' });
+    if (!scopeLib.canAccessStudent(db, officeScopeOf(ctx), sid)) return json(res, 404, { ok: false, error: 'Student not found.' });
     const { recordCanteenPayment } = require('../ipc/canteen');
     let result;
     try {
@@ -1547,6 +1614,14 @@ function createApiServer(db, opts = {}) {
   // the module permission the desktop checks. See server/dashboards_api.js.
   registerDashboardRoutes({ add, db, json, can, API, getSetting });
 
+  // Photographs and documents: the one thing the installer does by reaching
+  // for a file on its own disk, which a browser has to do by sending the
+  // bytes instead. See server/uploads_api.js.
+  registerUploadRoutes({
+    add, db, json, can, API, media, audit,
+    userDataPath: opts.userDataPath || db._userDataPath || null,
+  });
+
   // Money moving in from outside the school: a parent's checkout, the
   // gateway's webhook, and the office's verification of a charge nobody heard
   // back about. See server/payments_api.js for why the webhook is the only
@@ -1598,7 +1673,17 @@ function createApiServer(db, opts = {}) {
         rawBody = await readRawBody(req);
         try { body = rawBody ? JSON.parse(rawBody) : {}; } catch (_) { body = {}; }
       } else {
-        body = await readBody(req);
+        body = await readBody(req, route.maxBody);
+      }
+      if (body === TOO_BIG) {
+        // Past the ceiling readBody cut the request off, and there is no
+        // socket left to answer on. Below it the request finished, so the
+        // sender is told what was wrong instead of guessing at a dropped
+        // connection.
+        if (res.writableEnded || res.destroyed) return undefined;
+        const mb = Math.max(1, Math.round(route.maxBody / 1048576));
+        return json(res, 413, { ok: false,
+          error: `That is more than this can accept in one request (${mb}MB). Send a smaller file.` });
       }
     }
     try {

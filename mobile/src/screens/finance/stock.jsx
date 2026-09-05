@@ -14,7 +14,7 @@ import { colors, type } from '../../theme';
 
 export default function Stock() {
   const { token, profile } = useAuth();
-  const state = useOffice((t) => api.school.inventory(t));
+  const state = useOffice((t) => api.inventory(t));
   const [moving, setMoving] = useState(null);
   const [direction, setDirection] = useState('in');
   const [quantity, setQuantity] = useState('');
@@ -29,7 +29,7 @@ export default function Stock() {
     if (!(Number(quantity) > 0)) return setError('Enter how many.');
     setBusy(true);
     try {
-      await api.school.moveStock(token, {
+      await api.moveStock(token, {
         item_id: moving.id, type: direction, quantity: Number(quantity),
       });
       setMoving(null); setQuantity('');

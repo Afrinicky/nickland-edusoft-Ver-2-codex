@@ -10,7 +10,7 @@ import { View, Text, ScrollView } from 'react-native';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { useClasses } from '../../pickers';
+import { useOfficeClasses } from '../../pickers';
 import { OfficeScreen, useOffice } from '../../office';
 import {
   Select, SearchField, DataTable, Muted, Badge, EmptyState, ErrorNote, Button,
@@ -30,7 +30,7 @@ import { colors, spacing, type } from '../../theme';
 
 export function AcademicProfile() {
   const { token } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const [q, setQ] = useState('');
   const [studentId, setStudentId] = useState(null);
@@ -161,7 +161,7 @@ const fmt = (v) => (v == null || v === '' ? '—' : String(Math.round(Number(v) 
 
 export function AssessmentCompilation() {
   const { token } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const state = useOffice(
     (t) => (classId ? api.results(t, classId) : Promise.resolve({ ok: true, students: [] })),
@@ -269,7 +269,7 @@ const compStyles = {
 
 export function EndOfTermReport() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);

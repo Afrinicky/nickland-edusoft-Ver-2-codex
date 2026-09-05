@@ -10,9 +10,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, Linking, RefreshControl } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '../../auth';
-import { RequireModule } from '../../guard';
+import { RequireModule, can } from '../../guard';
 import { useScreenTitle } from '../../shell';
 import { api, money } from '../../api';
+import { FilePicker, canPickFiles } from '../../filepick';
 import {
   Screen, Card, Section, Title, Heading, Body, Muted, Micro, Button, Badge, Avatar,
   ErrorNote, InfoNote, Flash, Skeleton, EmptyState, ListRow, Grid, StatCard,
@@ -29,7 +30,7 @@ import { colors, palette, gradients, spacing, radius, shadow, type } from '../..
 
 function StudentScreen() {
   const { id } = useLocalSearchParams();
-  const { token } = useAuth();
+  const { token, profile } = useAuth();
   const router = useRouter();
   const layout = useLayout();
   const brand = useBranding();
@@ -126,6 +127,19 @@ function StudentScreen() {
           report card and their profile sheet, both printed from here. */}
       <Card>
         <Toolbar>
+          {/* The face on the register, the report card and the receipt. It is
+              taken on a phone at admission, and until this it had to be moved
+              onto the office PC before anybody could attach it. */}
+          {canPickFiles && can(profile, 'students', 'edit') ? (
+            <FilePicker
+              label={s.photo ? 'Replace photograph' : 'Add a photograph'}
+              accept="image/*"
+              onPick={async (uri) => {
+                await api.uploadStudentPhoto(token, id, uri);
+                setSaved('Photograph saved.');
+                await load();
+              }} />
+          ) : null}
           <PrintButton fetch={fetchProfile} title="Print profile" />
           {report && (report.subjects || []).length ? (
             <PrintButton fetch={fetchReport} title="Print report card" variant="subtle" />

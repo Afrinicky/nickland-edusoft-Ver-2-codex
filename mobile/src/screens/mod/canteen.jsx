@@ -17,7 +17,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { useClasses, todayISO, DateStepper } from '../../pickers';
+import { useOfficeClasses, todayISO, DateStepper } from '../../pickers';
 import { OfficeScreen, cedis, useOffice } from '../../office';
 import {
   Select, DataTable, Muted, Badge, EmptyState, ErrorNote, SuccessNote, Button,
@@ -169,7 +169,7 @@ function CanteenPlain({ d }) {
 
 export function CanteenSheet() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const [date, setDate] = useState(todayISO());
   const [picked, setPicked] = useState({});
@@ -266,7 +266,7 @@ export function CanteenSheet() {
 
 export function CanteenDebtors() {
   const { token } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const [q, setQ] = useState('');
   const state = useOffice((t) => api.canteenDebtors(t, classId || undefined), [classId]);
@@ -320,32 +320,81 @@ export function CanteenDebtors() {
 
 export function CanteenCalendar() {
   const { token, profile } = useAuth();
-  const state = useOffice((t) => api.systemSettings(t));
+  const settings = useOffice((t) => api.systemSettings(t));
+  const calendar = useOffice((t) => api.schoolCalendar(t).catch(() => null));
   const [rate, setRate] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [saved, setSaved] = useState(false);
-  const may = can(profile, 'settings', 'edit');
+  const [saved, setSaved] = useState(null);
+  const [holidays, setHolidays] = useState('');
+  const [weekends, setWeekends] = useState('yes');
+  const [day, setDay] = useState({ date: todayISO(), dayType: 'holiday', label: '' });
+  const may = can(profile, 'settings', 'edit') || can(profile, 'canteen', 'edit');
 
   useEffect(() => {
-    const s = state.data?.settings;
+    const s = settings.data?.settings;
     if (s && rate === null) setRate(String(s.canteen_daily_rate || ''));
-  }, [state.data, rate]);
+  }, [settings.data, rate]);
 
-  async function save() {
-    setBusy(true); setError(null); setSaved(false);
+  const cal = calendar.data;
+  const days = cal?.days || [];
+  const schoolDays = cal?.school_days ?? 0;
+
+  async function saveRate() {
+    setBusy(true); setError(null); setSaved(null);
     try {
       await api.systemSaveSettings(token, { canteen_daily_rate: rate });
-      setSaved(true);
-      state.reload();
+      setSaved('Saved. Every arrears figure is worked out from this rate.');
+      settings.reload();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // The whole term at once: weekdays in, weekends out, and the holidays the
+  // office names taken out on top. This is the operation a term begins with.
+  async function layOutTerm() {
+    setBusy(true); setError(null); setSaved(null);
+    try {
+      const parsed = holidays.split(/[\n,]+/).map(x => x.trim()).filter(Boolean).map((line) => {
+        const [date, ...rest] = line.split(/\s+/);
+        return { date, label: rest.join(' ') || 'Holiday' };
+      }).filter(h => /^\d{4}-\d{2}-\d{2}$/.test(h.date));
+      const r = await api.setUpTermCalendar(token, {
+        excludeWeekends: weekends === 'yes', holidays: parsed,
+      });
+      setSaved(`${r.term}: ${r.school_days} school days, ${r.off_days} days off.`);
+      calendar.reload();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // One day, changed. A public holiday declared on Tuesday afternoon is the
+  // ordinary case, and it must not cost the office the whole term's calendar.
+  async function saveDay() {
+    setBusy(true); setError(null); setSaved(null);
+    try {
+      await api.setCalendarDay(token, day);
+      setSaved(`${day.date} is now ${day.dayType === 'school_day' ? 'a school day' : 'a day off'}.`);
+      calendar.reload();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
 
   return (
-    <OfficeScreen state={state} skeleton={3}>
+    <OfficeScreen state={settings} skeleton={3}>
       <ErrorNote message={error} />
-      {saved ? <SuccessNote message="Saved. Every arrears figure is worked out from this rate." /> : null}
+      {saved ? <SuccessNote message={saved} /> : null}
+
+      <StatRow>
+        <Stat index={0} label="Daily rate" icon="wallet" tone="primary"
+              value={rate ? cedis(rate) : '—'} note="Per pupil, per school day" />
+        <Stat index={1} label="School days this term" icon="calendar" tone="data"
+              value={schoolDays}
+              note={schoolDays ? 'What the arrears are counted against' : 'The calendar has not been set up'} />
+        <Stat index={2} label="Days off" icon="note" tone="warning"
+              value={Math.max(0, days.length - schoolDays)}
+              note="Weekends and holidays — nobody is charged" />
+      </StatRow>
 
       <Panel title="What the canteen charges"
              subtitle="One rate for the whole school, charged per school day.">
@@ -355,19 +404,90 @@ export function CanteenCalendar() {
           </View>
           {may ? (
             <Button title={busy ? 'Saving…' : 'Save the rate'} busy={busy} disabled={busy}
-                    full={false} onPress={save} />
+                    full={false} onPress={saveRate} />
           ) : null}
         </View>
       </Panel>
 
-      <Panel title="Which days are charged for"
-             subtitle="The school calendar decides. A day marked as a holiday charges nobody.">
-        <Muted>
-          The term's school days come from the calendar the office sets when a term is
-          created — start date, end date, and the holidays inside it. Change them under
-          Settings → Terms, and every canteen figure follows on the next reading.
-        </Muted>
-      </Panel>
+      {cal ? (
+        <>
+          <Panel title="Lay out the term"
+                 subtitle="Weekdays become school days, weekends do not, and the holidays you name are taken out.">
+            {may ? (
+              <>
+                <View style={{ flexDirection: 'row', gap: spacing.md, flexWrap: 'wrap' }}>
+                  <View style={{ minWidth: 220 }}>
+                    <Select label="Weekends" value={weekends} onChange={setWeekends}
+                            options={[{ label: 'Not school days', value: 'yes' },
+                                      { label: 'Charge for them too', value: 'no' }]} />
+                  </View>
+                </View>
+                <Field label="Holidays" value={holidays} onChangeText={setHolidays}
+                       multiline
+                       hint="One a line: 2026-03-06 Independence Day. Anything without a date is ignored." />
+                <Button title={busy ? 'Working…' : 'Lay out this term'} busy={busy} disabled={busy}
+                        icon="calendar" full={false} onPress={layOutTerm} />
+                <Muted style={{ marginTop: 6 }}>
+                  This rewrites the term&apos;s calendar. Payments already taken are untouched —
+                  what changes is which days a pupil is counted as owing for.
+                </Muted>
+              </>
+            ) : <Muted>You can see the calendar but not change it.</Muted>}
+          </Panel>
+
+          <Panel title="One day"
+                 subtitle="A holiday declared at short notice, or a Saturday the school did open.">
+            {may ? (
+              <View style={{ flexDirection: 'row', gap: spacing.md, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <View style={{ minWidth: 190 }}>
+                  <Field label="Date" value={day.date}
+                         onChangeText={(v) => setDay(d => ({ ...d, date: v }))}
+                         placeholder="YYYY-MM-DD" maxLength={10} />
+                </View>
+                <View style={{ minWidth: 190 }}>
+                  <Select label="It is" value={day.dayType}
+                          onChange={(v) => setDay(d => ({ ...d, dayType: v }))}
+                          options={[{ label: 'A day off', value: 'holiday' },
+                                    { label: 'A school day', value: 'school_day' }]} />
+                </View>
+                <View style={{ minWidth: 190, flex: 1 }}>
+                  <Field label="Why" value={day.label}
+                         onChangeText={(v) => setDay(d => ({ ...d, label: v }))}
+                         hint="Optional — Founders' Day, Election Day" />
+                </View>
+                <Button title="Save the day" disabled={busy} full={false} onPress={saveDay} />
+              </View>
+            ) : <Muted>You can see the calendar but not change it.</Muted>}
+          </Panel>
+
+          <Panel padded={false} title="The term, day by day"
+                 subtitle="What each day counts as. A day off charges nobody.">
+            <View style={{ padding: spacing.lg }}>
+              <DataTable
+                keyExtractor={(r) => String(r.date)}
+                empty="This term has no calendar yet. Lay it out above."
+                columns={[
+                  { key: 'date', label: 'Date', width: 150 },
+                  { key: 'day_type', label: 'Counts as', width: 170,
+                    render: (r) => (r.day_type === 'school_day'
+                      ? <Badge tone="success" label="School day" />
+                      : <Badge tone="neutral" label="Day off" />) },
+                  { key: 'label', label: 'Why', render: (r) => r.label || '—' },
+                ]}
+                rows={days} />
+            </View>
+          </Panel>
+        </>
+      ) : (
+        <Panel title="Which days are charged for"
+               subtitle="The school calendar decides. A day marked as a holiday charges nobody.">
+          <Muted>
+            This connection carries a summary of the school rather than the whole of it, so
+            the calendar is set on the school&apos;s own system — under the Canteen module,
+            or when a term is created.
+          </Muted>
+        </Panel>
+      )}
     </OfficeScreen>
   );
 }

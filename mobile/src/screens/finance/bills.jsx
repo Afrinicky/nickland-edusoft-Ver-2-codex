@@ -21,8 +21,14 @@ import { colors, spacing, type } from '../../theme';
 export default function Bills() {
   const { token, profile } = useAuth();
   const router = useRouter();
-  const state = useOffice((t) => api.school.feeTemplates(t).catch(() => ({ ok: true, templates: [] })));
-  const classes = useOffice((t) => api.classes(t));
+  // `api.school` is not a thing — `school` is a separate export, the online
+  // school's client, and reaching for it through `api` was a TypeError that
+  // took this whole tab down with "Cannot read properties of undefined".
+  // `api.feeTemplates` is the dispatching method and works in all three modes.
+  const state = useOffice((t) => api.feeTemplates(t).catch(() => ({ ok: true, templates: [] })));
+  // The OFFICE's classes, not the caller's teaching assignments: a bursar
+  // raising a class's bills has no assignments and got an empty picker.
+  const classes = useOffice((t) => api.officeClasses(t));
 
   const [raising, setRaising] = useState(false);
   const [classId, setClassId] = useState('');
@@ -47,9 +53,16 @@ export default function Bills() {
     if (!classId) return setError('Choose the class.');
     setBusy(true);
     try {
-      const r = await api.school.raiseBills(token, { classId: Number(classId) });
-      setResult(`${r.generated} bill${r.generated === 1 ? '' : 's'} raised.`
-        + ((r.failed || []).length ? ` ${r.failed.length} could not be — check the templates.` : ''));
+      const r = await api.raiseBills(token, { classId: Number(classId) });
+      // What actually happened, in the school's own words. A count of
+      // failures is not an answer — "3 could not be" leaves an office
+      // guessing between a missing template and a withdrawn bill — so the
+      // reasons the server counted are read out.
+      const n = Number(r.generated) || 0;
+      const problems = r.problems || r.failed || [];
+      setResult(`${n} bill${n === 1 ? '' : 's'} raised.`
+        + (r.skipped ? ` ${r.skipped} left alone.` : '')
+        + (problems.length ? ` ${problems.map(x => `${x.count}: ${x.reason}`).join(' ')}` : ''));
       setRaising(false);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }

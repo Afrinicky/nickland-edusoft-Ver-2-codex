@@ -20,7 +20,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../../auth';
 import { api } from '../../api';
 import { can } from '../../guard';
-import { useClasses } from '../../pickers';
+import { useOfficeClasses } from '../../pickers';
 import { OfficeScreen, cedis, shortDate, useOffice } from '../../office';
 import {
   Select, SearchField, DataTable, Muted, Badge, EmptyState, ErrorNote, SuccessNote,
@@ -256,7 +256,7 @@ function FeesPlain({ d, router }) {
 
 export function FeeTemplates() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [templates, setTemplates] = useState(null);
   const [terms, setTerms] = useState([]);
   const [editing, setEditing] = useState(null);
@@ -531,7 +531,7 @@ export function Discounts() {
 
 export function Books() {
   const { token } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const [studentId, setStudentId] = useState(null);
   const [record, setRecord] = useState(null);
@@ -612,7 +612,7 @@ export function Books() {
 
 export function BulkPaySheet() {
   const { token, profile } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [classId, setClassId] = useState('');
   const [amounts, setAmounts] = useState({});
   const [method, setMethod] = useState('Cash');
@@ -744,7 +744,7 @@ function StudentPicker({ token, value, onChange }) {
 
 export function Supplementary() {
   const { token } = useAuth();
-  const { classes } = useClasses(token);
+  const { classes } = useOfficeClasses(token);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [note, setNote] = useState(null);

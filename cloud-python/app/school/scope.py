@@ -79,6 +79,34 @@ def scope_for(db, user_id, designation=None):
     return scope
 
 
+# The modules an office runs on. Somebody holding one of these and holding NO
+# teaching assignments is not "restricted to nothing" — they are not a teacher,
+# and the teaching scope has nothing to say about them.
+OFFICE_MODULES = ("fees", "finance", "payroll", "staff", "settings")
+
+
+def office_scope(scope, actor, can):
+    """The same scope, but not silencing people who are not teachers.
+
+    The teaching scope answers "whose marks, whose register", and it is built
+    from ``staff_assignments``. An accountant has none, so it answered
+    "nothing", and every list filtered by it came back empty: no classes in a
+    picker, no pupils behind a payment sheet, nothing to bill.
+
+    The ``has_assignments`` guard is the point of the rule, not an
+    optimisation: a class teacher who also collects the canteen money keeps
+    their own classes, and their register stays theirs. And this is asked for
+    BY NAME on office routes only — a register, a mark sheet and a broadsheet
+    keep the strict scope, because "not a teacher" must never become "may open
+    anybody's class".
+    """
+    if scope["unrestricted"] or scope["has_assignments"]:
+        return scope
+    if any(can(actor, m, "view") for m in OFFICE_MODULES):
+        return {**scope, "unrestricted": True}
+    return scope
+
+
 def can_access_class(scope, class_id):
     if scope["unrestricted"]:
         return True

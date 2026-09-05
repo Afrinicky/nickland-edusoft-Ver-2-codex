@@ -17,7 +17,7 @@ import {
   ErrorNote, Flash, InfoNote, Skeleton, EmptyState, SegmentedControl,
   DataTable, Grid, StatCard, ProgressBar, PendingBadge,
 } from '../../ui';
-import { ClassPicker, DateStepper, useClasses, todayISO } from '../../pickers';
+import { ClassPicker, DateStepper, useOfficeClasses, todayISO } from '../../pickers';
 import { useLayout } from '../../responsive';
 import { colors, palette, spacing, radius, type } from '../../theme';
 
@@ -30,7 +30,7 @@ const STATUSES = [
 function AttendanceScreen() {
   const { token, mode } = useAuth();
   const layout = useLayout();
-  const { classes, error: classError } = useClasses(token);
+  const { classes, error: classError } = useOfficeClasses(token);
 
   const [tab, setTab] = useState('mark');
   const [classId, setClassId] = useState(null);
