@@ -15,7 +15,8 @@
 // screen and a console error, and a school that has to be told over the phone
 // what a network address is.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { schoolsToChooseFrom, setDeskSchool } from '../lib/desk.js';
 
 // Accept what somebody actually types. "192.168.1.20" is a valid answer to
 // "where is the office PC" and should not have to be "http://192.168.1.20:4747"
@@ -40,6 +41,42 @@ export default function DeskConnect({ initial, onConnected }) {
   const [state, setState] = useState('idle');   // idle | testing | failed
   const [error, setError] = useState('');
   const [found, setFound] = useState(null);
+  // Only ever non-empty on the hosted service, which holds more than one
+  // school and cannot know which of them this person belongs to.
+  const [schools, setSchools] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    schoolsToChooseFrom().then((list) => {
+      if (!cancelled && list && list.length) setSchools(list);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (schools) {
+    return (
+      <div className="auth-bg">
+        <div className="auth-card login-card">
+          <div className="login-title">Which school?</div>
+          <p style={{ color: 'var(--text-muted, #667)', fontSize: 14, lineHeight: 1.6, marginTop: 4 }}>
+            Choose yours. You will only be asked once on this device.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+            {schools.map((s) => (
+              <button
+                key={s.id || s}
+                type="button"
+                className="btn btn-outline btn-full"
+                onClick={() => { setDeskSchool(s.id || s); window.location.reload(); }}
+              >
+                {s.name || s.id || s}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   async function test(e) {
     e.preventDefault();

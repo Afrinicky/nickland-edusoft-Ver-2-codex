@@ -18,6 +18,7 @@ from . import office
 from . import payments as cloud_payments
 from . import parent_api
 from . import school_api
+from . import desk_api
 from . import portal_auth as pauth
 from . import portals as portal_model
 from . import ratelimit
@@ -42,6 +43,9 @@ def create_app(store=None) -> FastAPI:
     # that school's own Postgres schema. Mounted FIRST so it can never be
     # shadowed by the catch-all that serves the web app's static files.
     app.include_router(school_api.router)
+    # The office application's own contract — the same browser build a school's
+    # computer serves at /desk, pointed here instead. See app/desk_api.py.
+    app.include_router(desk_api.router)
     app.include_router(parent_api.router)
     app.include_router(parent_api.webhook_router)
 

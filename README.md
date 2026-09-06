@@ -101,10 +101,10 @@ npm run serve:web        # preview it at http://localhost:4748
   the school when it next syncs. It can be added to a phone's home screen like
   an installed app.
 
-**On a computer it is the desktop application.** At 1180 pixels and up the
-browser draws the installer's own shell — the crest and sidebar, the module list
-with the gold rule on the active one, the search box on Ctrl-K, the term and the
-status bar — and the same fourteen modules in the same order: Home, Dashboard,
+**On a computer it is shaped like the desktop application.** At 1180 pixels and
+up the browser draws the installer's own shell — the crest and sidebar, the
+module list with the gold rule on the active one, the search box on Ctrl-K, the
+term and the status bar — and the same fourteen modules in the same order: Home, Dashboard,
 Students, Academics, Fees Management, Canteen, Transport, Staff Management,
 Payroll, Finance, Purchasing & Inventory, Notifications, Messages and Settings.
 Each account is shown the ones it holds and is never told the others exist. The
@@ -129,6 +129,45 @@ WhatsApp number and the school crest in Settings → School identity.
 The installer packages the web build automatically, so any desktop running the
 mobile server is already serving it. Full guide:
 **[`docs/WEB_APP.md`](docs/WEB_APP.md)**.
+
+## The office application itself, in a browser
+
+The app above is the **parents' and teachers' app**, built for a phone and made
+to fit a laptop. It is not the office application, and the difference matters:
+the office application is what admits a pupil, raises a term's bills, runs the
+payroll and keeps the books.
+
+That application now runs in a browser too — not a copy of it, and not a
+version of it. The same screens, calling the same channels, answered by the
+same handlers on the school's own computer. What differs is only how a call
+travels:
+
+```
+the office PC        window  →  Electron IPC   →  handler
+any other machine    browser →  the network    →  the same handler
+```
+
+* **On the school Wi-Fi.** Start the server on the office PC
+  (Settings → Mobile App), then open `http://<office-pc>:4747/desk` on any
+  machine in the building. Nothing to install, and no internet needed.
+* **As a desktop client.** The same installer on another office PC, with
+  `EDUSOFT_HOST_URL=http://<office-pc>:4747`. It opens no database and starts
+  no server — it loads the office application from the host, so a client is
+  never a version behind.
+* **Hosted.** The same build deployed to the internet against the Python
+  service. Not everything works online yet, and the application says which
+  parts do rather than failing quietly —
+  [`docs/DESK_COVERAGE.md`](docs/DESK_COVERAGE.md) counts it, module by module.
+
+The parents' app at `/` is untouched by any of this: existing links, the APK
+and every address a parent already has still answer exactly as before.
+
+```bash
+npm run build:desk     # the browser build (the installer packages it)
+npm run serve:desk     # look at one before it ships
+```
+
+Full guide: **[`docs/DESK_APP.md`](docs/DESK_APP.md)**.
 
 ## Tech Stack
 | Layer | Technology |

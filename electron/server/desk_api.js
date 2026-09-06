@@ -236,13 +236,45 @@ function registerDeskRoutes({ add, db, json, API, rateLimited, userDataPath }) {
       bootstrapDone = !!(row && String(row.value) === 'true');
     } catch (_) { /* an unopened database is not a signed-in school */ }
 
+    // The sign-in screen draws the school — its crest, its name, its motto,
+    // its colours — and it draws them BEFORE anybody has signed in. On the
+    // office PC that is free; here it has to come from somewhere, and it must
+    // not come from `settings:get-all`, which holds the school's payment
+    // gateway keys among everything else.
+    //
+    // So this is the curated public set, in the same grouped shape the screens
+    // read, and it is the same set /api/v1/info has always given the phone
+    // app. A school's crest and colours are what it prints on its own
+    // letterhead; nothing here is a secret.
+    const publicSettings = {
+      school: {
+        school_name: getSetting(db, 'school_name', ''),
+        school_abbreviation: getSetting(db, 'school_abbreviation', ''),
+        school_motto: getSetting(db, 'school_motto', ''),
+        school_address: getSetting(db, 'school_address', ''),
+        school_phone_1: getSetting(db, 'school_phone_1', ''),
+        school_email: getSetting(db, 'school_email', ''),
+      },
+      branding: {
+        school_logo_path: media.logoUri(db, getSetting),
+        school_color_primary: getSetting(db, 'school_color_primary', ''),
+        school_color_accent: getSetting(db, 'school_color_accent', ''),
+        school_color_background: getSetting(db, 'school_color_background', ''),
+        school_color_foreground: getSetting(db, 'school_color_foreground', ''),
+        ui_foreground_mode: getSetting(db, 'ui_foreground_mode', ''),
+        ui_theme_mode: getSetting(db, 'ui_theme_mode', ''),
+        ui_font_family: getSetting(db, 'ui_font_family', ''),
+        ui_font_size_base: getSetting(db, 'ui_font_size_base', ''),
+      },
+    };
+
     return json(res, 200, {
       ok: true,
       product: 'Nickland Edusoft',
       desk: true,
-      school: getSetting(db, 'school_name', 'Nickland Edusoft'),
-      logo: getSetting(db, 'school_logo_path', '') ? '/api/v1/media/logo' : null,
+      school: publicSettings.school.school_name || 'Nickland Edusoft',
       bootstrap_done: bootstrapDone,
+      settings: publicSettings,
     });
   }, { public: true });
 

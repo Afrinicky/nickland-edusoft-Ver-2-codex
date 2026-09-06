@@ -141,6 +141,8 @@ const call = (base, token, channel, ...args) =>
   require(path.join(ROOT, 'electron/ipc/students.js'))(guarded, db, userData);
   require(path.join(ROOT, 'electron/ipc/dashboard.js'))(guarded, db);
   require(path.join(ROOT, 'electron/ipc/payroll.js'))(guarded, db);
+  require(path.join(ROOT, 'electron/ipc/settings.js'))(
+    guarded, db, (rel) => path.join(ROOT, 'resources', rel));
 
   // A probe, registered the same way any module registers, that answers with
   // nothing but who the host believes is calling. It exists to make the next
@@ -164,6 +166,22 @@ const call = (base, token, channel, ...args) =>
   ck('a browser can ask what it has reached, before signing in',
     r.status === 200 && r.json.desk === true && r.json.school === 'Ave Maria School Acherensua');
   ck('...and is told whether the school has been set up yet', r.json.bootstrap_done === true);
+
+  // The sign-in screen draws the school before anybody has signed in, and the
+  // channel that would normally answer that — settings:get-all — holds the
+  // school's payment gateway keys. So the public answer is curated, and this
+  // is the check that it stays curated.
+  ck('the sign-in screen is given the school to draw',
+    r.json.settings && r.json.settings.school.school_name === 'Ave Maria School Acherensua');
+  ck('...and nothing beyond what a school prints on its letterhead',
+    Object.keys(r.json.settings).sort().join(',') === 'branding,school' &&
+    !JSON.stringify(r.json.settings).includes('secret') &&
+    !Object.keys(r.json.settings.school).some(k => /key|secret|token|password/i.test(k)));
+
+  setSetting(db, 'payment_gateway_secret', 'sk_live_do_not_leak_this', 'payments');
+  r = await req(base, 'GET', '/api/v1/desk/info');
+  ck('...and a gateway secret is not among it',
+    !JSON.stringify(r.json).includes('sk_live_do_not_leak_this'));
 
   const signIn = async (u, p) => (await req(base, 'POST', '/api/v1/desk/login',
     { body: { username: u, password: p } })).json;
@@ -240,6 +258,14 @@ const call = (base, token, channel, ...args) =>
   r = await call(base, parentToken, 'students:list', {});
   ck('a parent cannot open the school office with the app they were given',
     r.status === 403);
+
+  // Every setting IS reachable once somebody has signed in and holds settings,
+  // exactly as on the office PC. The curation above is about the screen that
+  // runs before anybody has.
+  r = await call(base, admin.token, 'settings:get-all');
+  ck('an administrator who has signed in still gets the whole of Settings',
+    r.status === 200 && r.json.result.payments &&
+    r.json.result.payments.payment_gateway_secret === 'sk_live_do_not_leak_this');
 
   // ══ What stays at the office PC ═══════════════════════════════════════════
 

@@ -34,6 +34,10 @@ import { buildApi } from '../../../../electron/api-surface.js';
 const STORED_HOST = 'edusoft.desk.host';
 const STORED_TOKEN = 'edusoft.desk.token';
 const STORED_USER = 'edusoft.desk.user';
+// Only the hosted service needs this. A school's own computer holds one school
+// and does not ask which; a service on the internet holds many and cannot
+// guess. It is the one thing the two backends differ about before sign-in.
+const STORED_SCHOOL = 'edusoft.desk.school';
 
 function read(key) {
   try { return window.localStorage.getItem(key) || ''; } catch (_) { return ''; }
@@ -60,6 +64,7 @@ function launchHost() {
 
 let hostUrl = launchHost() || read(STORED_HOST) || '';
 let token = read(STORED_TOKEN);
+let schoolId = read(STORED_SCHOOL);
 
 function api(path) {
   return `${hostUrl}/api/v1${path}`;
@@ -73,6 +78,12 @@ export function setDeskHost(url) {
 }
 export function signedInUser() {
   try { return JSON.parse(read(STORED_USER) || 'null'); } catch (_) { return null; }
+}
+export function deskSchool() { return schoolId; }
+export function setDeskSchool(id) {
+  schoolId = String(id || '');
+  write(STORED_SCHOOL, schoolId);
+  hostInfo = null;   // its branding is that school's, so it must be re-asked
 }
 
 // What the rest of the app is told when the school's computer cannot be
@@ -96,7 +107,8 @@ export function whenSignedOut(fn) { onSignedOut = fn; }
 
 async function post(path, body, { auth = true } = {}) {
   const headers = { 'Content-Type': 'application/json' };
-  if (auth && token) headers.Authorization = `Bearer ${token}`;
+  const sentToken = !!(auth && token);
+  if (sentToken) headers.Authorization = `Bearer ${token}`;
   let res;
   try {
     res = await fetch(api(path), { method: 'POST', headers, body: JSON.stringify(body || {}) });
@@ -104,6 +116,11 @@ async function post(path, body, { auth = true } = {}) {
     return { __transport: 'unreachable', error: (e && e.message) || String(e) };
   }
   if (res.status === 401) {
+    // Careful: 401 with no token was never a sign-out. It is simply somebody
+    // who has not signed in yet, and treating it as one turned the sign-in
+    // screen into a reload loop — the screen asks for the school's crest
+    // before anybody has signed in, is told 401, reloads, and asks again.
+    if (!sentToken) return { __transport: 'not-signed-in' };
     // The token is no longer good for anything. Forget it here rather than
     // letting every subsequent screen fail on its own.
     clearSession();
@@ -127,6 +144,8 @@ async function deskLogin({ username, password }) {
   const r = await post('/desk/login', {
     username, password,
     device: 'Browser', platform: 'web',
+    // Ignored by a school's own computer, required by the hosted service.
+    ...(schoolId ? { school_id: schoolId } : {}),
   }, { auth: false });
 
   if (r.__transport === 'unreachable') return unreachable(r.error);
@@ -143,12 +162,56 @@ function deskLogout() {
   return Promise.resolve({ ok: true });
 }
 
+// What the host said about itself. Fetched once — by the gate, before the
+// application renders — and kept, because two of the questions the sign-in
+// screen asks are answered from it.
+let hostInfo = null;
+export function rememberHostInfo(info) { hostInfo = info || null; }
+
+async function fetchInfo() {
+  if (hostInfo) return hostInfo;
+  // The hosted service holds many schools and answers about one at a time;
+  // a school's own computer holds one and ignores the question.
+  const res = await fetch(api('/desk/info') + (schoolId ? `?school_id=${encodeURIComponent(schoolId)}` : ''));
+  hostInfo = await res.json();
+  return hostInfo;
+}
+
+// Somewhere holding more than one school, with none of them chosen yet. The
+// Connect screen asks; a school's own computer never gets here.
+export async function schoolsToChooseFrom() {
+  try {
+    const res = await fetch(api('/desk/info'));
+    const info = await res.json();
+    if (info && info.online && Array.isArray(info.schools) && !info.school) return info.schools;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// The school's own identity, before anybody has signed in.
+//
+// On the office PC this is `settings:get-all` and it is free. Here it cannot
+// be: that channel answers with every setting the school has, the payment
+// gateway's keys included, and it is not something to hand out to whoever
+// opens the address. So before sign-in the screen is given the curated public
+// set the host publishes for exactly this — its crest, its name, its colours —
+// and after sign-in the real channel answers, as it does on the office PC.
+async function settingsForSignInScreen() {
+  try {
+    const info = await fetchInfo();
+    return (info && info.settings) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
 // Asked before anybody has a token, so it goes to the public route.
 async function bootstrapStatus() {
   let info;
   try {
-    const res = await fetch(api('/desk/info'));
-    info = await res.json();
+    info = await fetchInfo();
   } catch (e) {
     return unreachable((e && e.message) || String(e));
   }
@@ -332,9 +395,20 @@ const LOCAL = {
   }),
 };
 
+// Answered here only while nobody is signed in, and sent to the host the
+// moment somebody is. Exactly one channel qualifies, and it is declared rather
+// than buried in a condition inside invoke() — the point of naming every
+// channel in one place is lost if a second one can hide in an `if`.
+const BEFORE_SIGN_IN = {
+  'settings:get-all': () => settingsForSignInScreen(),
+};
+
 async function invoke(channel, ...args) {
   const local = LOCAL[channel];
   if (local) return local(...args);
+
+  const early = !token && BEFORE_SIGN_IN[channel];
+  if (early) return early(...args);
 
   if (!hostUrl && typeof window !== 'undefined' && window.location) {
     // Served by the host itself: same origin, nothing to configure.
@@ -345,6 +419,9 @@ async function invoke(channel, ...args) {
   if (r.__transport === 'unreachable') return unreachable(r.error);
   if (r.__transport === 'signed-out') {
     return { ok: false, error: 'You have been signed out. Sign in again.' };
+  }
+  if (r.__transport === 'not-signed-in') {
+    return { ok: false, error: 'Please sign in.' };
   }
   // A refusal from the host — no such channel, not staff, host-only — is
   // already in the shape a handler answers in, so it is passed straight on.

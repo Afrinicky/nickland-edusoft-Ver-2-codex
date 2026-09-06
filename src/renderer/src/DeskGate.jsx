@@ -13,7 +13,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from './store/index.js';
 import DeskConnect from './pages/DeskConnect.jsx';
-import { isBrowser, deskHost, setDeskHost, deskToken, signedInUser, whenSignedOut } from './lib/desk.js';
+import { isBrowser, deskHost, setDeskHost, deskToken, signedInUser, whenSignedOut, rememberHostInfo } from './lib/desk.js';
 
 export default function DeskGate({ children }) {
   const login = useStore(s => s.login);
@@ -37,6 +37,9 @@ export default function DeskGate({ children }) {
         const res = await fetch(`${host}/api/v1/desk/info`);
         const info = await res.json();
         if (!info || !info.desk) throw new Error('not a school host');
+        // The sign-in screen draws the school from this, so it is kept rather
+        // than fetched a second time a moment later.
+        rememberHostInfo(info);
       } catch (_) {
         if (!cancelled) setPhase('connect');
         return;

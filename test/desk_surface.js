@@ -73,9 +73,15 @@ ck('the browser transport imports the same surface, and does not restate it',
 // it answers itself (LOCAL, below). Anything else spelled out there is a
 // second list starting to grow.
 const namedInDesk = new Set(desk.match(/'[a-z]+:[a-z-]+'/g) || []);
-const localBlock = desk.slice(desk.indexOf('const LOCAL = {'), desk.indexOf('async function invoke'));
+// The two declared tables: what the browser answers itself, and the one thing
+// it answers only while nobody is signed in. A channel named anywhere else in
+// that file is a second list starting to grow — including one hidden in a
+// condition, which is why both are tables rather than `if`s.
+const declared = desk.slice(desk.indexOf('const LOCAL = {'), desk.indexOf('async function invoke'));
 ck('...and names no channel of its own beyond the few it answers itself',
-  [...namedInDesk].every(c => localBlock.includes(c)));
+  [...namedInDesk].every(c => declared.includes(c)));
+ck('...with those declared as tables, not buried in conditions',
+  desk.includes('const LOCAL = {') && desk.includes('const BEFORE_SIGN_IN = {'));
 
 // ── The build rewrites the export line it says it rewrites ──────────────────
 //
