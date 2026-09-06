@@ -169,11 +169,19 @@ function req(port, method, p, { token, body } = {}) {
   ck('what belongs to the office PC is refused here too', r.json.host_only === true);
 
   // ── Printing, which is the one thing a server genuinely lacks ─────────────
-  if (process.env.EDUSOFT_CHROMIUM || (() => {
-        try { require('puppeteer'); return true; } catch (_) {
-          try { require('playwright'); return true; } catch (_) {
-            try { require('playwright-core'); return true; } catch (_) { return false; } } }
-      })()) {
+  // A browser BINARY is not enough — the host drives it through puppeteer or
+  // playwright, and without one of those modules there is nothing to drive it
+  // with. Checking EDUSOFT_CHROMIUM alone made this attempt the PDF on a
+  // machine that could not produce one, and report a failure that was really
+  // a missing dependency.
+  const driver = (() => {
+    for (const name of ['puppeteer', 'playwright', 'playwright-core']) {
+      try { require(name); return name; } catch (_) { /* try the next */ }
+    }
+    return null;
+  })();
+
+  if (driver) {
     const out = await call('reports:class-list', cls ? cls.id : 1, {});
     const result = out.json && out.json.result;
     ck('a class list prints — the same HTML, through headless Chromium',
@@ -184,8 +192,8 @@ function req(port, method, p, { token, body } = {}) {
         bytes.length > 1000 && bytes.subarray(0, 5).toString() === '%PDF-');
     }
   } else {
-    console.log('· no headless browser on this machine — the PDF check was skipped.');
-    console.log('  Install one on the server: npm install puppeteer');
+    console.log('· no headless browser driver on this machine — the PDF check was skipped.');
+    console.log('  The host needs puppeteer or playwright to produce PDFs: npm install puppeteer');
   }
 
   try { host.server.close(); } catch (_) {}

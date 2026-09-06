@@ -75,9 +75,31 @@ function start() {
   log('info', 'host', `Nickland Edusoft ${appStub.getVersion()} starting as a server`);
   log('info', 'host', `School data: ${DATA_DIR}`);
 
+  // Which database this host is the host OF.
+  //
+  // Without DATABASE_URL it opens the same local SQLite file the office PC
+  // does — that is the LAN host, unchanged. With it, the school lives in
+  // Postgres and the handlers reach it through an adapter wearing
+  // better-sqlite3's shape (host/db/neon.js). Not one handler knows which.
+  //
+  // electron/db/database.js is untouched either way: the installed
+  // application has no idea this branch exists.
   let db;
   try {
-    db = initDatabase(DATA_DIR, getResourcePath);
+    if (process.env.DATABASE_URL) {
+      const { openNeonDatabase } = require(path.join(ROOT, 'host/db/neon'));
+      db = openNeonDatabase(process.env.DATABASE_URL, {
+        schema: process.env.DATABASE_SCHEMA || null,
+        poolSize: parseInt(process.env.DATABASE_POOL || '3', 10),
+        latencyMs: parseInt(process.env.SPIKE_LATENCY_MS || '0', 10),
+      });
+      db._userDataPath = DATA_DIR;
+      db._getResourcePath = getResourcePath;
+      log('info', 'host', 'School database: Postgres');
+    } else {
+      db = initDatabase(DATA_DIR, getResourcePath);
+      log('info', 'host', 'School database: local SQLite');
+    }
   } catch (e) {
     log('error', 'host', `Could not open the school's database: ${(e && e.message) || e}`);
     process.exit(1);
