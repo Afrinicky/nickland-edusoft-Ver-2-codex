@@ -25,6 +25,10 @@ resources/desk/
 cloud/desk/
 cloud-python/desk/
 
+# The web host's own scratch directory, when it is run locally without
+# EDUSOFT_DATA_DIR set. On Render this is a mounted disk, not this.
+.host-data/
+
 # Electron-builder cache (created during CI builds)
 .cache/
 

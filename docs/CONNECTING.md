@@ -216,8 +216,12 @@ What a server needs that a desktop supplies for free:
 | **`sharp`** | Only if photographs are attached online. `npm install sharp`. |
 | **`EDUSOFT_SECRET_KEY`** | 32+ characters. Without it, backup destination passwords are stored in the clear and the log says so. |
 
+**On a server it uses Postgres, not SQLite.** Set `DATABASE_URL` and the same
+handlers reach a Neon database instead of a local file — see
+[`WEB_DEPLOYMENT.md`](WEB_DEPLOYMENT.md) for Neon, Render and Vercel. Leave it
+unset and this is the LAN host, on the same local file as always.
+
 **It is not yet joined to the office PC.** Both hold a complete school, and
-nothing yet carries changes between them — so today this is either a second
-school or a read-only copy, not the same school in two places. Two-way
-replication is the remaining piece of work; until it lands, use one or the
-other for real work, not both.
+nothing yet carries changes between them — so today this is a second school,
+not the same school in two places. Two-way replication is a later phase; until
+it lands, use one or the other for real work, not both.

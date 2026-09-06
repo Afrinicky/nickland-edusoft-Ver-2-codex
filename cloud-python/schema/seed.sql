@@ -11,16 +11,16 @@
 -- 376 rows across 10 tables.
 
 -- designations (10)
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (1, 'Proprietor', 'Overall owner/director of the school. Full access to all modules.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (2, 'Super Admin', 'Overall authority over the system. Manages users, access, settings and every module.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (3, 'Head Teacher', 'Academic and administrative head. Full access except user management.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (4, 'Class Teacher', 'Assigned to a specific class. Access to Academics and Canteen.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (5, 'Subject Teacher', 'Teaches specific subjects. Access to Academics and Canteen.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (6, 'Accountant', 'Manages financial records. Access to Finance, Fees, and Payroll.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (7, 'Secretary', 'Administrative support. Access to Students, Notifications, and Reports.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (8, 'Cook', 'Canteen staff. Access to Canteen only.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (9, 'Security', 'Security staff. Access to Staff attendance clock-in only.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (10, 'Cleaner', 'Support staff. Minimal access.', 1, '2026-09-03 21:15:25') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (1, 'Proprietor', 'Overall owner/director of the school. Full access to all modules.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (2, 'Super Admin', 'Overall authority over the system. Manages users, access, settings and every module.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (3, 'Head Teacher', 'Academic and administrative head. Full access except user management.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (4, 'Class Teacher', 'Assigned to a specific class. Access to Academics and Canteen.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (5, 'Subject Teacher', 'Teaches specific subjects. Access to Academics and Canteen.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (6, 'Accountant', 'Manages financial records. Access to Finance, Fees, and Payroll.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (7, 'Secretary', 'Administrative support. Access to Students, Notifications, and Reports.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (8, 'Cook', 'Canteen staff. Access to Canteen only.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (9, 'Security', 'Security staff. Access to Staff attendance clock-in only.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system, created_at) VALUES (10, 'Cleaner', 'Support staff. Minimal access.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
 SELECT setval(pg_get_serial_sequence('designations', 'id'), (SELECT COALESCE(MAX(id), 1) FROM designations));
 
 -- designation_permissions (100)
@@ -299,7 +299,7 @@ INSERT INTO settings (key, value, category, description) VALUES ('session_status
 INSERT INTO settings (key, value, category, description) VALUES ('term_auto_migrate', 'prompt', 'session', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('term_last_migrated_to', '', 'session', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('use_network_time', 'true', 'session', NULL) ON CONFLICT DO NOTHING;
-INSERT INTO settings (key, value, category, description) VALUES ('receipt_paper_size', 'A4', 'print', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('receipt_paper_size', 'roll80', 'print', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('receipt_auto_generate', 'true', 'print', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('receipt_footer_note', 'Thank you for your payment.', 'print', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('receipt_delivery_enabled', 'false', 'notifications', NULL) ON CONFLICT DO NOTHING;

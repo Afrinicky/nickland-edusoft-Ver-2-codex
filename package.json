@@ -21,11 +21,12 @@
     "build:desk": "node scripts/build-desk.mjs",
     "serve:desk": "node scripts/serve-desk.mjs",
     "host": "node host/server.js",
+    "host:provision": "node host/provision.js",
     "dev:desk": "vite --config vite.desk.config.js",
     "desk:coverage": "node scripts/desk-coverage.mjs",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "test": "node scripts/contrast.mjs && node test/regressions.js && node test/school_fees.js && node test/payment_desk.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js && node test/headless_host.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
-    "test:regressions": "node test/regressions.js && node test/school_fees.js && node test/payment_desk.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js && node test/headless_host.js",
+    "test": "node scripts/contrast.mjs && node test/regressions.js && node test/school_fees.js && node test/payment_desk.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js && node test/headless_host.js && node test/host_dialect.js && node test/host_postgres.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
+    "test:regressions": "node test/regressions.js && node test/school_fees.js && node test/payment_desk.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js && node test/headless_host.js && node test/host_dialect.js && node test/host_postgres.js",
     "test:contrast": "node scripts/contrast.mjs",
     "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
     "test:online": "cd cloud-python && python3 tests/test_school.py && python3 tests/test_payments.py && python3 tests/test_dashboards.py && python3 tests/test_desk.py && cd .. && node scripts/desk-coverage.mjs --check",
@@ -44,7 +45,8 @@
     "react-router-dom": "^6.26.0",
     "zustand": "^5.0.0",
     "dayjs": "^1.11.13",
-    "uuid": "^10.0.0"
+    "uuid": "^10.0.0",
+    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",

@@ -1,0 +1,106 @@
+# Nickland Edusoft — the school's host, on Render.
+# Copyright © 2026 Nickland Sales. All rights reserved.
+#
+# This runs the INSTALLED APPLICATION'S OWN CODE on a server. Not a port of it
+# and not a rewrite: the same handlers, mounted from the same list, reaching
+# Postgres through an adapter that wears better-sqlite3's shape. See
+# docs/WEB_DEPLOYMENT.md.
+#
+# Create it from the Render dashboard with "New → Blueprint", pointed at this
+# repository. Then set DATABASE_URL in the dashboard — it is deliberately not
+# in this file, because a database password does not belong in a repository.
+
+services:
+  - type: web
+    name: nickland-edusoft-web
+    runtime: node
+    plan: starter          # the free plan sleeps, and a sleeping school office is not a school office
+
+    # SAME REGION AS NEON. This is not a preference.
+    #
+    # Every database call blocks the host for one round trip — that is what
+    # makes 1,631 synchronous call sites work unchanged. Measured: a screen
+    # takes about 100ms with Neon in the same region and over two seconds with
+    # Neon on another continent. Choose the Neon region first, then match it.
+    region: frankfurt
+
+    # BOTH applications are built, because this one host serves both:
+    #
+    #   /       the parents' and teachers' app  (mobile/, Expo)
+    #   /desk   the office application          (src/renderer, the installer's own)
+    #
+    # They are different products for different people and they share one API,
+    # which is the same electron/server/api.js the office PC runs on the school
+    # Wi-Fi. Neither is a rewrite of the other.
+    #
+    # build:web needs the mobile project's own dependencies, which is why there
+    # are two installs. It copies its output to resources/webapp, where the
+    # host looks for it; build:desk does the same for /desk.
+    buildCommand: >-
+      npm ci --no-audit --no-fund &&
+      npm ci --no-audit --no-fund --prefix mobile &&
+      npm install --no-save puppeteer &&
+      npm run build:web &&
+      npm run build:desk
+
+    startCommand: node host/server.js
+
+    healthCheckPath: /api/v1/desk/info
+
+    # Report cards, receipts and payslips are written here before being handed
+    # to the browser, and photographs are stored here. The school's RECORDS are
+    # in Neon; this disk holds the files that go with them, so it must survive
+    # a restart.
+    disk:
+      name: edusoft-files
+      mountPath: /var/data
+      sizeGB: 5
+
+    envVars:
+      - key: EDUSOFT_DATA_DIR
+        value: /var/data
+
+      # Set in the dashboard, not here.
+      - key: DATABASE_URL
+        sync: false
+
+      # 32+ characters. Without it, backup destination passwords are stored in
+      # the clear and the log says so on every start.
+      - key: EDUSOFT_SECRET_KEY
+        generateValue: true
+
+      # The school's tables live in their own Postgres schema, which is what
+      # host/provision.js creates.
+      - key: DATABASE_SCHEMA
+        value: school
+
+      # Small on purpose. The host blocks on each query, so it can only have
+      # one in flight; the spare connections are for transactions, which hold
+      # one for their duration. A larger pool would be idle connections Neon
+      # still counts.
+      - key: DATABASE_POOL
+        value: "3"
+
+      # How long a read may be remembered. Invalidation is exact — any write to
+      # a table forgets every read that touched it — so this is only a backstop
+      # against a SECOND writer. Raising it is safe with one instance and is
+      # NOT safe with two. See host/db/cache.js.
+      - key: DATABASE_CACHE_TTL_MS
+        value: "5000"
+
+      - key: NODE_VERSION
+        value: "22"
+
+      # The parents' app asks its own origin for the API when this is unset,
+      # which is what a single host serving both wants. Set it only if the
+      # mobile app is ever hosted somewhere other than its API.
+      # - key: EXPO_PUBLIC_PORTAL_URL
+      #   sync: false
+
+    # One instance, deliberately.
+    #
+    # The cache above is exact because this host is the only thing writing to
+    # the database. A second instance would not see the first's writes and
+    # could serve a stale read for up to the TTL. Before scaling past one, read
+    # the note in host/db/cache.js — it is a real change, not a slider.
+    numInstances: 1
