@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getSetting } = require('../utils/idgen');
+const platform = require('../platform');
 
 function registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath) {
   ipcMain.handle('reports:generate-report-cards', async (_e, params) => {
@@ -2076,27 +2077,16 @@ function formatInstructions(text) {
   return '<div>' + escapeHtml(text).replace(/\n/g, '<br/>') + '</div>';
 }
 
-// HTML → PDF using Electron's BrowserWindow (no Puppeteer needed — uses bundled Chromium)
+// HTML → PDF. Chromium either way: the one inside Electron on the office PC,
+// a headless one on a server. See electron/platform.js — the five places that
+// print all go through it, so a school's report card is the same document
+// whichever machine produced it.
 async function htmlToPdf(html, outPath) {
-  const { BrowserWindow } = require('electron');
-  const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
-  // Load via a temp file rather than a data: URL — large batches (whole class
-  // / multiple students) exceed Chromium's data-URL length limit and fail with
-  // ERR_INVALID_URL (-300).
-  const tmpPath = outPath + '.tmp.html';
-  try {
-    fs.writeFileSync(tmpPath, html, 'utf8');
-    await win.loadFile(tmpPath);
-    const data = await win.webContents.printToPDF({
-      pageSize: 'A4',
-      printBackground: true,
-      margins: { top: 0, bottom: 0, left: 0, right: 0 },
-    });
-    fs.writeFileSync(outPath, data);
-  } finally {
-    win.close();
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore cleanup errors */ }
-  }
+  await platform.htmlToPdf(html, outPath, {
+    pageSize: 'A4',
+    printBackground: true,
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+  });
   return outPath;
 }
 

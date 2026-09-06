@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const engine = require('./receipts_engine');
 const { getSetting } = require('../utils/idgen');
+const platform = require('../platform');
 
 // Standard merge tags available in all receipt types
 const MERGE_TAGS = {
@@ -84,13 +85,10 @@ module.exports = function registerReceiptTemplatesHandlers(ipcMain, db, userData
     try {
       const res = await generateStandard(paymentSource, paymentId, { paperSize });
       if (!res.ok) return res;
-      const { BrowserWindow } = require('electron');
-      const win = new BrowserWindow({
-        width: 720, height: 900, title: 'Receipt — ' + (res.model.receipt_number || ''),
-        autoHideMenuBar: true,
-        webPreferences: { plugins: true, contextIsolation: true, nodeIntegration: false },
-      });
-      win.loadURL('file://' + res.output_path);
+      // Opening a preview window belongs to the machine somebody is sitting
+      // at. On a server there is nobody, and the receipt is answered with its
+      // path instead — the browser fetches and shows it.
+      platform.shell().openPreview(res.output_path, 'Receipt — ' + (res.model.receipt_number || ''));
       return { ok: true, output_path: res.output_path, paper_size: res.paper_size };
     } catch (e) { return { ok: false, error: `Receipt print failed: ${e.message || e}` }; }
   });

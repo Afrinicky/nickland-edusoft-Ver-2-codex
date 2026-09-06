@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getSetting } = require('../utils/idgen');
+const platform = require('../platform');
 
 // ── Paper geometry (microns for Electron printToPDF; mm for CSS) ──
 const PAPER = {
@@ -355,27 +356,16 @@ function renderReceiptHtml(school, m, paperSize) {
 
 // ── HTML → PDF honoring paper size (incl. thermal roll) ──
 async function htmlToPdf(html, outPath, paperSize) {
-  const { BrowserWindow } = require('electron');
   const paper = resolvePaper(paperSize);
-  const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
-  const tmpPath = outPath + '.tmp.html';
-  try {
-    fs.writeFileSync(tmpPath, html, 'utf8');
-    await win.loadFile(tmpPath);
-    const opts = { printBackground: true, margins: { marginType: 'default' } };
-    if (paper.roll) {
-      // Let the CSS @page (e.g. 80mm auto) drive a continuous receipt page.
-      opts.preferCSSPageSize = true;
-      opts.pageSize = { width: paper.width_mm * 1000, height: 297 * 1000 };
-    } else {
-      opts.pageSize = paper.css;
-    }
-    const data = await win.webContents.printToPDF(opts);
-    fs.writeFileSync(outPath, data);
-  } finally {
-    win.close();
-    try { fs.unlinkSync(tmpPath); } catch (_) {}
+  const opts = { printBackground: true, margins: { marginType: 'default' } };
+  if (paper.roll) {
+    // Let the CSS @page (e.g. 80mm auto) drive a continuous receipt page.
+    opts.preferCSSPageSize = true;
+    opts.pageSize = { width: paper.width_mm * 1000, height: 297 * 1000 };
+  } else {
+    opts.pageSize = paper.css;
   }
+  await platform.htmlToPdf(html, outPath, opts);
   return outPath;
 }
 
