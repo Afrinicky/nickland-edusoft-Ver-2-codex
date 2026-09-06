@@ -5,6 +5,12 @@ node_modules/
 dist/
 dist-app/
 
+# The preload script Electron actually loads. Generated from
+# electron/preload.js + electron/api-surface.js by
+# `npm run build:preload`, which every script that runs or packages
+# the application does first.
+electron/preload.bundle.js
+
 # Mobile web app build, and the copies the servers serve it from. Produced by
 # `npm run build:web` at the repo root; never committed.
 mobile/dist-web/

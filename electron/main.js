@@ -193,6 +193,24 @@ async function createClientWindow() {
   });
 }
 
+// Where the preload actually is, and a plain refusal to start without it.
+//
+// Starting anyway is what made this so hard to diagnose the first time: the
+// window opened, the application rendered, and it failed several steps later
+// with a message about a missing array. A missing preload is not something to
+// carry on from — every single thing the application does goes through it.
+function preloadPath() {
+  const bundled = path.join(__dirname, 'preload.bundle.js');
+  if (fs.existsSync(bundled)) return bundled;
+  throw new Error(
+    'The preload script has not been built.\n\n' +
+    'electron/preload.bundle.js is missing. Build it with:\n' +
+    '    npm run build:preload\n\n' +
+    'Every script that runs or packages this application builds it first, so ' +
+    'seeing this means the application was started some other way.'
+  );
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -202,7 +220,15 @@ function createWindow() {
     title: 'Nickland Edusoft',
     icon: getResourcePath('logo.png'),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      // The BUNDLED preload, not the source next to it.
+      //
+      // Electron runs a preload sandboxed, and a sandboxed preload can require
+      // "electron" and nothing else — not even a file in the same folder. The
+      // source requires ./api-surface, so Electron drops it, window.api never
+      // appears, and the application opens with no way to reach its own
+      // database. scripts/build-preload.mjs inlines the surface so what loads
+      // here requires nothing at all.
+      preload: preloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
     },

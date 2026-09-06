@@ -6,6 +6,10 @@
   "author": "Nickland Sales",
   "license": "Proprietary",
   "scripts": {
+    "build:preload": "node scripts/build-preload.mjs",
+    "predev": "npm run build:preload",
+    "prebuild": "npm run build:preload",
+    "prebuild:win": "npm run build:preload",
     "dev:renderer": "vite",
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "dev": "concurrently \"npm:dev:renderer\" \"npm:dev:electron\"",
@@ -23,7 +27,9 @@
     "test:regressions": "node test/regressions.js && node test/school_fees.js && node test/payment_desk.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js",
     "test:contrast": "node scripts/contrast.mjs",
     "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
-    "test:online": "cd cloud-python && python3 tests/test_school.py && python3 tests/test_payments.py && python3 tests/test_dashboards.py && python3 tests/test_desk.py && cd .. && node scripts/desk-coverage.mjs --check"
+    "test:online": "cd cloud-python && python3 tests/test_school.py && python3 tests/test_payments.py && python3 tests/test_dashboards.py && python3 tests/test_desk.py && cd .. && node scripts/desk-coverage.mjs --check",
+    "pretest": "npm run build:preload",
+    "pretest:regressions": "npm run build:preload"
   },
   "dependencies": {
     "better-sqlite3": "^12.0.0",

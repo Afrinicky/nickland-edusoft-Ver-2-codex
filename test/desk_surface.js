@@ -103,6 +103,83 @@ for (const cfg of ['vite.config.js', 'vite.desk.config.js']) {
     src.includes("from './scripts/vite-api-surface.mjs'") && src.includes('apiSurfaceAsModule()'));
 }
 
+// ── The preload script Electron actually loads ──────────────────────────────
+//
+// This is the case that broke the installed application and that nothing here
+// caught, because the difference is not in the code — it is in who loads it.
+//
+// Electron runs a preload SANDBOXED, and a sandboxed preload's `require()`
+// resolves "electron" and nothing else. Not a file beside it. So a preload
+// that says `require('./api-surface')` is dropped whole: window.api never
+// appears, and the application starts with no way to reach its own database.
+//
+// Node's own `require` resolves that file perfectly well, which is exactly why
+// every test passed. So this loads the preload the way the sandbox does — with
+// nothing available but "electron" — and fails if anything else is asked for.
+const bundlePath = path.join(ROOT, 'electron/preload.bundle.js');
+ck('the preload Electron loads has been built (npm run build:preload)',
+  fs.existsSync(bundlePath));
+
+if (fs.existsSync(bundlePath)) {
+  const bundled = fs.readFileSync(bundlePath, 'utf8');
+  const asked = [...bundled.matchAll(/require\(["']([^"']+)["']\)/g)].map(m => m[1]);
+  ck('...and asks the sandbox for nothing but "electron"',
+    asked.every(name => name === 'electron'));
+
+  // Load it exactly as a sandboxed preload would: anything but "electron"
+  // throws, the way Electron's own loader throws.
+  const Module = require('module');
+  const realLoad = Module._load;
+  let exposed = null;
+  const seen = [];
+  Module._load = function (request, ...rest) {
+    if (request === 'electron') {
+      return {
+        contextBridge: { exposeInMainWorld: (_k, v) => { exposed = v; } },
+        ipcRenderer: { invoke: (channel) => { seen.push(channel); return Promise.resolve(null); } },
+      };
+    }
+    if (request.startsWith('.')) throw new Error(`module not found: ${request}`);
+    return realLoad.call(this, request, ...rest);
+  };
+  let loadError = null;
+  try {
+    delete require.cache[bundlePath];
+    require(bundlePath);
+  } catch (e) {
+    loadError = e;
+  } finally {
+    Module._load = realLoad;
+  }
+
+  ck('...loads under the sandbox without asking for a file beside it', loadError === null);
+  ck('...and puts the whole application on the window',
+    !!exposed && Object.keys(exposed).length === Object.keys(
+      (() => { const g = {}; for (const m of methods) g[m.split('.')[0]] = 1; return g; })()
+    ).length);
+
+  const bundledMethods = exposed
+    ? Object.keys(exposed).reduce((n, ns) => n + Object.keys(exposed[ns]).length, 0)
+    : 0;
+  ck(`...with every one of the ${methods.length} channels, not a subset`,
+    bundledMethods === methods.length);
+
+  // The surface the window gets must be the surface everything else is
+  // written against — same names, same channels, in the same places.
+  if (exposed) {
+    const fromBundle = {};
+    for (const ns of Object.keys(exposed)) {
+      for (const m of Object.keys(exposed[ns])) {
+        seen.length = 0;
+        exposed[ns][m]();
+        fromBundle[`${ns}.${m}`] = seen[0];
+      }
+    }
+    ck('...and channel for channel it is the same surface',
+      JSON.stringify(fromBundle) === JSON.stringify(map));
+  }
+}
+
 // ── Channels only the office PC can answer ──────────────────────────────────
 const { HOST_ONLY } = require(path.join(ROOT, 'electron/server/desk_api.js'));
 
