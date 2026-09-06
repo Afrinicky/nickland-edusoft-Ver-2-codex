@@ -63,6 +63,15 @@ jobs:
       - name: Web app serving (desktop host)
         run: node test/webapp.js
 
+      # The office application over the network: one surface for both
+      # transports, a caller's identity that stays their own, and the rules
+      # travelling with the call.
+      - name: The office application's surface (one list, two transports)
+        run: node test/desk_surface.js
+
+      - name: The office application over the network
+        run: node test/desk_api.js
+
       - name: Cloud sync end-to-end (Node cloud + real desktop client)
         run: node cloud/test/e2e.js
 
@@ -89,6 +98,25 @@ jobs:
       - name: Cross-language end-to-end (Node client → Python cloud)
         run: bash tests/cross_lang.sh
         working-directory: cloud-python
+
+      # The half of the hosted office contract that needs no database: the map,
+      # the refusals, and the two different answers a screen can be given for a
+      # channel that is not there. The half that needs Postgres runs under
+      # `npm run test:online`, against a real one.
+      - name: The office application, hosted
+        run: python3 tests/test_desk.py
+        working-directory: cloud-python
+
+      # Last, and here rather than with the JavaScript above: it compares the
+      # application's own channel list against the hosted service's map, and it
+      # reads that map by ASKING the service for it — so a decorator moved or
+      # renamed cannot quietly change the answer. That means it needs what the
+      # service needs, which is installed two steps up.
+      #
+      # A stale coverage document is a claim about what works that nobody
+      # checked, which is the one thing this whole arrangement exists to avoid.
+      - name: Where each part of the office application works
+        run: node scripts/desk-coverage.mjs --check
 
   web:
     name: Web app
@@ -126,6 +154,33 @@ jobs:
         with:
           name: nickland-edusoft-web
           path: mobile/dist-web
+          retention-days: 7
+          if-no-files-found: error
+
+      # The OFFICE application, built for a browser — a different build for
+      # different people. The Windows job packages it so a school's own
+      # computer serves it at /desk over the school Wi-Fi; a hosted deploy
+      # serves the same files.
+      #
+      # It builds from src/renderer, so it needs the root's dependencies rather
+      # than mobile's.
+      - name: Install root dependencies (no native build)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # VITE_DESK_HOST is baked into the bundle and is only needed when the
+      # build is served somewhere other than the host it talks to. Left unset —
+      # which is what the school's own computer wants — it talks to whoever
+      # served it.
+      - name: Build the office application for a browser
+        run: node scripts/build-desk.mjs --only-build
+        env:
+          VITE_DESK_HOST: ${{ vars.VITE_DESK_HOST }}
+
+      - name: Upload the office application
+        uses: actions/upload-artifact@v4
+        with:
+          name: nickland-edusoft-desk
+          path: dist-desk
           retention-days: 7
           if-no-files-found: error
 
@@ -329,6 +384,16 @@ jobs:
         with:
           name: nickland-edusoft-web
           path: resources/webapp
+
+      # The office application's own browser build, packaged the same way. The
+      # host serves it at /desk, so any machine on the school Wi-Fi — and the
+      # same installer launched as a client — gets the office application
+      # without anything being installed on it.
+      - name: Fetch the office application build
+        uses: actions/download-artifact@v4
+        with:
+          name: nickland-edusoft-desk
+          path: resources/desk
 
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3

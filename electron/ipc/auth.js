@@ -48,6 +48,75 @@ function recordLoginFailure(db, username, reason) {
 
 function clearLoginFailures(username) { loginFailures.delete(username); }
 
+// ── Signing in ──────────────────────────────────────────
+// Checking a name and a password against the school's own users, and the
+// answer the application is handed when it succeeds. Deliberately says nothing
+// about *how* the person got here: the office PC's window and a browser on the
+// school Wi-Fi are the same act of signing in, held to the same throttle,
+// against the same hashes, producing the same permissions.
+//
+// What it does not do is decide who this process thinks is signed in. That is
+// the caller's business, and the two callers answer it differently — see
+// auth:login below and electron/server/desk_api.js.
+function authenticate(db, { username, password }) {
+  // Office machines are shared. Without a throttle, anyone left alone with a
+  // logged-out app could guess another member of staff's password at full
+  // speed, which is how a teacher account becomes a Proprietor account.
+  const uname = String(username || '');
+  const lock = loginLock(uname);
+  if (lock.locked) {
+    return { ok: false, error: `Too many failed attempts. Try again in ${lock.seconds}s.` };
+  }
+
+  const user = db.prepare(`
+    SELECT u.*, d.name AS designation_name
+    FROM users u
+    LEFT JOIN designations d ON d.id = u.designation_id
+    WHERE u.username = ? AND u.is_active = 1
+  `).get(username);
+
+  if (!user) { recordLoginFailure(db, uname, 'unknown_user'); return { ok: false, error: 'Invalid username or password.' }; }
+  if (!user.password_hash) return { ok: false, error: 'Account not set up. Contact administrator.' };
+
+  const match = bcrypt().compareSync(String(password || ''), user.password_hash);
+  if (!match) { recordLoginFailure(db, uname, 'bad_password'); return { ok: false, error: 'Invalid username or password.' }; }
+  clearLoginFailures(uname);
+
+  // Build effective permissions: designation defaults + overrides
+  const desigPerms = user.designation_id
+    ? db.prepare('SELECT * FROM designation_permissions WHERE designation_id = ?').all(user.designation_id)
+    : [];
+  const overrides = db.prepare('SELECT * FROM user_permission_overrides WHERE user_id = ?').all(user.id);
+  const permMap = {};
+  for (const p of desigPerms) {
+    permMap[p.module] = { view: !!p.can_view, create: !!p.can_create, edit: !!p.can_edit, delete: !!p.can_delete };
+  }
+  for (const o of overrides) {
+    permMap[o.module] = {
+      view:   !!o.can_view,
+      create: !!o.can_create,
+      edit:   !!o.can_edit,
+      delete: !!o.can_delete,
+    };
+  }
+
+  db.prepare("UPDATE users SET last_login = datetime('now') WHERE id = ?").run(user.id);
+  db.prepare("INSERT INTO login_sessions (user_id) VALUES (?)").run(user.id);
+
+  return {
+    ok: true,
+    designation: user.designation_name || null,
+    user: {
+      id: user.id,
+      username: user.username,
+      fullName: user.full_name,
+      designation: user.designation_name || SUPER_ADMIN,
+      mustChangePassword: !!user.must_change_password,
+      permissions: permMap,
+    },
+  };
+}
+
 module.exports = function registerAuthHandlers(ipcMain, db) {
 
   // ── Bootstrap check ───────────────────────────────────
@@ -95,65 +164,15 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
 
   // ── Login ─────────────────────────────────────────────
   ipcMain.handle('auth:login', (_e, { username, password }) => {
-    // Office machines are shared. Without a throttle, anyone left alone with a
-    // logged-out app could guess another member of staff's password at full
-    // speed, which is how a teacher account becomes a Proprietor account.
-    const uname = String(username || '');
-    const lock = loginLock(uname);
-    if (lock.locked) {
-      return { ok: false, error: `Too many failed attempts. Try again in ${lock.seconds}s.` };
-    }
-
-    const user = db.prepare(`
-      SELECT u.*, d.name AS designation_name
-      FROM users u
-      LEFT JOIN designations d ON d.id = u.designation_id
-      WHERE u.username = ? AND u.is_active = 1
-    `).get(username);
-
-    if (!user) { recordLoginFailure(db, uname, 'unknown_user'); return { ok: false, error: 'Invalid username or password.' }; }
-    if (!user.password_hash) return { ok: false, error: 'Account not set up. Contact administrator.' };
-
-    const match = bcrypt().compareSync(String(password || ''), user.password_hash);
-    if (!match) { recordLoginFailure(db, uname, 'bad_password'); return { ok: false, error: 'Invalid username or password.' }; }
-    clearLoginFailures(uname);
-
-    // Build effective permissions: designation defaults + overrides
-    const desigPerms = user.designation_id
-      ? db.prepare('SELECT * FROM designation_permissions WHERE designation_id = ?').all(user.designation_id)
-      : [];
-    const overrides = db.prepare('SELECT * FROM user_permission_overrides WHERE user_id = ?').all(user.id);
-    const permMap = {};
-    for (const p of desigPerms) {
-      permMap[p.module] = { view: !!p.can_view, create: !!p.can_create, edit: !!p.can_edit, delete: !!p.can_delete };
-    }
-    for (const o of overrides) {
-      permMap[o.module] = {
-        view:   !!o.can_view,
-        create: !!o.can_create,
-        edit:   !!o.can_edit,
-        delete: !!o.can_delete,
-      };
-    }
-
-    // Record login
-    db.prepare("UPDATE users SET last_login = datetime('now') WHERE id = ?").run(user.id);
-    db.prepare("INSERT INTO login_sessions (user_id) VALUES (?)").run(user.id);
-
-    // Track for backend permission checks
-    security.setCurrentUser(user.id, user.designation_name || null);
-
-    return {
-      ok: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        fullName: user.full_name,
-        designation: user.designation_name || SUPER_ADMIN,
-        mustChangePassword: !!user.must_change_password,
-        permissions: permMap,
-      }
-    };
+    const r = authenticate(db, { username, password });
+    // Only this transport sets the machine's signed-in user: it is the one
+    // window, on the one PC, and the rest of the application asks who is at it.
+    // A browser signing in does NOT come through here — see the desk transport
+    // in electron/server/desk_api.js, which carries its user per request
+    // instead, so a teacher on the Wi-Fi cannot change who the office PC
+    // believes is sitting in front of it.
+    if (r.ok) security.setCurrentUser(r.user.id, r.designation || null);
+    return r.ok ? { ok: true, user: r.user } : r;
   });
 
   // ── Logout ────────────────────────────────────────────
@@ -601,3 +620,4 @@ function resolveEffectivePermissions(db, userId) {
 
 // Export the resolver for use in security middleware
 module.exports.resolveEffectivePermissions = resolveEffectivePermissions;
+module.exports.authenticate = authenticate;

@@ -12,8 +12,31 @@ function resolveEffectivePermissions(db, userId) {
   return require('./auth').resolveEffectivePermissions(db, userId);
 }
 
-// Tracks the currently authenticated user. Set by auth:login.
-// Single-user desktop app, so a module-level variable is fine.
+// Who is asking.
+//
+// For most of this application's life there was exactly one answer: the person
+// sitting at the office PC, signed in at auth:login and held in a variable
+// here. That was true and this file said so.
+//
+// It stopped being true the moment the host began answering other machines.
+// A bursar in the next room and a teacher on the school Wi-Fi both arrive as
+// requests to the same Node process, and a single variable would hand both of
+// them whoever signed in last — every permission check, every audit row and
+// every "whose class" answer in the system attributed to the wrong person. It
+// would not look like a fault. It would look like the bursar doing things.
+//
+// So identity is per-caller. `runAs` puts a request's user into an async
+// context that follows it through everything it calls, awaits included;
+// anything running outside such a context — the Electron window, the backup
+// scheduler, the maintenance sweep — falls back to the signed-in user of this
+// machine, which is exactly what it was before. The thirty-eight places that
+// ask `getCurrentUserId()` did not change, and neither did any handler.
+const { AsyncLocalStorage } = require('async_hooks');
+
+const caller = new AsyncLocalStorage();
+
+// The window's own user. Set by auth:login, and the answer whenever nothing
+// more specific is in scope.
 let currentUserId = null;
 let currentUserDesignation = null;
 
@@ -27,12 +50,31 @@ function clearCurrentUser() {
   currentUserDesignation = null;
 }
 
+// Run `fn` as somebody in particular. Returns whatever fn returns, so an async
+// handler keeps this identity across every await inside it.
+function runAs(identity, fn) {
+  return caller.run(
+    { userId: identity && identity.userId != null ? identity.userId : null,
+      designation: (identity && identity.designation) || null },
+    fn
+  );
+}
+
+// True while a request is being served on somebody else's behalf. The audit
+// log says so, because "the office PC did it" and "a browser on the Wi-Fi did
+// it" are not the same event to anybody investigating one.
+function isScopedCall() {
+  return caller.getStore() != null;
+}
+
 function getCurrentUserId() {
-  return currentUserId;
+  const scoped = caller.getStore();
+  return scoped ? scoped.userId : currentUserId;
 }
 
 function getCurrentDesignation() {
-  return currentUserDesignation;
+  const scoped = caller.getStore();
+  return scoped ? scoped.designation : currentUserDesignation;
 }
 
 // The two designations that may take destructive/controversial financial
@@ -46,9 +88,9 @@ const ELEVATED = ELEVATED_NAMES;
 
 // Resolves elevation from the database rather than trusting the renderer, and
 // falls back to the designation captured at login when the user row is gone.
-function isElevated(db, userId = currentUserId) {
+function isElevated(db, userId = getCurrentUserId()) {
   if (!userId) return false;
-  let designation = userId === currentUserId ? currentUserDesignation : null;
+  let designation = userId === getCurrentUserId() ? getCurrentDesignation() : null;
   try {
     const row = db.prepare(`
       SELECT d.name AS designation
@@ -63,9 +105,10 @@ function isElevated(db, userId = currentUserId) {
 // Returns true if the current user is allowed to perform `action` on `module`.
 // The Proprietor and the Super Admin always pass.
 function checkPermission(db, module, action = 'view') {
-  if (!currentUserId) return false;
-  if (isElevatedName(currentUserDesignation)) return true;
-  const perms = resolveEffectivePermissions(db, currentUserId);
+  const userId = getCurrentUserId();
+  if (!userId) return false;
+  if (isElevatedName(getCurrentDesignation())) return true;
+  const perms = resolveEffectivePermissions(db, userId);
   const p = perms[module];
   if (!p) return false;
   const map = { view: 'canView', create: 'canCreate', edit: 'canEdit', delete: 'canDelete' };
@@ -87,7 +130,7 @@ function requirePerm(db, module, action, handler) {
         db.prepare(`
           INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
           VALUES ('security', NULL, 'permission_denied', ?, ?, 'high')
-        `).run(currentUserId, `Denied ${action} on ${module}`);
+        `).run(getCurrentUserId(), `Denied ${action} on ${module}`);
       } catch (e) {}
       return { ok: false, error: `Access denied. You do not have permission to ${action} ${module}.` };
     }
@@ -98,6 +141,8 @@ function requirePerm(db, module, action, handler) {
 module.exports = {
   setCurrentUser,
   clearCurrentUser,
+  runAs,
+  isScopedCall,
   getCurrentUserId,
   getCurrentDesignation,
   isElevated,

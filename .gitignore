@@ -12,6 +12,13 @@ resources/webapp/
 cloud/webapp/
 cloud-python/webapp/
 
+# The office application's browser build, and the copies the servers serve it
+# from. Produced by `npm run build:desk` at the repo root; never committed.
+dist-desk/
+resources/desk/
+cloud/desk/
+cloud-python/desk/
+
 # Electron-builder cache (created during CI builds)
 .cache/
 

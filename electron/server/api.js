@@ -24,6 +24,7 @@ const registerOfficeRoutes = require('./office_api');
 const { registerDashboardRoutes } = require('./dashboards_api');
 const { registerUploadRoutes } = require('./uploads_api');
 const { registerPaymentRoutes, onlinePaymentsEnabled } = require('./payments_api');
+const { registerDeskRoutes } = require('./desk_api');
 const portals = require('../ipc/_portals');
 // Required at call-time (not destructured at load) to avoid a load-order
 // circular-dependency warning: auth.js attaches resolveEffectivePermissions
@@ -1640,6 +1641,12 @@ function createApiServer(db, opts = {}) {
   // thing allowed to say that a payment succeeded.
   registerPaymentRoutes({ add, db, json, API, getSetting, audit, rateLimited });
 
+  // The office application itself, over the network — one route carrying every
+  // channel the installed application has. See electron/server/desk_api.js for
+  // why it is one route and not four hundred.
+  registerDeskRoutes({ add, db, json, API, rateLimited,
+    userDataPath: opts.userDataPath || db._userDataPath || null });
+
   // There is no payment webhook here any more, and no checkout to answer for.
   // Money is never taken through this app: a balance is shown, and settling it
   // is arranged with the school. Removing the gateway removes the only path by
@@ -1656,6 +1663,10 @@ function createApiServer(db, opts = {}) {
     // teacher on the school Wi-Fi can just open the address in Chrome. It only
     // ever answers GET/HEAD outside /api/, so the API keeps priority and this
     // is a no-op when no web build is installed.
+    // /desk first: it is a prefix the mobile app's single-page fallback would
+    // otherwise swallow whole, handing the office application's address to the
+    // parents' app instead.
+    if (webapp.serveDeskApp(req, res, parsed.pathname)) return;
     if (webapp.serveWebApp(req, res, parsed.pathname)) return;
 
     // find route
