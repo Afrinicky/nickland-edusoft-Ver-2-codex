@@ -56,6 +56,11 @@ because two audiences at one address is one address meaning two things.
 
 ---
 
+> **Setting it up in a school?** [`CONNECTING.md`](CONNECTING.md) is the
+> step-by-step version of this — what to press, what to type on the other
+> computer, and what to check when it will not connect. This document is about
+> how it works and why.
+
 ## 3. On the school network
 
 On the office PC, **Settings → Mobile App → Start server**. It shows the

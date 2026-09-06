@@ -75,7 +75,7 @@ const SECTIONS = [
   {
     title: 'System',
     items: [
-      { to: 'mobile',     label: 'Mobile App',        icon: '📱' },
+      { to: 'mobile',     label: 'Mobile & Computers', icon: '📱' },
       { to: 'cloud',      label: 'Cloud Sync',        icon: '☁️' },
       { to: 'backup',     label: 'Backup',            icon: '💾' },
     ],

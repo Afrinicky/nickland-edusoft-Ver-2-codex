@@ -167,7 +167,9 @@ npm run build:desk     # the browser build (the installer packages it)
 npm run serve:desk     # look at one before it ships
 ```
 
-Full guide: **[`docs/DESK_APP.md`](docs/DESK_APP.md)**.
+Setting it up in a school: **[`docs/CONNECTING.md`](docs/CONNECTING.md)** —
+other computers, phones, and the internet, step by step.
+How it works: **[`docs/DESK_APP.md`](docs/DESK_APP.md)**.
 
 ## Tech Stack
 | Layer | Technology |

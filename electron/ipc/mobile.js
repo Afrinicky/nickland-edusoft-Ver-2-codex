@@ -101,6 +101,11 @@ module.exports = function registerMobileHandlers(ipcMain, db) {
     // rather than installing the app. Settings → Mobile App says so either way,
     // because "type this into Chrome" is the fastest way to get a teacher on.
     web_app: webapp.isAvailable(),
+    // And whether the OFFICE application is installed here too, at /desk. The
+    // same server carries both, so the screen that governs it has to say so —
+    // otherwise the school is told about phones and left to guess that the
+    // bursar's laptop in the next room can use it as well.
+    desk_app: webapp.isDeskAvailable(),
   }));
 
   ipcMain.handle('mobile:start', async () => {
