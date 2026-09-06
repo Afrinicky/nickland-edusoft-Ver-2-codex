@@ -18,7 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { nativeImage } = require('electron');
+const platform = require('../platform');
 
 const VALID_ENTITY_TYPES = ['students', 'staff', 'users'];
 const TABLE = { students: 'students', staff: 'staff', users: 'users' };
@@ -41,49 +41,14 @@ const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
 
 const JPEG_QUALITIES = [90, 80, 70, 60, 50, 40, 30];
 
-// Crop to the passport aspect ratio from the centre, then scale to the target.
-// Cropping rather than squashing: a face stretched to fit is worse than a face
-// with some background trimmed off it.
-function toPassport(img) {
-  const size = img.getSize();
-  if (!size.width || !size.height) return null;
-
-  const ratio = size.width / size.height;
-  let crop;
-  if (ratio > PASSPORT_RATIO) {
-    // Too wide — take a full-height column from the middle.
-    const w = Math.round(size.height * PASSPORT_RATIO);
-    crop = { x: Math.round((size.width - w) / 2), y: 0, width: w, height: size.height };
-  } else {
-    // Too tall — take a full-width band. Biased towards the top, because in a
-    // portrait the head is up there and the chest is not what matters.
-    const h = Math.round(size.width / PASSPORT_RATIO);
-    crop = { x: 0, y: Math.round((size.height - h) * 0.25), width: size.width, height: h };
-  }
-
-  let out = img;
-  try { out = img.crop(crop); } catch (_) { out = img; }
-  try {
-    out = out.resize({ width: PASSPORT_W, height: PASSPORT_H, quality: 'best' });
-  } catch (_) { /* keep the crop if the resize is refused */ }
-  return out;
-}
-
-// Re-encode at descending quality until it fits. JPEG throughout: a passport
-// crop has no transparency to preserve, and PNG at this size is several times
-// larger for no visible gain.
-function encodeWithinBudget(img) {
-  let last = null;
-  for (const q of JPEG_QUALITIES) {
-    const buf = img.toJPEG(q);
-    last = buf;
-    if (buf.length <= MAX_STORED_BYTES) return { buffer: buf, quality: q };
-  }
-  return { buffer: last, quality: JPEG_QUALITIES[JPEG_QUALITIES.length - 1] };
-}
-
-// Read → passport → budget. Returns a JPEG buffer or an { error }.
-function processImage(sourcePath) {
+// Read → passport crop → within budget. Returns a JPEG buffer or an { error }.
+//
+// The rules are here — the ratio, the qualities to try, the size a stored
+// photograph may reach. HOW an image is cropped and re-encoded belongs to the
+// machine: Electron's own image library on the office PC, sharp on a server.
+// See electron/platform.js. The school's decisions do not change with the
+// machine; only the means of carrying them out does.
+async function processImage(sourcePath) {
   let stat;
   try { stat = fs.statSync(sourcePath); }
   catch (_) { return { error: 'Source file not found.' }; }
@@ -91,17 +56,12 @@ function processImage(sourcePath) {
     return { error: 'That image is too large to read (over 25MB). Please choose a smaller one.' };
   }
 
-  const img = nativeImage.createFromPath(sourcePath);
-  if (!img || img.isEmpty()) {
-    return { error: 'That file could not be read as an image.' };
-  }
-  const passport = toPassport(img);
-  if (!passport || passport.isEmpty()) {
-    return { error: 'That image could not be resized.' };
-  }
-  const { buffer, quality } = encodeWithinBudget(passport);
-  if (!buffer || !buffer.length) return { error: 'That image could not be saved.' };
-  return { buffer, quality, bytes: buffer.length };
+  return platform.passportPhoto(sourcePath, {
+    width: PASSPORT_W,
+    height: PASSPORT_H,
+    qualities: JPEG_QUALITIES,
+    maxBytes: MAX_STORED_BYTES,
+  });
 }
 
 module.exports = function registerPhotosHandlers(ipcMain, db, userDataPath) {
@@ -132,7 +92,7 @@ module.exports = function registerPhotosHandlers(ipcMain, db, userDataPath) {
     } catch (_) { /* a photo we cannot delete is not worth failing over */ }
   }
 
-  ipcMain.handle('photos:upload', (_e, { entityType, entityId, sourcePath }) => {
+  ipcMain.handle('photos:upload', async (_e, { entityType, entityId, sourcePath }) => {
     if (!VALID_ENTITY_TYPES.includes(entityType)) {
       return { ok: false, error: `Invalid entity type: ${entityType}` };
     }
@@ -143,7 +103,10 @@ module.exports = function registerPhotosHandlers(ipcMain, db, userDataPath) {
       return { ok: false, error: `Unsupported image format. Allowed: ${VALID_EXTENSIONS.join(', ')}` };
     }
 
-    const processed = processImage(sourcePath);
+    // Awaited: reading and re-encoding an image is the machine's work, and on
+    // a server it is asynchronous. Without the await this handed the writer a
+    // promise instead of a photograph and wrote a broken file with no error.
+    const processed = await processImage(sourcePath);
     if (processed.error) return { ok: false, error: processed.error };
 
     const dir = photoDir(entityType);

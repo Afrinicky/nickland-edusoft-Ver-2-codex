@@ -15,7 +15,15 @@ than discover.
 |---|---|---|
 | **The installed application** | The school's own computer | all 399 |
 | **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 374 of 399 (94%) |
-| **Hosted** | The internet, with the school's computer switched off | 107 of 399 (27%) |
+| **Hosted — the installer's own code** | The internet, running host/server.js | 374 of 399 (94%) |
+| **Hosted — the Python service** | The internet, running cloud-python | 107 of 399 (27%) |
+
+There are two ways to be hosted and they are not equal. **host/server.js**
+runs the installed application's own handlers on a server — the same code, so
+it answers everything a browser on the school network does, and it cannot
+drift, because there is nothing for it to drift from. The Python service is a
+separate implementation and answers what has been carried over to it. The
+per-channel table below is about that one.
 
 Three things a channel can be:
 

@@ -188,3 +188,36 @@ staff genuinely need to work while the office is shut.
 * Backups, restoring, and opening folders stay on the office PC. Other machines
   are told where those live rather than being given a half-working version.
 * Parents cannot open the office application at all. They have their own app.
+
+---
+
+## Appendix — Option B, revisited
+
+Part 3 offered two ways onto the internet. There is now a third, and it is
+better than either: **run the installed application's own code on a server**.
+
+```bash
+EDUSOFT_DATA_DIR=/data npm run host
+```
+
+That is the whole application — the same 22,000 lines of handlers the office PC
+runs, mounted from the same list, answering the same channels through the same
+permission rules. Not a port of it. It answers **374 of 399 channels**, which is
+everything except the actions that only mean something on a machine somebody is
+sitting at, and it cannot drift from the office PC because there is nothing for
+it to drift from.
+
+What a server needs that a desktop supplies for free:
+
+| | |
+|---|---|
+| **A persistent disk** | `EDUSOFT_DATA_DIR` must survive a restart. A container's own filesystem does not. |
+| **A headless browser** | For report cards, receipts and payslips. `npm install puppeteer` is the simplest. |
+| **`sharp`** | Only if photographs are attached online. `npm install sharp`. |
+| **`EDUSOFT_SECRET_KEY`** | 32+ characters. Without it, backup destination passwords are stored in the clear and the log says so. |
+
+**It is not yet joined to the office PC.** Both hold a complete school, and
+nothing yet carries changes between them — so today this is either a second
+school or a read-only copy, not the same school in two places. Two-way
+replication is the remaining piece of work; until it lands, use one or the
+other for real work, not both.

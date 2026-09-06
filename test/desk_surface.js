@@ -196,9 +196,16 @@ const appChannels = channels.filter(c => c.startsWith('app:'));
 ck('the app-level channels exist', appChannels.length >= 8);
 ck('...and are registered where the network cannot reach them',
   appChannels.every(c => main.includes(`ipcMain.handle('${c}'`)));
-ck('...while every module registers through the recorder instead',
-  main.includes('registry.recordingIpcMain(ipcMain)') &&
-  main.includes('guardedIpcMain(recording, db)'));
+// Both machines mount the school from ONE list, so a module cannot be added
+// to the office PC and forgotten on the server.
+const modules = fs.readFileSync(path.join(ROOT, 'electron/register_modules.js'), 'utf8');
+ck('...while every module registers through the recorder and the guard',
+  modules.includes('registry.recordingIpcMain(ipcMain)') &&
+  modules.includes('guardedIpcMain(recording, db)'));
+ck('the office PC mounts the school from the shared list, not one of its own',
+  main.includes('registerModules({') && !/mount\('students'/.test(main));
+ck('...and so does the headless host',
+  fs.readFileSync(path.join(ROOT, 'host/server.js'), 'utf8').includes('registerModules('));
 
 // ── The browser answers the ones it must answer itself ──────────────────────
 //

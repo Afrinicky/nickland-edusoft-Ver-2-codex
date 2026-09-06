@@ -12,6 +12,8 @@
 // value is stored in the clear and TAGGED as such, so the UI can warn rather
 // than silently pretending it is protected.
 
+const platform = require('../platform');
+
 const ENC = '__enc';       // { __enc: base64 }  — OS-encrypted
 const PLAIN = '__plain';   // { __plain: str }   — stored in the clear (no keystore)
 
@@ -22,8 +24,12 @@ const SECRET_FIELDS = {
   gdrive: ['serviceAccountJson'],
 };
 
+// The operating system's keystore on the office PC; a key from the
+// environment on a server (EDUSOFT_SECRET_KEY). Either may answer null, and
+// the caller already falls back to storing the value in the clear and saying
+// so, which is the honest thing to do.
 function safeStorage() {
-  try { return require('electron').safeStorage; } catch (_) { return null; }
+  try { return platform.secretStore(); } catch (_) { return null; }
 }
 function canEncrypt() {
   const s = safeStorage();

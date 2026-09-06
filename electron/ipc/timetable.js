@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getSetting } = require('../utils/idgen');
+const platform = require('../platform');
 // ExcelJS + electron are required lazily inside the export handlers so this
 // module still loads in the plain-Node test harness (no node_modules).
 //
@@ -337,12 +338,9 @@ async function exportClassPdf(db, classId, savePath) {
     <table><thead><tr><th>Period</th>${head}</tr></thead><tbody>${rows}</tbody></table>
   </body></html>`;
 
-  const { BrowserWindow } = require('electron');
-  const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
-  await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-  const data = await win.webContents.printToPDF({ pageSize: 'A4', landscape: true, printBackground: true });
-  fs.writeFileSync(savePath, data);
-  win.close();
+  await platform.htmlToPdf(html, savePath, {
+    pageSize: 'A4', landscape: true, printBackground: true,
+  });
 }
 
 module.exports = registerTimetableHandlers;

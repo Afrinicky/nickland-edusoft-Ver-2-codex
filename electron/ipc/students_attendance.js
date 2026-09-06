@@ -5,6 +5,7 @@ const path = require('path');
 const ExcelJS = require('exceljs');
 const { enqueueStudentSnapshot } = require('../server/sync/outbox');
 const attendance = require('./_attendance');
+const platform = require('../platform');
 
 module.exports = function registerStudentAttendanceHandlers(ipcMain, db, _userDataPath, getResourcePath) {
 
@@ -494,15 +495,10 @@ function escapeHtml(value) {
 }
 
 async function htmlToPdf(html, outPath) {
-  const { BrowserWindow } = require('electron');
-  const win = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
-  await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-  const data = await win.webContents.printToPDF({
+  await platform.htmlToPdf(html, outPath, {
     pageSize: 'A4',
     landscape: true,
     printBackground: true,
     margins: { top: 0, bottom: 0, left: 0, right: 0 },
   });
-  fs.writeFileSync(outPath, data);
-  win.close();
 }
