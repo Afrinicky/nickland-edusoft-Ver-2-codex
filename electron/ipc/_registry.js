@@ -32,8 +32,18 @@ const handlers = new Map();
 function recordingIpcMain(ipcMain) {
   return {
     handle(channel, handler) {
+      // ipcMain FIRST, and only remember it if that succeeded.
+      //
+      // Electron refuses a second handler for a channel by throwing, and
+      // _stubs.js relies on exactly that: it registers a stand-in for every
+      // channel and lets the throw skip the ones a real module already took.
+      // Remembering before calling meant the registry kept the STUB while the
+      // window kept the real handler — so a browser would have been answered
+      // "not yet implemented" by a feature that works perfectly on the office
+      // PC, and nothing anywhere would have said why.
+      const result = ipcMain.handle(channel, handler);
       handlers.set(channel, handler);
-      return ipcMain.handle(channel, handler);
+      return result;
     },
     removeHandler(channel) {
       handlers.delete(channel);

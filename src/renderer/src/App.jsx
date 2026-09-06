@@ -1,6 +1,6 @@
 // Nickland Edusoft — App Root Router
 // Copyright © 2026 Nickland Sales. All rights reserved.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useStore } from './store/index.js';
 import Sidebar from './components/Sidebar.jsx';
@@ -39,21 +39,78 @@ import { mediaUrl } from './lib/media.js';
 export default function App() {
   const { loadSettings, loadClassesAndTerms, login, isAuthenticated } = useStore();
   const [phase, setPhase] = useState('loading');
+  // Read by the watchdog below, which fires from a timer and would otherwise
+  // close over whatever the step was when the effect ran.
+  const bootStepRef = useRef('Starting');
+
+  // What the application is doing before it can show anything, and what went
+  // wrong if it never got there.
+  //
+  // This sequence used to have no error handling at all, and the two ways it
+  // can fail produced the same screen: the splash, forever. A channel that
+  // answered a refusal instead of a list threw inside `terms.find`; a channel
+  // with no handler rejected; either way the promise died unobserved, `phase`
+  // stayed 'loading', and the school was left looking at a spinner with
+  // nothing to read and nothing to try. That is the worst failure a program
+  // can have, because it is indistinguishable from being slow.
+  //
+  // So: every step says what it is, a failure says which one and why, and a
+  // step that simply never finishes is caught too — a promise that never
+  // settles is not caught by try/catch, and hanging is exactly what a database
+  // on a network drive or a half-registered module does.
+  const [bootError, setBootError] = useState(null);
+  const [bootStep, setBootStep] = useState('Starting');
+  const [bootAttempt, setBootAttempt] = useState(0);
 
   useEffect(() => {
-    (async () => {
-      await loadSettings();
-      await loadClassesAndTerms();
-      const { done } = await window.api.auth.bootstrapStatus();
+    let done = false;
+
+    // Long enough that a slow machine opening a large school is never
+    // interrupted, short enough that nobody sits watching a spinner wondering
+    // whether to restart.
+    const watchdog = setTimeout(() => {
       if (!done) {
-        setPhase('bootstrap');
-      } else if (!isAuthenticated) {
-        setPhase('login');
-      } else {
-        setPhase('app');
+        setBootError({
+          step: bootStepRef.current,
+          message: 'It is taking much longer than it should.',
+          slow: true,
+        });
+      }
+    }, 20000);
+
+    (async () => {
+      try {
+        bootStepRef.current = 'Reading the school’s settings';
+        setBootStep(bootStepRef.current);
+        await loadSettings();
+
+        bootStepRef.current = 'Reading the classes, terms and subjects';
+        setBootStep(bootStepRef.current);
+        await loadClassesAndTerms();
+
+        bootStepRef.current = 'Checking whether the school has been set up';
+        setBootStep(bootStepRef.current);
+        const status = await window.api.auth.bootstrapStatus();
+
+        done = true;
+        if (!status || !status.done) {
+          setPhase('bootstrap');
+        } else if (!isAuthenticated) {
+          setPhase('login');
+        } else {
+          setPhase('app');
+        }
+      } catch (e) {
+        done = true;
+        setBootError({
+          step: bootStepRef.current,
+          message: (e && e.message) || String(e),
+        });
       }
     })();
-  }, []);
+
+    return () => { done = true; clearTimeout(watchdog); };
+  }, [bootAttempt]);
 
   // Auth state drives the phase in BOTH directions. Advancing on sign-in was
   // always here; the way back was not, so signing out cleared the session but
@@ -66,7 +123,15 @@ export default function App() {
     else if (!isAuthenticated && phase === 'app') setPhase('login');
   }, [isAuthenticated, phase]);
 
-  if (phase === 'loading') return <Splash />;
+  if (phase === 'loading') {
+    return bootError
+      ? <BootFailure
+          error={bootError}
+          step={bootStep}
+          onRetry={() => { setBootError(null); setBootAttempt(n => n + 1); }}
+        />
+      : <Splash step={bootStep} />;
+  }
 
   if (phase === 'bootstrap') {
     return <Bootstrap onDone={() => setPhase('login')} />;
@@ -214,18 +279,62 @@ function StatusBar() {
   );
 }
 
-function Splash() {
+const Crest = () => (
+  <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+    <rect width="64" height="64" rx="16" fill="#1B3A6B"/>
+    <path d="M14 46L32 20L50 46H14Z" fill="#C9961A"/>
+  </svg>
+);
+
+function Splash({ step }) {
   return (
     <div className="splash">
-      <div className="splash-logo">
-        <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-          <rect width="64" height="64" rx="16" fill="#1B3A6B"/>
-          <path d="M14 46L32 20L50 46H14Z" fill="#C9961A"/>
-        </svg>
-      </div>
+      <div className="splash-logo"><Crest /></div>
       <div className="splash-name">Nickland Edusoft</div>
       <div className="splash-sub">by Nickland Sales</div>
       <div className="splash-spinner" />
+      {/* Which of the three steps it is on. A spinner alone cannot be told
+          apart from a spinner that will never stop. */}
+      {step && <div className="splash-step">{step}…</div>}
+    </div>
+  );
+}
+
+// The application could not start, and this says so instead of spinning.
+//
+// Written for the person in the school office, not for a developer: what it
+// was doing, what happened, and the two things that are actually worth trying
+// before telephoning anybody. The technical detail is there as well, because
+// it is what a support call needs and reading it out beats describing a
+// spinner.
+function BootFailure({ error, step, onRetry }) {
+  const slow = error.slow;
+  return (
+    <div className="splash">
+      <div className="splash-logo"><Crest /></div>
+      <div className="splash-name">Nickland Edusoft</div>
+      <div className="splash-sub">by Nickland Sales</div>
+
+      <div className="splash-error">
+        <h2>{slow ? 'This is taking too long' : 'The application could not start'}</h2>
+        <p>
+          It was {(error.step || step || 'starting up').toLowerCase()} and{' '}
+          {slow ? 'has not finished.' : 'something went wrong.'}
+        </p>
+
+        <ul>
+          <li>Try again — most of the time that is enough.</li>
+          <li>If it keeps happening, restart the computer.</li>
+          <li>
+            If it still will not start, restore your most recent backup, or send
+            Nickland Sales the message below.
+          </li>
+        </ul>
+
+        <pre>{error.message}</pre>
+
+        <button className="btn btn-primary" onClick={onRetry}>Try again</button>
+      </div>
     </div>
   );
 }
