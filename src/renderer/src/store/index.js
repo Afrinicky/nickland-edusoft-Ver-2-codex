@@ -191,8 +191,23 @@ export const useStore = create((set, get) => ({
       window.api.settings.listSubjects(),
     ]);
 
-    // These three answer with lists. When one comes back as anything else it
-    // is a refusal or a failure wearing a list's name — a permission denial, a
+    // Nobody has signed in yet.
+    //
+    // The application reads these three before the sign-in screen, and on the
+    // office PC that works: the machine is the school, so the classes are
+    // readable whether or not anybody has identified themselves. Over a
+    // network they are not, and they should not be — a stranger who opens the
+    // address should not be handed the school's class list.
+    //
+    // So this is an expected state, not a fault. Leave the lists empty and
+    // carry on to the sign-in screen; signing in loads them properly, which is
+    // what `login` has always done.
+    if ([classes, terms, subjects].some(v => v && v.not_signed_in)) {
+      set({ classes: [], subjects: [], currentTerm: null, currentAcademicYear: null });
+      return;
+    }
+
+    // Anything else that is not a list IS a fault — a permission denial, a
     // channel with no handler, a host that could not be reached — and running
     // `.find` on it produces "a.find is not a function", which tells whoever
     // is looking at it nothing whatsoever. Say what actually arrived.

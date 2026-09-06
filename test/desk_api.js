@@ -221,6 +221,25 @@ const call = (base, token, channel, ...args) =>
   ck('...and signing in from a browser does not touch the office PC’s own session',
     security.getCurrentUserId() === null);
 
+  // ══ Before anybody has signed in ══════════════════════════════════════════
+  //
+  // The application reads the classes, terms and subjects before it draws the
+  // sign-in screen. On the office PC that works — the machine is the school.
+  // Over a network it must not: a stranger who opens the address should not be
+  // handed the school's class list. So these answer 401, and the browser is
+  // expected to read that as "not yet", show the sign-in screen, and load them
+  // properly afterwards. Getting this wrong stopped the application starting
+  // at all over the LAN.
+  for (const channel of ['settings:list-classes', 'settings:list-terms', 'settings:list-subjects']) {
+    r = await call(base, null, channel);
+    if (r.status !== 401) ck(`${channel} is refused before sign-in`, false);
+  }
+  ck('the start-up reads are refused before anybody signs in', true);
+
+  r = await call(base, admin.token, 'settings:list-classes');
+  ck('...and answer with a real list once somebody has',
+    r.status === 200 && Array.isArray(r.json.result));
+
   // ══ Two people at once ════════════════════════════════════════════════════
 
   const [a, b] = await Promise.all([

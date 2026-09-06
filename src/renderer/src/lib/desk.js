@@ -421,7 +421,12 @@ async function invoke(channel, ...args) {
     return { ok: false, error: 'You have been signed out. Sign in again.' };
   }
   if (r.__transport === 'not-signed-in') {
-    return { ok: false, error: 'Please sign in.' };
+    // Flagged, not just worded. Some of what the application reads at start-up
+    // — the classes, the terms, the subjects — is readable on the office PC
+    // before anybody signs in, and simply is not out here. That is an expected
+    // state, not a fault, and the screens need to be able to tell the
+    // difference between "you are not signed in yet" and "this went wrong".
+    return { ok: false, not_signed_in: true, error: 'Please sign in.' };
   }
   // A refusal from the host — no such channel, not staff, host-only — is
   // already in the shape a handler answers in, so it is passed straight on.
