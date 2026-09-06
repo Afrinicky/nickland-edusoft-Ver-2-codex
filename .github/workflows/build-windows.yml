@@ -72,12 +72,6 @@ jobs:
       - name: The office application over the network
         run: node test/desk_api.js
 
-      # The coverage document is generated from the application's own channel
-      # list and the hosted service's map. A stale one is a claim about what
-      # works that nobody checked.
-      - name: Where each part of the office application works
-        run: node scripts/desk-coverage.mjs --check
-
       - name: Cloud sync end-to-end (Node cloud + real desktop client)
         run: node cloud/test/e2e.js
 
@@ -112,6 +106,17 @@ jobs:
       - name: The office application, hosted
         run: python3 tests/test_desk.py
         working-directory: cloud-python
+
+      # Last, and here rather than with the JavaScript above: it compares the
+      # application's own channel list against the hosted service's map, and it
+      # reads that map by ASKING the service for it — so a decorator moved or
+      # renamed cannot quietly change the answer. That means it needs what the
+      # service needs, which is installed two steps up.
+      #
+      # A stale coverage document is a claim about what works that nobody
+      # checked, which is the one thing this whole arrangement exists to avoid.
+      - name: Where each part of the office application works
+        run: node scripts/desk-coverage.mjs --check
 
   web:
     name: Web app
