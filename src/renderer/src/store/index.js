@@ -190,6 +190,18 @@ export const useStore = create((set, get) => ({
       window.api.settings.listTerms(),
       window.api.settings.listSubjects(),
     ]);
+
+    // These three answer with lists. When one comes back as anything else it
+    // is a refusal or a failure wearing a list's name — a permission denial, a
+    // channel with no handler, a host that could not be reached — and running
+    // `.find` on it produces "a.find is not a function", which tells whoever
+    // is looking at it nothing whatsoever. Say what actually arrived.
+    for (const [name, value] of [['classes', classes], ['terms', terms], ['subjects', subjects]]) {
+      if (Array.isArray(value)) continue;
+      const why = value && value.error ? value.error : `it answered ${JSON.stringify(value)}`;
+      throw new Error(`The school's ${name} could not be read — ${why}`);
+    }
+
     const currentTerm = terms.find(t => t.is_current) || terms[0] || null;
     const currentAcademicYear = currentTerm
       ? terms.find(t => t.is_current)?.year_label || null

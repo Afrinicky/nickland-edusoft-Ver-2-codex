@@ -57,6 +57,12 @@ jobs:
       - name: Install JS dependencies (no native build)
         run: npm ci --ignore-scripts --no-audit --no-fund
 
+      # The preload script Electron actually loads. Built before the suite
+      # because the suite loads it the way Electron's sandbox does — which is
+      # the check that would have caught the preload shipping unbundled.
+      - name: Build the preload script
+        run: npm run build:preload
+
       - name: Desktop regression tests
         run: node test/regressions.js
 
@@ -397,6 +403,13 @@ jobs:
 
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3
+
+      # Without this the installer ships a preload Electron cannot load: a
+      # sandboxed preload may require "electron" and nothing else, and the
+      # source requires ./api-surface. The window opens with no window.api and
+      # the application cannot reach its own database.
+      - name: Build the preload script
+        run: npm run build:preload
 
       - name: Build renderer (Vite)
         run: npm run build:renderer

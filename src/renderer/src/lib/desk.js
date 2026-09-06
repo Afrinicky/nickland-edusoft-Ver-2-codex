@@ -431,15 +431,23 @@ async function invoke(channel, ...args) {
   return r.result;
 }
 
-// True when this is a browser rather than the installed application. The
-// window has `window.api` from the preload script; nothing else does.
-export function isBrowser() {
-  return typeof window !== 'undefined' && !window.api;
-}
+// Is this a browser, or the installed application?
+//
+// Decided ONCE, when this module is first evaluated, and deliberately not
+// computed on demand. The test is whether the preload script has put
+// `window.api` on the window — which it does before any renderer script runs —
+// and asking that question later gets the wrong answer, because by then this
+// file has installed a `window.api` of its own. That is not a subtle bug: it
+// made the Connect screen unreachable, stopped a signed-in browser from being
+// put back where it was, and left the application to fail three steps later
+// on a list that was really a refusal.
+const IS_BROWSER = typeof window !== 'undefined' && !window.api;
+
+export function isBrowser() { return IS_BROWSER; }
 
 // Install the surface. Called once, before React renders anything.
 export function installDeskApi() {
-  if (!isBrowser()) return false;
+  if (!IS_BROWSER) return false;
   window.api = buildApi(invoke);
   window.__EDUSOFT_TRANSPORT__ = 'desk';
   installPictureResolver();
