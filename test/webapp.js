@@ -29,7 +29,17 @@ fs.writeFileSync(path.join(root, '_expo', 'static', 'js', 'web', 'entry-abc123.j
 const secret = path.join(root, '..', `nk-secret-${process.pid}.txt`);
 fs.writeFileSync(secret, 'DATABASE_PASSWORD=hunter2');
 
+// A minimal stand-in for a `vite build` of the office application. It is a
+// separate build served at a separate address, and the cases below are about
+// the two not treading on each other.
+const deskRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-desk-'));
+fs.mkdirSync(path.join(deskRoot, 'assets'), { recursive: true });
+fs.writeFileSync(path.join(deskRoot, 'index.html'),
+  '<!DOCTYPE html><title>Nickland Edusoft</title><div id="root"></div><!--office-->');
+fs.writeFileSync(path.join(deskRoot, 'assets', 'desk-Xy12ab.js'), 'console.log(2)');
+
 process.env.EDUSOFT_WEBAPP_DIR = root;
+process.env.EDUSOFT_DESK_DIR = deskRoot;
 const webapp = require(path.join(__dirname, '..', 'electron', 'server', 'webapp.js'));
 webapp.forgetWebAppRoot();
 
@@ -37,6 +47,7 @@ webapp.forgetWebAppRoot();
 // GET/HEAD, and anything it declines falls through to the "API".
 const server = http.createServer((req, res) => {
   const pathname = (req.url || '/').split('?')[0];
+  if (webapp.serveDeskApp(req, res, pathname)) return;
   if (webapp.serveWebApp(req, res, pathname)) return;
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: false, error: 'Not found', from: 'api' }));
@@ -115,8 +126,55 @@ function get(base, p, method = 'GET') {
   r = await get(base, '/', 'HEAD');
   ck('HEAD returns headers with no body', r.status === 200 && r.body === '');
 
+  // ══ The office application, at its own address ═══════════════════════════
+  //
+  // Two applications on one host, for two different people. The thing that
+  // would go wrong is not that /desk 404s — it is that /desk quietly returns
+  // the PARENTS' app, because the mobile build's single-page fallback answers
+  // every path that has no file. A teacher would open the office address and
+  // be shown a parent's screen.
+
+  r = await get(base, '/desk');
+  ck('the office application answers at /desk',
+    r.status === 200 && /office/.test(r.body));
+
+  r = await get(base, '/desk/');
+  ck('...with or without the trailing slash', r.status === 200 && /office/.test(r.body));
+
+  r = await get(base, '/desk/assets/desk-Xy12ab.js');
+  ck('its bundle is served', r.status === 200 && r.body === 'console.log(2)');
+  ck('...and cached hard, being hashed', /immutable/.test(r.headers['cache-control'] || ''));
+
+  for (const route of ['/desk/students', '/desk/fees/bills', '/desk/settings/access']) {
+    r = await get(base, route);
+    if (!(r.status === 200 && /office/.test(r.body))) {
+      ck(`office route ${route} reaches the office application`, false);
+    }
+  }
+  ck('office routes all reach the office application, not the parents’ app', true);
+
+  r = await get(base, '/');
+  ck('and the mobile app is exactly where it was', r.status === 200 && !/office/.test(r.body));
+
+  r = await get(base, '/api/v1/desk/call', 'POST');
+  ck('the desk API is the API’s, not the page’s', r.status === 404 && /"from":"api"/.test(r.body));
+
+  for (const attack of [
+    `/desk/../../nk-secret-${process.pid}.txt`,
+    `/desk/..%2f..%2fnk-secret-${process.pid}.txt`,
+    `/desk/%2e%2e/%2e%2e/nk-secret-${process.pid}.txt`,
+  ]) {
+    r = await get(base, attack);
+    if (/hunter2/.test(r.body)) { ck(`office traversal refused: ${attack}`, false); }
+  }
+  ck('path traversal cannot read outside the office build either', true);
+
   server.close();
-  try { fs.rmSync(root, { recursive: true, force: true }); fs.unlinkSync(secret); } catch (_) {}
+  try {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(deskRoot, { recursive: true, force: true });
+    fs.unlinkSync(secret);
+  } catch (_) {}
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

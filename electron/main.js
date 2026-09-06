@@ -15,6 +15,8 @@ const registerReportsHandlers = require('./ipc/reports');
 const registerNotificationsHandlers = require('./ipc/notifications');
 const registerAuthHandlers = require('./ipc/auth');
 const { guardedIpcMain } = require('./ipc/_guard');
+const registry = require('./ipc/_registry');
+const clientMode = require('./client_mode');
 const registerAccessHandlers = require('./ipc/access');
 const registerDashboardHandlers = require('./ipc/dashboard');
 const registerStudentAttendanceHandlers = require('./ipc/students_attendance');
@@ -140,6 +142,57 @@ function getUserDataPath() {
   return app.getPath('userData');
 }
 
+// ── The window, when this install is a client of another PC ─────────────────
+//
+// Deliberately NOT given the preload script. The preload puts `window.api` on
+// the page and wires it to this process's own IPC handlers — and a client has
+// none, because it opened no database. Without it the page finds no `window.api`
+// and installs the network transport instead (src/renderer/src/lib/desk.js),
+// which is exactly right: this window is a browser pointed at the school's
+// computer, and it should behave as one.
+async function createClientWindow() {
+  const host = clientMode.hostUrl();
+
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 1100,
+    minHeight: 700,
+    title: 'Nickland Edusoft',
+    icon: getResourcePath('logo.png'),
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    backgroundColor: '#1B3A6B',
+    show: false,
+  });
+  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.loadURL(clientMode.connectingPage(host));
+
+  const check = await clientMode.reachable(host);
+  if (!check.ok) {
+    logger.warn('client', `Host ${host} unreachable`, check.error);
+    return mainWindow.loadURL(clientMode.unreachablePage(host, check.error));
+  }
+
+  logger.info('client', `Connected to ${check.info.school || 'the school'} at ${host}`);
+  await mainWindow.loadURL(`${host}/desk/`);
+
+  // Same rule as the host window: external links go to the browser, and this
+  // window stays on the school's own application.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const scheme = new URL(url).protocol;
+      if (scheme === 'https:' || scheme === 'http:' || scheme === 'mailto:') shell.openExternal(url);
+    } catch (_) { /* not a URL we can parse — ignore it */ }
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!String(url).startsWith(host) && !String(url).startsWith('data:')) {
+      event.preventDefault();
+      logger.warn('window', `Blocked navigation away from the school: ${String(url).slice(0, 200)}`);
+    }
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -203,6 +256,24 @@ app.whenReady().then(async () => {
   // its way out, so it must not touch anything.
   if (!gotInstanceLock) return;
 
+  // A client of another PC. It opens no database, registers no handlers and
+  // starts no server: the school lives on the host and this shows it. See
+  // electron/client_mode.js. With EDUSOFT_HOST_URL unset — every install that
+  // exists today — this is skipped entirely and nothing below has changed.
+  if (clientMode.isClient()) {
+    logger.init(getUserDataPath());
+    logger.info('startup', `Nickland Edusoft ${app.getVersion()} starting as a client of ${clientMode.hostUrl()}`);
+    try {
+      await createClientWindow();
+    } catch (e) {
+      return reportFatal(e, 'connecting to the school’s computer');
+    }
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createClientWindow();
+    });
+    return;
+  }
+
   const userDataPath = getUserDataPath();
   if (!fs.existsSync(userDataPath)) fs.mkdirSync(userDataPath, { recursive: true });
   const uploadsPath = path.join(userDataPath, 'uploads');
@@ -230,7 +301,14 @@ app.whenReady().then(async () => {
   // to each channel, in the main process, where the renderer cannot reach
   // around it. Auth registers on the real ipcMain: those channels are how a
   // person signs in, so they cannot require being signed in.
-  const guarded = guardedIpcMain(ipcMain, db);
+  //
+  // Registration passes through the recorder first (electron/ipc/_registry.js)
+  // so the host can look a channel up by name and call the same function for a
+  // browser on the school Wi-Fi. The app:* channels below stay on the real
+  // ipcMain and are therefore not reachable that way, which is the point: a
+  // file dialog on the office PC is not something a browser gets to open.
+  const recording = registry.recordingIpcMain(ipcMain);
+  const guarded = guardedIpcMain(recording, db);
 
   const mount = (name, fn) => {
     try { fn(); } catch (e) {
@@ -241,8 +319,8 @@ app.whenReady().then(async () => {
 
   // Auth is not optional — without it nobody can sign in at all.
   try {
-    registerAuthHandlers(ipcMain, db);
-    registerAccessHandlers(ipcMain, db);
+    registerAuthHandlers(recording, db);
+    registerAccessHandlers(recording, db);
   } catch (e) {
     return reportFatal(e, 'setting up sign-in');
   }

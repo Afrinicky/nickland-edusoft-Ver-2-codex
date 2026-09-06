@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nickland Edusoft</title>
+  <!--
+    The same application as index.html, built for a browser instead of for the
+    installed window. Two things differ, and only two:
+
+      • img-src allows the school's own pictures as bytes (data:) and drops
+        file:, which means nothing in a browser.
+      • connect-src allows this page to reach a school's computer at an
+        address somebody types on the Connect screen. It has to: the whole
+        point of the browser build is that the person opening it is not
+        necessarily on the machine holding the records. The installed
+        application's own index.html is UNCHANGED and still allows nothing
+        but itself.
+  -->
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://rsms.me; font-src 'self' https://fonts.gstatic.com https://rsms.me; img-src 'self' data: blob:; connect-src 'self' http: https:;" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Lato:wght@400;700&family=Open+Sans:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+</html>
