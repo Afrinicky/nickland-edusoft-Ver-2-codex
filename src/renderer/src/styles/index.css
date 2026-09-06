@@ -94,6 +94,42 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+/* Which of the three start-up steps it is on. A spinner on its own cannot be
+   told apart from a spinner that is never going to stop. */
+.splash-step {
+  color: rgba(255,255,255,0.55);
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+
+/* The application could not start. Shown in place of the spinner, because a
+   spinner that spins forever tells a school nothing it can act on. */
+.splash-error {
+  margin-top: 20px;
+  max-width: 34rem;
+  padding: 22px 26px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.86);
+  text-align: left;
+}
+.splash-error h2 { margin: 0 0 8px; font-size: 17px; font-weight: 600; color: #fff; }
+.splash-error p  { margin: 0 0 10px; font-size: 14px; line-height: 1.6; }
+.splash-error ul { margin: 0 0 14px; padding-left: 20px; font-size: 13.5px; line-height: 1.9; }
+.splash-error pre {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  color: rgba(255, 255, 255, 0.7);
+  font-family: ui-monospace, Consolas, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 8rem;
+  overflow: auto;
+}
 
 /* ═══════════════════════════════════════════════════════
    AUTH SCREENS (Bootstrap + Login)

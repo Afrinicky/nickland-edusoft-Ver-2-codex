@@ -129,9 +129,17 @@ const call = (base, token, channel, ...args) =>
   //
   // A stand-in for Electron's ipcMain: this suite runs in plain Node, and the
   // point is that the registry — not Electron — is what the network reaches.
+  const taken = new Set();
   const fakeIpcMain = {
-    handle: () => {}, on: () => {}, once: () => {},
-    removeHandler: () => {}, removeAllListeners: () => {},
+    // Electron refuses a second handler for a channel by throwing, and
+    // _stubs.js depends on that. A stand-in that silently accepted duplicates
+    // would hide the very thing the check below is for.
+    handle: (channel) => {
+      if (taken.has(channel)) throw new Error(`Attempted to register a second handler for '${channel}'`);
+      taken.add(channel);
+    },
+    on: () => {}, once: () => {},
+    removeHandler: (c) => taken.delete(c), removeAllListeners: () => {},
   };
   registry._resetForTests();
   const recording = registry.recordingIpcMain(fakeIpcMain);
@@ -153,6 +161,18 @@ const call = (base, token, channel, ...args) =>
     await new Promise(r => setTimeout(r, 25));
     return { ok: true, userId: security.getCurrentUserId(), designation: security.getCurrentDesignation() };
   });
+
+  // The stand-in for a channel a real module already took must never displace
+  // it. _stubs.js registers one for every channel and lets Electron's refusal
+  // skip the taken ones — so if the registry remembered the stub, the browser
+  // would be told "not yet implemented" by a feature that works on the office
+  // PC, with nothing anywhere to say why.
+  try {
+    recording.handle('students:list', () => ({ ok: false, error: 'stub' }));
+  } catch (_) { /* refused, exactly as Electron refuses it */ }
+  ck('a stand-in cannot displace the real handler it was skipped for',
+    registry.handlerFor('students:list') !== null &&
+    typeof registry.handlerFor('students:list') === 'function');
 
   const server = createApiServer(db, { userDataPath: userData });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
