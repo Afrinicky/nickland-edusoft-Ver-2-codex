@@ -1,6 +1,15 @@
-// Nickland Edusoft — Mobile App host settings
-// Controls the embedded API server that the mobile client (React Native)
-// connects to over the LAN, and manages parent accounts + paired devices.
+// Nickland Edusoft — this computer as the school's host.
+// Copyright © 2026 Nickland Sales. All rights reserved.
+//
+// One server, two audiences, and this screen governs both:
+//
+//   http://<this pc>:4747        the parents' and teachers' app, on a phone
+//   http://<this pc>:4747/desk   THIS application, on any other computer
+//
+// The second used to be missing from here entirely. The server carried it, the
+// office application answered on it, and nothing on this screen said so — so a
+// school with a bursar's laptop in the next room had no way to find out it
+// could be used. A capability nobody can find is not a capability.
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { fmtDate } from '../../lib/format.js';
@@ -60,22 +69,41 @@ export default function MobileApp() {
     showToast(res.ok ? 'Password reset' : (res.error || 'Failed'), res.ok ? 'success' : 'error');
   }
 
+  async function copy(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Address copied', 'success');
+    } catch (_) {
+      // A browser that will not give us the clipboard is not worth a failure
+      // message; the address is on screen to be read out or typed.
+      showToast('Copy it from the screen: ' + text, 'info');
+    }
+  }
+
   const running = !!status?.running;
   const port = status?.port || 4747;
-  const urls = (status?.addresses || []).map(a => `http://${a}:${port}`);
+  const addresses = status?.addresses || [];
+  const urls = addresses.map(a => `http://${a}:${port}`);
   const webApp = !!status?.web_app;
+  const deskApp = !!status?.desk_app;
+  // The one setting that decides whether anybody else can reach this computer
+  // at all. Set to "This computer only", every address below is a dead end,
+  // and the school would have no way of knowing why.
+  const lanOpen = (status?.bind || 'lan') !== 'localhost';
 
   return (
     <div className="mobile-app-settings">
       {/* Overview */}
       <div className="card" style={{ background: 'var(--info-bg)', borderLeft: '3px solid var(--info)' }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-          <span style={{ fontSize: 22 }}>📱</span>
+          <span style={{ fontSize: 22 }}>🖥️</span>
           <div className="text-sm" style={{ lineHeight: 1.6 }}>
-            This desktop is the <strong>host</strong>. Turn on the mobile server to let the Nickland
-            Edusoft mobile app (for parents, teachers, and staff) connect over your local Wi-Fi.
-            Parents see only their own children; staff get exactly the access their role allows.
-            The database never leaves this computer.
+            This computer is the <strong>school's host</strong>. Everything the school has is on
+            this machine, and turning the server on lets other devices on the same Wi-Fi work
+            from it — <strong>phones and tablets</strong> for parents and teachers, and
+            <strong> other computers</strong> running this same office application.
+            Everyone gets exactly the access their role allows, and the records never leave
+            this computer.
           </div>
         </div>
       </div>
@@ -86,12 +114,12 @@ export default function MobileApp() {
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 10, height: 10, borderRadius: '50%', background: running ? 'var(--success)' : 'var(--muted)' }} />
-              Mobile API server — {running ? 'Running' : 'Stopped'}
+              School server — {running ? 'Running' : 'Stopped'}
             </div>
             <div className="text-sm text-muted" style={{ marginTop: 4 }}>
               {running
-                ? 'Phones on the same network can now connect.'
-                : 'Start the server to allow mobile connections.'}
+                ? 'Other devices on this network can now connect — phones and computers alike.'
+                : 'Start the server to let other phones and computers connect.'}
               {status?.error && <span style={{ color: 'var(--danger)' }}> · {status.error}</span>}
             </div>
           </div>
@@ -100,23 +128,87 @@ export default function MobileApp() {
           </button>
         </div>
 
-        {running && urls.length > 0 && (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: 'var(--surface-2)' }}>
-            <div className="text-sm text-muted">
-              {webApp
-                ? 'Point the mobile app at one of these addresses — or open it in any browser on the school Wi-Fi, no install needed:'
-                : 'Point the mobile app at one of these addresses:'}
+        {running && !lanOpen && (
+          <div className="card" style={{ marginTop: 12, background: 'var(--warn-bg, #FFF6E5)', borderLeft: '3px solid var(--warning, #C9961A)' }}>
+            <div className="text-sm" style={{ lineHeight: 1.6 }}>
+              <strong>Nothing else can reach this computer.</strong> “Reachable from” below is set
+              to <em>This computer only</em>. Change it to <em>Local network (LAN)</em> for phones
+              and other computers to connect.
             </div>
-            {urls.map(u => (
-              <div key={u} style={{ fontFamily: 'monospace', fontWeight: 600, marginTop: 4 }}>{u}</div>
-            ))}
-            {webApp && (
-              <div className="text-sm text-muted" style={{ marginTop: 8 }}>
-                Staff and parents on the school Wi-Fi can use it straight from a browser. It works
-                with the internet down; the desktop serves it.
-              </div>
-            )}
           </div>
+        )}
+
+        {running && lanOpen && urls.length === 0 && (
+          <div className="text-sm text-muted" style={{ marginTop: 12 }}>
+            The server is running, but this computer has no network address — it is not connected
+            to the school's Wi-Fi or cable network. Connect it, then reopen this screen.
+          </div>
+        )}
+
+        {running && lanOpen && urls.length > 0 && (
+          <>
+            {/* ── Other computers ───────────────────────────────────────── */}
+            <div style={{ marginTop: 14, padding: 14, borderRadius: 8, background: 'var(--surface-2)' }}>
+              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
+                🖥️ Other computers — this same office application
+              </div>
+              <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                On any other computer on this network, open a browser and go to one of these.
+                The bursar, the head teacher and the admissions desk all work from this machine's
+                records, at the same time, each with their own sign-in.
+              </div>
+
+              {!deskApp ? (
+                <div className="text-sm" style={{ color: 'var(--danger)' }}>
+                  The office application has not been installed on this computer for other machines
+                  to open. Reinstall Nickland Edusoft — recent versions include it.
+                </div>
+              ) : (
+                urls.map(u => (
+                  <div key={u} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 15 }}>{u}/desk</span>
+                    <button className="btn btn-ghost btn-sm" onClick={() => copy(`${u}/desk`)}>Copy</button>
+                  </div>
+                ))
+              )}
+
+              {deskApp && (
+                <div className="text-sm text-muted" style={{ marginTop: 10, lineHeight: 1.7 }}>
+                  Nothing to install on the other computer. If you would rather it opened as a
+                  proper application than a browser tab, install Nickland Edusoft on it and set the
+                  Windows environment variable{' '}
+                  <span style={{ fontFamily: 'monospace' }}>EDUSOFT_HOST_URL</span> to{' '}
+                  <span style={{ fontFamily: 'monospace' }}>{urls[0]}</span> — it will then open
+                  this school instead of a database of its own.
+                </div>
+              )}
+            </div>
+
+            {/* ── Phones and tablets ────────────────────────────────────── */}
+            <div style={{ marginTop: 12, padding: 14, borderRadius: 8, background: 'var(--surface-2)' }}>
+              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
+                📱 Phones and tablets — parents and teachers
+              </div>
+              <div className="text-sm text-muted" style={{ marginBottom: 8 }}>
+                {webApp
+                  ? 'Point the mobile app at one of these, or just open it in the phone\u2019s browser — nothing to install:'
+                  : 'Point the mobile app at one of these addresses:'}
+              </div>
+              {urls.map(u => (
+                <div key={u} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 15 }}>{u}</span>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copy(u)}>Copy</button>
+                </div>
+              ))}
+            </div>
+
+            <div className="text-sm text-muted" style={{ marginTop: 12, lineHeight: 1.7 }}>
+              Both work with the school's internet down — they only need the same Wi-Fi or cable
+              network as this computer. If another machine cannot reach these addresses, it is
+              almost always Windows Firewall on <em>this</em> computer: allow Nickland Edusoft on
+              private networks when Windows asks, or add an inbound rule for port {port}.
+            </div>
+          </>
         )}
 
         <div className="form-row" style={{ marginTop: 14 }}>
