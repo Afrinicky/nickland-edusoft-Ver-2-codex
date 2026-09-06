@@ -81,19 +81,83 @@ const DATE_FUNCTIONS = [
    (_m, n, unit) => `(CURRENT_DATE + INTERVAL '${n} ${unit.replace(/s$/, '')}')`],
   [/date\(\s*'now'\s*\)/gi, 'CURRENT_DATE'],
 
-  // strftime('%Y-%m', col)  →  to_char(col, 'YYYY-MM')
-  [/strftime\(\s*'([^']+)'\s*,\s*([^,()]+?)\s*\)/gi, (_m, fmt, col) => {
-    const pg = fmt.replace(/%Y/g, 'YYYY').replace(/%m/g, 'MM').replace(/%d/g, 'DD')
-                  .replace(/%H/g, 'HH24').replace(/%M/g, 'MI').replace(/%S/g, 'SS');
-    return `to_char((${col})::timestamp, '${pg}')`;
-  }],
-
   [/\bIFNULL\s*\(/gi, 'COALESCE('],
 ];
+
+// A function call's arguments, with nesting respected.
+//
+// A regular expression cannot do this, and the spike proved it the hard way:
+// `strftime('%Y-%m', COALESCE(transaction_date, date))` slipped past a pattern
+// that stopped at the first bracket, so the Dashboard failed against Postgres
+// while every isolated test passed. The school's SQL nests, so the translator
+// has to count brackets.
+function splitArguments(text) {
+  const args = [];
+  let depth = 0, current = '', quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      current += ch;
+      if (ch === quote) { if (text[i + 1] === quote) { current += text[++i]; } else { quote = null; } }
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; current += ch; continue; }
+    if (ch === '(') depth++;
+    if (ch === ')') depth--;
+    if (ch === ',' && depth === 0) { args.push(current.trim()); current = ''; continue; }
+    current += ch;
+  }
+  if (current.trim()) args.push(current.trim());
+  return args;
+}
+
+// Rewrite every call to `name(...)`, innermost brackets counted properly.
+function replaceCall(sql, name, rewrite) {
+  const finder = new RegExp('\\b' + name + '\\s*\\(', 'gi');
+  let out = sql;
+  let guard = 0;
+  for (;;) {
+    if (++guard > 200) break;          // a runaway rewrite is worse than none
+    finder.lastIndex = 0;
+    const m = finder.exec(out);
+    if (!m) break;
+
+    const open = m.index + m[0].length - 1;
+    let depth = 0, close = -1, quote = null;
+    for (let i = open; i < out.length; i++) {
+      const ch = out[i];
+      if (quote) {
+        if (ch === quote) { if (out[i + 1] === quote) i++; else quote = null; }
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; continue; }
+      if (ch === '(') depth++;
+      else if (ch === ')') { depth--; if (depth === 0) { close = i; break; } }
+    }
+    if (close === -1) break;           // unbalanced; leave it alone
+
+    const replacement = rewrite(splitArguments(out.slice(open + 1, close)));
+    if (replacement === null) break;   // cannot translate faithfully; leave it
+    out = out.slice(0, m.index) + replacement + out.slice(close + 1);
+  }
+  return out;
+}
+
+// strftime('%Y-%m', anything)  →  to_char(anything::timestamp, 'YYYY-MM')
+function translateStrftime(sql) {
+  return replaceCall(sql, 'strftime', (args) => {
+    if (args.length < 2) return null;
+    const fmt = args[0].replace(/^'|'$/g, '');
+    const pg = fmt.replace(/%Y/g, 'YYYY').replace(/%m/g, 'MM').replace(/%d/g, 'DD')
+                  .replace(/%H/g, 'HH24').replace(/%M/g, 'MI').replace(/%S/g, 'SS');
+    return `to_char((${args[1]})::timestamp, '${pg}')`;
+  });
+}
 
 function translateDates(sql) {
   let out = sql;
   for (const [pattern, replacement] of DATE_FUNCTIONS) out = out.replace(pattern, replacement);
+  out = translateStrftime(out);
   return out;
 }
 
@@ -137,6 +201,25 @@ function addReturningId(sql, hasIdColumn) {
   return sql.replace(/;?\s*$/, '') + ' RETURNING id';
 }
 
+// == One thing this deliberately does NOT translate ==
+//
+// Postgres requires every selected column to be grouped or aggregated; SQLite
+// does not, and picks an arbitrary row. Postgres also accepts columns that are
+// functionally dependent on a grouped primary key, which covers almost all of
+// this application's 51 GROUP BY statements — a sweep of 65 read channels found
+// exactly ONE that Postgres rejects:
+//
+//   electron/ipc/dashboard.js — the canteen debtors list groups by the pupil
+//   and also selects cg.short_code, which belongs to the joined class table
+//   and so is not dependent on that key.
+//
+// Rewriting GROUP BY automatically would mean guessing which extra columns are
+// safe to add, and a wrong guess silently changes how many rows a school's
+// dashboard reports. The honest fix is one column added to that one query,
+// which is a no-op on SQLite and correct SQL on both. It is not done here
+// because it belongs to a handler, and the handlers are not this adapter's to
+// edit.
+
 function translate(sql, hasIdColumn) {
   let out = String(sql);
   out = translateInsertOr(out);
@@ -148,5 +231,5 @@ function translate(sql, hasIdColumn) {
 
 module.exports = {
   translate, numberPlaceholders, translateDates, translateInsertOr, addReturningId,
-  mapOutsideStrings,
+  mapOutsideStrings, replaceCall, splitArguments, translateStrftime,
 };

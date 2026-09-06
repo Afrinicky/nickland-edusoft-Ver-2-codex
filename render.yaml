@@ -1,0 +1,86 @@
+# Nickland Edusoft — the school's host, on Render.
+# Copyright © 2026 Nickland Sales. All rights reserved.
+#
+# This runs the INSTALLED APPLICATION'S OWN CODE on a server. Not a port of it
+# and not a rewrite: the same handlers, mounted from the same list, reaching
+# Postgres through an adapter that wears better-sqlite3's shape. See
+# docs/WEB_DEPLOYMENT.md.
+#
+# Create it from the Render dashboard with "New → Blueprint", pointed at this
+# repository. Then set DATABASE_URL in the dashboard — it is deliberately not
+# in this file, because a database password does not belong in a repository.
+
+services:
+  - type: web
+    name: nickland-edusoft-web
+    runtime: node
+    plan: starter          # the free plan sleeps, and a sleeping school office is not a school office
+
+    # SAME REGION AS NEON. This is not a preference.
+    #
+    # Every database call blocks the host for one round trip — that is what
+    # makes 1,631 synchronous call sites work unchanged. Measured: a screen
+    # takes about 100ms with Neon in the same region and over two seconds with
+    # Neon on another continent. Choose the Neon region first, then match it.
+    region: frankfurt
+
+    buildCommand: >-
+      npm ci --no-audit --no-fund &&
+      npm install --no-save puppeteer &&
+      npm run build:desk -- --only-build
+
+    startCommand: node host/server.js
+
+    healthCheckPath: /api/v1/desk/info
+
+    # Report cards, receipts and payslips are written here before being handed
+    # to the browser, and photographs are stored here. The school's RECORDS are
+    # in Neon; this disk holds the files that go with them, so it must survive
+    # a restart.
+    disk:
+      name: edusoft-files
+      mountPath: /var/data
+      sizeGB: 5
+
+    envVars:
+      - key: EDUSOFT_DATA_DIR
+        value: /var/data
+
+      # Set in the dashboard, not here.
+      - key: DATABASE_URL
+        sync: false
+
+      # 32+ characters. Without it, backup destination passwords are stored in
+      # the clear and the log says so on every start.
+      - key: EDUSOFT_SECRET_KEY
+        generateValue: true
+
+      # The school's tables live in their own Postgres schema, which is what
+      # host/provision.js creates.
+      - key: DATABASE_SCHEMA
+        value: school
+
+      # Small on purpose. The host blocks on each query, so it can only have
+      # one in flight; the spare connections are for transactions, which hold
+      # one for their duration. A larger pool would be idle connections Neon
+      # still counts.
+      - key: DATABASE_POOL
+        value: "3"
+
+      # How long a read may be remembered. Invalidation is exact — any write to
+      # a table forgets every read that touched it — so this is only a backstop
+      # against a SECOND writer. Raising it is safe with one instance and is
+      # NOT safe with two. See host/db/cache.js.
+      - key: DATABASE_CACHE_TTL_MS
+        value: "5000"
+
+      - key: NODE_VERSION
+        value: "22"
+
+    # One instance, deliberately.
+    #
+    # The cache above is exact because this host is the only thing writing to
+    # the database. A second instance would not see the first's writes and
+    # could serve a stale read for up to the TTL. Before scaling past one, read
+    # the note in host/db/cache.js — it is a real change, not a slider.
+    numInstances: 1

@@ -61,6 +61,13 @@ function req(port, method, p, { token, body } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-host-'));
   const port = 4900 + (process.pid % 400);
 
+  // This suite is about the host on its LOCAL SQLite file. A DATABASE_URL left
+  // in the environment — from a Postgres test in the same shell — would send it
+  // somewhere else entirely and report failures that belong to a different
+  // database. test/host_postgres.js is the one that talks to Postgres.
+  delete process.env.DATABASE_URL;
+  delete process.env.DATABASE_SCHEMA;
+
   process.env.EDUSOFT_DATA_DIR = dataDir;
   process.env.EDUSOFT_PORT = String(port);
   process.env.EDUSOFT_BIND = '127.0.0.1';

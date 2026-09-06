@@ -91,11 +91,19 @@ function start() {
       db = openNeonDatabase(process.env.DATABASE_URL, {
         schema: process.env.DATABASE_SCHEMA || null,
         poolSize: parseInt(process.env.DATABASE_POOL || '3', 10),
+        // Six of every seven queries were the same per-request reads repeated
+        // on every channel. Invalidation is exact — a write forgets every read
+        // that touched the same table — so this is only a backstop against a
+        // second writer. See host/db/cache.js before raising it or running
+        // more than one instance.
+        cacheTtlMs: parseInt(process.env.DATABASE_CACHE_TTL_MS || '5000', 10),
+        cache: process.env.DATABASE_CACHE !== 'off',
         latencyMs: parseInt(process.env.SPIKE_LATENCY_MS || '0', 10),
       });
       db._userDataPath = DATA_DIR;
       db._getResourcePath = getResourcePath;
-      log('info', 'host', 'School database: Postgres');
+      log('info', 'host', 'School database: Postgres' +
+        (process.env.DATABASE_SCHEMA ? ` (schema ${process.env.DATABASE_SCHEMA})` : ''));
     } else {
       db = initDatabase(DATA_DIR, getResourcePath);
       log('info', 'host', 'School database: local SQLite');

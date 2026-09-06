@@ -21,6 +21,7 @@
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const dialect = require('./dialect');
+const { createCache } = require('./cache');
 
 // 32MB. A class register is kilobytes; this is sized for the largest thing a
 // school actually reads at once — the students sheet — with room to spare, and
@@ -42,8 +43,17 @@ function openNeonDatabase(connectionString, options = {}) {
     },
   });
   worker.unref();          // the worker must not hold the process open
-  worker.on('error', (e) => { lastWorkerError = e; });
+
+  // A worker that dies takes the answer with it, and the main thread would
+  // otherwise sit in Atomics.wait for the full minute before saying anything.
+  // That is exactly what happened when the Postgres driver went missing: sixty
+  // seconds of nothing, then a message about the connection, when the real
+  // answer was "pg is not installed". So a failed worker is remembered and the
+  // wait below gives up on it immediately.
   let lastWorkerError = null;
+  let workerGone = false;
+  worker.on('error', (e) => { lastWorkerError = e; workerGone = true; });
+  worker.on('exit', (code) => { if (code !== 0) { workerGone = true; } });
 
   // The whole trick, in six lines.
   //
@@ -57,13 +67,26 @@ function openNeonDatabase(connectionString, options = {}) {
     Atomics.store(ctrl, 2, 0);
     worker.postMessage(message);
 
-    // A bounded wait, so a Neon project that has gone away cannot hang the
-    // host for ever with nothing on screen to explain it.
-    const outcome = Atomics.wait(ctrl, 0, 0, 60000);
+    // Bounded, so a Neon project that has gone away cannot hang the host for
+    // ever with nothing on screen to explain it. Checked in short slices
+    // rather than one long sleep, so a worker that has died is noticed at once
+    // instead of a minute later.
+    const deadline = Date.now() + 60000;
+    let outcome = 'timed-out';
+    while (Date.now() < deadline) {
+      outcome = Atomics.wait(ctrl, 0, 0, 250);
+      if (outcome !== 'timed-out') break;
+      if (workerGone) {
+        throw new Error(
+          'The school\'s database connection stopped: ' +
+          (lastWorkerError ? lastWorkerError.message : 'the database worker exited.')
+        );
+      }
+    }
     if (outcome === 'timed-out') {
       throw new Error(
         'The school\'s database did not answer within 60 seconds. ' +
-        (lastWorkerError ? `(${lastWorkerError.message})` : 'Check the connection to Neon.')
+        (lastWorkerError ? `(${lastWorkerError.message})` : 'Check the connection to the database.')
       );
     }
 
@@ -122,16 +145,44 @@ function openNeonDatabase(connectionString, options = {}) {
     return args.map(v => (v === undefined ? null : v));
   }
 
+  // Six of every seven queries a request makes are the same reads repeated on
+  // every channel — see host/db/cache.js. This is where that stops.
+  const cache = createCache({
+    ttlMs: options.cacheTtlMs != null ? options.cacheTtlMs : 5000,
+    enabled: options.cache !== false,
+  });
+
+  // Inside a transaction the cache is bypassed entirely, in both directions:
+  // a read must see the transaction's own uncommitted writes, and those writes
+  // must not be remembered by anybody until they commit.
+  let inTransaction = false;
+
+  function read(kind, sql, params) {
+    if (!inTransaction) {
+      const hit = cache.get(sql, params);
+      if (hit) return hit.value;
+    }
+    const answer = ask({ kind, sql, params });
+    const value = kind === 'get' ? answer.row : answer.rows;
+    if (!inTransaction) cache.put(sql, params, value);
+    return value;
+  }
+
+  function write(sql, params) {
+    const r = ask({ kind: 'run', sql, params });
+    // Forget every read that touched what this just wrote. Done AFTER the
+    // write succeeds: a statement that threw changed nothing.
+    if (inTransaction) cache.clear(); else cache.invalidate(sql);
+    return { changes: r.changes, lastInsertRowid: r.lastInsertRowid };
+  }
+
   const db = {
     prepare(sql) {
       const pg = toPostgres(sql);
       return {
-        get: (...args) => ask({ kind: 'get', sql: pg, params: positional(args) }).row,
-        all: (...args) => ask({ kind: 'all', sql: pg, params: positional(args) }).rows,
-        run: (...args) => {
-          const r = ask({ kind: 'run', sql: pg, params: positional(args) });
-          return { changes: r.changes, lastInsertRowid: r.lastInsertRowid };
-        },
+        get: (...args) => read('get', pg, positional(args)),
+        all: (...args) => read('all', pg, positional(args)),
+        run: (...args) => write(pg, positional(args)),
       };
     },
 
@@ -142,6 +193,7 @@ function openNeonDatabase(connectionString, options = {}) {
     transaction(fn) {
       return (...args) => {
         ask({ kind: 'begin' });
+        inTransaction = true;
         try {
           const result = fn(...args);
           ask({ kind: 'commit' });
@@ -149,6 +201,11 @@ function openNeonDatabase(connectionString, options = {}) {
         } catch (e) {
           try { ask({ kind: 'rollback' }); } catch (_) { /* already gone */ }
           throw e;
+        } finally {
+          inTransaction = false;
+          // Committed or rolled back, what was remembered from before it may
+          // no longer be true.
+          cache.clear();
         }
       };
     },
@@ -163,9 +220,12 @@ function openNeonDatabase(connectionString, options = {}) {
     name: 'neon',
     close() { try { worker.postMessage({ kind: 'shutdown' }); } catch (_) {} },
 
-    // Spike instrumentation: how many statements actually reached Neon.
+    // How many statements actually reached Neon, and how much the cache saved.
+    // Read by the tests, and by anybody wondering what a screen costs.
     _queryCount() { return ask({ kind: 'count' }).queries; },
-    _resetQueryCount() { ask({ kind: 'reset-count' }); },
+    _resetQueryCount() { ask({ kind: 'reset-count' }); cache.resetStats(); },
+    _cacheReport() { return cache.report(); },
+    _cache: cache,
   };
 
   return db;
