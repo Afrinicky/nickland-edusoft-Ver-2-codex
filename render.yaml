@@ -24,10 +24,24 @@ services:
     # Neon on another continent. Choose the Neon region first, then match it.
     region: frankfurt
 
+    # BOTH applications are built, because this one host serves both:
+    #
+    #   /       the parents' and teachers' app  (mobile/, Expo)
+    #   /desk   the office application          (src/renderer, the installer's own)
+    #
+    # They are different products for different people and they share one API,
+    # which is the same electron/server/api.js the office PC runs on the school
+    # Wi-Fi. Neither is a rewrite of the other.
+    #
+    # build:web needs the mobile project's own dependencies, which is why there
+    # are two installs. It copies its output to resources/webapp, where the
+    # host looks for it; build:desk does the same for /desk.
     buildCommand: >-
       npm ci --no-audit --no-fund &&
+      npm ci --no-audit --no-fund --prefix mobile &&
       npm install --no-save puppeteer &&
-      npm run build:desk -- --only-build
+      npm run build:web &&
+      npm run build:desk
 
     startCommand: node host/server.js
 
@@ -76,6 +90,12 @@ services:
 
       - key: NODE_VERSION
         value: "22"
+
+      # The parents' app asks its own origin for the API when this is unset,
+      # which is what a single host serving both wants. Set it only if the
+      # mobile app is ever hosted somewhere other than its API.
+      # - key: EXPO_PUBLIC_PORTAL_URL
+      #   sync: false
 
     # One instance, deliberately.
     #

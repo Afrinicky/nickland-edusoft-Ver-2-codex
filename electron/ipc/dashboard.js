@@ -135,7 +135,12 @@ module.exports = function registerDashboardHandlers(ipcMain, db) {
       JOIN students s ON s.id = cds.student_id
       LEFT JOIN class_groups cg ON cg.id = s.current_class_id
       WHERE cds.status = 'unpaid' AND cds.date >= ? AND cds.date <= ?
-      GROUP BY s.id
+      -- Grouped by the pupil AND their class code. The class code comes from a
+      -- joined table, so it is not implied by the pupil's id; SQLite allows
+      -- that and picks a row, Postgres refuses it outright. A pupil is in one
+      -- class, so naming it here changes nothing about the grouping on either
+      -- engine — it just says what was always meant.
+      GROUP BY s.id, cg.short_code
       ORDER BY unpaid_days DESC
       LIMIT 5
     `).all(dailyRate, startD, endD);
