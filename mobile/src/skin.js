@@ -110,6 +110,46 @@ const DESK = {
 
 export const SKINS = { app: APP, desk: DESK };
 
+// ── what the school CHOSE, and what the installer wrote on day one ──────────
+//
+// These four colours are not empty on a fresh school. `electron/db/database.js`
+// SEEDS them when the database is created — the desktop's own navy, gold, white
+// and slate — so that its stylesheet has something to read before anybody has
+// opened Settings -> Appearance.
+//
+// That is fine for the desktop, whose defaults they ARE. It was not fine for
+// the app. `/branding` sends the settings table as it stands, so a school that
+// had never picked a colour in its life still sent `#1B3A6B`, the app could not
+// tell it apart from a deliberate choice, and every phone in the school turned
+// navy overnight — along with a white page ground in place of the app's tinted
+// one and slate ink in place of its own. Nobody chose any of it.
+//
+// So the app skin ignores a value that is EXACTLY the installer's seed. It is
+// the honest reading: over the wire those two cases are the same bytes, and of
+// the two, "nobody has chosen" is overwhelmingly the more likely.
+//
+// The cost is one school in a thousand that deliberately picks the desktop's
+// own navy and keeps the app violet; the alternative cost was every school that
+// has never picked anything. It does not apply to the `desk` skin, where the
+// same values are its defaults anyway and the answer is identical either way.
+const DESK_SEED = {
+  school_color_primary:    '#1B3A6B',
+  school_color_accent:     '#C9961A',
+  school_color_background: '#FFFFFF',
+  school_color_foreground: '#0F172A',
+};
+
+/** The school's settings with the installer's untouched seeds removed. */
+export function chosenOnly(settings = {}) {
+  const out = {};
+  for (const [k, val] of Object.entries(settings || {})) {
+    const seed = DESK_SEED[k];
+    if (seed && String(val == null ? '' : val).trim().toLowerCase() === seed.toLowerCase()) continue;
+    out[k] = val;
+  }
+  return out;
+}
+
 /**
  * The full token set for a skin plus whatever the school has configured.
  *
@@ -123,8 +163,11 @@ export const SKINS = { app: APP, desk: DESK };
  */
 export function deriveTokens(skinName = 'app', settings = {}) {
   const base = SKINS[skinName] || APP;
+  // See DESK_SEED: on the app, a colour that is exactly the installer's seed is
+  // a colour nobody picked, and the app keeps its own.
+  const chosen = skinName === 'desk' ? (settings || {}) : chosenOnly(settings);
   const get = (k, fallback) => {
-    const raw = settings[k];
+    const raw = chosen[k];
     return raw === undefined || raw === null || raw === '' ? fallback : String(raw).trim();
   };
 
@@ -216,4 +259,4 @@ export function resetTheme() {
   applied = null;
 }
 
-export default { SKINS, deriveTokens, deriveFont, applyTheme, resetTheme, lighten, darken, isHex, readableOn, luminance };
+export default { SKINS, DESK_SEED, chosenOnly, deriveTokens, deriveFont, applyTheme, resetTheme, lighten, darken, isHex, readableOn, luminance };

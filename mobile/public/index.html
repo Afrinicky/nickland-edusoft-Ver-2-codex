@@ -21,10 +21,37 @@
     <!-- The `react-native-web` recommended style reset:
          https://necolas.github.io/react-native-web/docs/setup/#root-element -->
     <style id="expo-reset">
-      html, body { height: 100%; }
-      /* <ScrollView> does the scrolling; the document itself must not. */
-      body { overflow: hidden; margin: 0; background: #F4F6FA; }
-      #root { display: flex; height: 100%; flex: 1; }
+      /* `100%` and not `100vh`: on Android Chrome `100vh` is the height of the
+         window with the address bar HIDDEN, so a page sized to it is always
+         taller than what is on screen and the browser scrolls the whole app to
+         make up the difference. `100dvh` where it exists is the honest number
+         and `100%` is the fallback for the browsers that do not have it. */
+      html, body { height: 100%; margin: 0; }
+      @supports (height: 100dvh) { html, body { height: 100dvh; } }
+
+      /* <ScrollView> does the scrolling; the document itself must not. The
+         `overscroll-behavior` is the other half of that: without it a swipe
+         that reaches the end of a list carries on into the browser's own
+         pull-to-refresh and rubber-band, which is what "scrolling takes the
+         whole screen with you" is. */
+      body {
+        overflow: hidden; background: #F4F6FA;
+        overscroll-behavior: none;
+        -webkit-text-size-adjust: 100%;
+      }
+      #root { display: flex; height: 100%; flex: 1; min-height: 0; }
+
+      /* A tap should act, not zoom. `touch-action: manipulation` removes the
+         300ms double-tap-to-zoom wait on the controls a person presses all day
+         — a register of forty names is forty taps. */
+      button, [role="button"], [role="tab"], [role="link"], input, select, textarea {
+        touch-action: manipulation;
+      }
+
+      /* Nothing in this app may make the page itself scroll sideways. A table
+         or a tab strip that is wider than the phone scrolls inside its own
+         box; the page underneath it never does. */
+      html, body { max-width: 100%; overflow-x: hidden; }
 
       /* Shown until the JS bundle boots and React paints over it. On a phone
          on Ghanaian mobile data that is a couple of seconds — long enough that
@@ -32,7 +59,7 @@
       #boot {
         position: fixed; inset: 0; display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: 14px;
-        background: #1B3A6B; color: #fff; z-index: 1;
+        background: #15132B; color: #fff; z-index: 1;
         font-family: 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
       }
       #boot .mark {
@@ -42,7 +69,7 @@
       #boot .name { font-weight: 800; letter-spacing: .3px; font-size: 17px; }
       #boot .sub { font-size: 13px; opacity: .7; }
       #boot .bar { width: 128px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.2); overflow: hidden; }
-      #boot .bar i { display: block; width: 40%; height: 100%; background: #C9961A; animation: slide 1.1s ease-in-out infinite; }
+      #boot .bar i { display: block; width: 40%; height: 100%; background: #7455E9; animation: slide 1.1s ease-in-out infinite; }
       @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
       #root:not(:empty) + #boot { display: none; }
     </style>

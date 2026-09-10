@@ -50,6 +50,7 @@ import { groupModules } from './modules';
 import { useAuth } from './auth';
 import { useBranding } from './brand';
 import { ContactSheet } from './actions';
+import { ScreenBoundary } from './boundary';
 import { channels as channelsFor, generalMessage } from './contact';
 
 // A detail screen — a pupil's record, one conversation — has no navigation
@@ -145,7 +146,11 @@ export function AppShell({ nav, title, school, pending = 0, children }) {
         onAccount={() => go(nav.accountHref)}
       />
       <ScreenTransition id={pathname} style={{ flex: 1 }}>
-        {children || <Slot />}
+        {/* A screen that throws shows an apology inside this frame rather than
+            taking the top bar, the bottom bar and the drawer down with it. */}
+        <ScreenBoundary resetKey={pathname}>
+          {children || <Slot />}
+        </ScreenBoundary>
       </ScreenTransition>
     </View>
   );
