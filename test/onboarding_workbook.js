@@ -432,7 +432,143 @@ console.log('\nWhat the office typed, and what the system stored');
     }));
 }
 
-// ── 9. The round trip, through a real .xlsx ────────────────────────────
+// ── 9. Four things a review caught, and must keep catching ─────────────
+// Every one of these round-trips cleanly through an EMPTY school, which is why
+// the round-trip test below did not find them. They only bite a school that is
+// already running — which is the school that has data to lose.
+console.log('\nExporting a school that is already running');
+{
+  const exporter = require(path.join(ROOT, 'electron/ipc/onboarding_export.js'));
+  const billing = require(path.join(ROOT, 'electron/ipc/_billing.js'));
+
+  // An opening balance is a position, not the bill. A pupil with an ordinary
+  // unpaid tuition bill has a balance and NO opening balance; exporting the
+  // balance and importing it back would charge them for it twice.
+  {
+    const db = makeDb();
+    const cls = db.prepare('SELECT id FROM class_groups ORDER BY level_order LIMIT 1').get();
+    const term = db.prepare('SELECT id FROM terms WHERE is_current = 1').get();
+    db.prepare(`INSERT INTO students (id, index_number, surname, first_name, current_class_id, status)
+                VALUES (1,'X/1','Owusu','Kofi',?,'Active')`).run(cls.id);
+    const bill = db.prepare('INSERT INTO student_bills (student_id, term_id) VALUES (1, ?)')
+      .run(term.id).lastInsertRowid;
+    db.prepare(`INSERT INTO bill_line_items (student_bill_id, item_number, description, amount, is_arrear, charge_type)
+                VALUES (?, 1, 'Tuition', 400, 0, 'fees')`).run(bill);
+    billing.recomputeBillTotals(db, bill);
+
+    ck('an ordinary unpaid bill is not exported as an opening balance',
+      exporter.liveRows(db, S.SHEETS.BALANCES).length === 0,
+      exporter.liveRows(db, S.SHEETS.BALANCES));
+
+    const rows = exporter.liveRows(db, S.SHEETS.BALANCES).map((r, i) => ({ __row: 7 + i, ...r }));
+    imp.importRows(db, { [S.SHEETS.BALANCES]: rows });
+    ck('so a round trip leaves the pupil owing 400, not 800',
+      Math.round(db.prepare('SELECT balance FROM student_bills WHERE id = ?').get(bill).balance) === 400);
+
+    // A real opening balance still makes the round trip.
+    imp.importRows(db, { [S.SHEETS.BALANCES]: [
+      { __row: 7, index_number: 'X/1', term_label: 'First Term', amount_owing: 150 }] });
+    const out = exporter.liveRows(db, S.SHEETS.BALANCES);
+    ck('a real opening balance IS exported', out.length === 1 && Number(out[0].amount_owing) === 150, out);
+  }
+
+  // Two academic years each have a First Term. An unqualified name resolves to
+  // whichever is current, so an export must say which year it means.
+  {
+    const db = makeDb();
+    db.prepare("INSERT INTO academic_years (id, label, is_current) VALUES (9,'2024/2025',0)").run();
+    db.prepare("INSERT INTO terms (id, academic_year_id, term_number, label, is_current) VALUES (40,9,1,'First Term',0)").run();
+    const cls = db.prepare('SELECT id, name FROM class_groups ORDER BY level_order LIMIT 1').get();
+    const tpl = db.prepare("INSERT INTO fee_templates (name, class_group_id, term_id, is_active) VALUES ('Old',?,40,1)")
+      .run(cls.id).lastInsertRowid;
+    db.prepare("INSERT INTO fee_line_items (fee_template_id, item_number, description, amount) VALUES (?,1,'Tuition',300)")
+      .run(tpl);
+
+    const fees = exporter.liveRows(db, S.SHEETS.FEES);
+    ck('an exported fee line names the academic year, not just the term',
+      fees.length === 1 && /2024\/2025/.test(fees[0].term_label), fees);
+    ck('and that qualified name resolves to the right term',
+      imp.buildContext(db).terms.get(String(fees[0].term_label).trim().toLowerCase()).id === 40, fees);
+    ck('while a bare term name still means the current year, for a sheet typed by hand',
+      imp.buildContext(db).terms.get('first term').id !== 40);
+  }
+
+  // A field the importer writes but the export omits comes back blank and
+  // CLEARS it. The two lists must agree — checked here rather than by eye.
+  {
+    const db = makeDb();
+    const cls = db.prepare('SELECT id FROM class_groups ORDER BY level_order LIMIT 1').get();
+    db.prepare(`INSERT INTO students (id, index_number, surname, first_name, current_class_id, status,
+                previous_school, blood_group, allergies)
+                VALUES (1,'X/1','Owusu','Kofi',?,'Active','St Peters','O+','Peanuts')`).run(cls.id);
+
+    const row = exporter.liveRows(db, S.SHEETS.STUDENTS)[0];
+    const declared = S.IMPORT_SHEETS[S.SHEETS.STUDENTS].columns.map(c => c.key);
+    const missing = declared.filter(k => !(k in row));
+    ck('the export carries every column the Students sheet declares', missing.length === 0, { missing });
+
+    imp.importRows(db, { [S.SHEETS.STUDENTS]: [{ __row: 7, ...row }] });
+    const after = db.prepare('SELECT previous_school, blood_group, allergies FROM students WHERE id = 1').get();
+    ck('so a round trip does not wipe the fields nobody was editing',
+      after.previous_school === 'St Peters' && after.blood_group === 'O+' && after.allergies === 'Peanuts',
+      after);
+  }
+}
+
+// ── 10. A sheet that replaces what it describes ────────────────────────
+console.log('\nA bad row on a sheet that is written as a whole');
+{
+  // The grading scale is one object spread over rows. Dropping the failed row
+  // and writing the rest leaves a scale with no grade for a failing mark, on
+  // every report card, while the preview says only one row was refused.
+  {
+    const db = makeDb();
+    const before = db.prepare('SELECT min_score, max_score, remark FROM grading_bands ORDER BY min_score').all();
+    const rep = imp.importRows(db, { [S.SHEETS.GRADING]: [
+      { __row: 7, min_score: 80, max_score: 100, remark: 'Excellent' },
+      { __row: 8, min_score: 70, max_score: 79,  remark: 'Very good' },
+      { __row: 9, min_score: 0,  max_score: 69,  remark: '' },        // no remark
+    ]});
+    const after = db.prepare('SELECT min_score, max_score, remark FROM grading_bands ORDER BY min_score').all();
+    ck('the school\'s grading scale is left exactly as it was',
+      JSON.stringify(before) === JSON.stringify(after), { before, after });
+    ck('and it still covers a failing mark', after.some(b => b.min_score <= 0), after);
+    ck('the report says the scale was not touched, rather than only the row',
+      rep.sheets.find(x => x.sheet === S.SHEETS.GRADING).problems.some(p => /left as it is/.test(p.error)),
+      rep.sheets.find(x => x.sheet === S.SHEETS.GRADING).problems);
+  }
+
+  // A fee schedule is replaced per (class, term), so a bad line stops its own
+  // schedule and leaves the other classes alone.
+  {
+    const db = makeDb();
+    imp.importRows(db, workbook());        // Basic 5 gets Tuition 400 + PTA 20
+    const basic5 = () => count(db, `SELECT COUNT(*) AS n FROM fee_line_items li
+      JOIN fee_templates ft ON ft.id = li.fee_template_id
+      JOIN class_groups c ON c.id = ft.class_group_id WHERE c.name = 'Basic 5'`);
+    ck('Basic 5 starts with both of its lines', basic5() === 2);
+
+    const rep = imp.importRows(db, { [S.SHEETS.FEES]: [
+      { __row: 7, class_name: 'Basic 5', term_label: 'First Term', item_name: 'Tuition', amount: 450 },
+      { __row: 8, class_name: 'Basic 5', term_label: 'First Term', item_name: 'PTA levy', amount: null },
+      { __row: 9, class_name: 'Basic 6', term_label: 'First Term', item_name: 'Tuition', amount: 500 },
+    ]});
+    ck('Basic 5\'s schedule is left whole rather than rewritten without a line',
+      basic5() === 2, { lines: basic5() });
+    ck('its amounts are the old ones, not the half-applied new ones',
+      count(db, `SELECT COUNT(*) AS n FROM fee_line_items li
+                 JOIN fee_templates ft ON ft.id = li.fee_template_id
+                 JOIN class_groups c ON c.id = ft.class_group_id
+                 WHERE c.name = 'Basic 5' AND li.amount = 400`) === 1);
+    ck('but Basic 6, which had nothing wrong with it, was raised',
+      count(db, `SELECT COUNT(*) AS n FROM fee_line_items li
+                 JOIN fee_templates ft ON ft.id = li.fee_template_id
+                 JOIN class_groups c ON c.id = ft.class_group_id WHERE c.name = 'Basic 6'`) === 1,
+      rep.sheets.find(x => x.sheet === S.SHEETS.FEES));
+  }
+}
+
+// ── 11. The round trip, through a real .xlsx ────────────────────────────
 // Everything above tests the importer against rows built in memory. This one
 // puts an actual Excel file in the middle, because the contract that matters is
 // the one between the exporter's headers and the importer's reading of them —

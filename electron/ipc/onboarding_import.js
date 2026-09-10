@@ -684,18 +684,59 @@ function importRows(db, sheets, options = {}) {
     const blocked = new Set(sheet.problems.map(p => p.row).filter(r => r != null));
 
     const good = [];
+    const failedRows = [];
     for (const row of rows) {
-      if (row.__row != null && blocked.has(row.__row)) continue;
+      if (row.__row != null && blocked.has(row.__row)) { failedRows.push(row); continue; }
       const errors = validateRow(db, sheetName, row, ctx);
       if (errors.length) {
         sheet.failed++;
         sheet.problems.push({ row: row.__row || null, error: errors.join('; ') });
+        failedRows.push(row);
         continue;
       }
       good.push(row);
     }
 
     const sheetLevel = SHEET_LEVEL[def.target];
+
+    // A sheet that REPLACES what it describes must not be applied from a
+    // partial set of rows. The grading scale is one object spread over rows:
+    // drop the row for 0–69 because its Remark was blank, write the rest, and
+    // the school is left with a scale that has no grade for a failing mark —
+    // on every report card, silently, while the preview said only one row was
+    // refused. A fee schedule replaces its lines the same way.
+    //
+    // So the unit of refusal matches the unit of writing. Grading is the whole
+    // sheet. A fee schedule is one (class, term), so a bad line in Basic 5's
+    // schedule stops Basic 5 and leaves Basic 6 alone — which is why the failed
+    // rows are kept rather than only counted.
+    const blockedGroups = new Set();
+    if (sheetLevel && failedRows.length) {
+      if (def.target === 'grading') {
+        // One object; any bad row and none of it is written.
+        if (good.length) {
+          sheet.problems.push({ row: null, error:
+            'The grading scale was left as it is. It is replaced as a whole, so it ' +
+            'cannot be rewritten from a sheet with a bad row on it — fix the rows ' +
+            'listed above and import again.' });
+        }
+        good.length = 0;
+      } else if (def.target === 'fee_item') {
+        for (const row of failedRows) {
+          blockedGroups.add(`${norm(row.class_name)}|${norm(row.term_label)}`);
+        }
+        const kept = good.filter(r => !blockedGroups.has(`${norm(r.class_name)}|${norm(r.term_label)}`));
+        const dropped = good.length - kept.length;
+        if (dropped) {
+          sheet.problems.push({ row: null, error:
+            `${dropped} more fee line${dropped === 1 ? '' : 's'} in the same schedule` +
+            `${dropped === 1 ? ' was' : ' were'} left alone: a schedule is replaced as a whole, ` +
+            'so it is not rewritten while one of its lines is wrong.' });
+        }
+        good.length = 0;
+        good.push(...kept);
+      }
+    }
 
     if (dryRun) {
       // The preview's numbers are the ones a school decides on, so they have to
@@ -713,6 +754,16 @@ function importRows(db, sheets, options = {}) {
       // the preview would in fact have created it.
       projectContext(ctx, sheetName, good);
     } else if (sheetLevel) {
+      // Nothing left to write. Reached when every row on the sheet was refused,
+      // or when the whole sheet was held back above — and it matters, because
+      // these writers REPLACE what they describe: handing `applyGrading` an
+      // empty list deletes the school's entire grading scale and puts nothing
+      // back. A sheet that produced no usable rows must change nothing.
+      if (!good.length) {
+        report.sheets.push(sheet);
+        for (const k of ['created', 'updated', 'skipped', 'failed']) report.totals[k] += sheet[k];
+        continue;
+      }
       try {
         const out = sheetLevel(db, good, ctx, handlers);
         if (Array.isArray(out)) {
