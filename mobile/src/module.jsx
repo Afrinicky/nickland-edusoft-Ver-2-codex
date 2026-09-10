@@ -21,6 +21,13 @@
 // for its URL lands on the first tab it CAN open. A URL is typed, bookmarked
 // and shared, and "access denied" on a page is a page confirming that the
 // thing exists.
+//
+// ── Who scrolls ─────────────────────────────────────────────────────────────
+//
+// Exactly one thing on a page may, and on a module page it is not the screens
+// inside it — they are `Embedded` and stand down. On a desktop the shell
+// scrolls; on a phone THIS does. See the long note further down: getting that
+// wrong is what left every module in the app frozen on a phone.
 
 import React from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
