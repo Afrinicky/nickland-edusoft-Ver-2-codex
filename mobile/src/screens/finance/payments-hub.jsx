@@ -28,7 +28,13 @@ export default function PaymentsHub() {
   // has confirmed is the one thing on this screen with a clock running on it.
   useEffect(() => {
     let live = true;
-    const read = () => api.onlinePayments(token, 'pending')
+    // `financeOnline` — the office's view of money sent in. `onlinePayments`
+    // is the name of the INTERNAL client method behind it (src/api.js), not
+    // of anything the `api` object exports, and calling it threw a TypeError
+    // during render: React unmounted the tree and Fees → Payments went blank
+    // rather than showing an error. Money is the one screen in a school that
+    // must never do that.
+    const read = () => api.financeOnline(token, 'pending')
       .then(r => { if (live) setPending((r.intents || r.payments || []).length); })
       .catch(() => {});
     read();

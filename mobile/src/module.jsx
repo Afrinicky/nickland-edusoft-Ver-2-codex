@@ -48,8 +48,8 @@ export function ModulePage({ moduleKey, subtitle, actions, children }) {
     ? children(tab, { mod, tabs, can, profile, features, setTab })
     : children;
 
-  return (
-    <View style={{ width: '100%' }}>
+  const page = (
+    <>
       {/* The phone already carries the module's name in its top bar, so
           repeating it here would be the same eleven characters twice on a
           320px screen. The desktop's top bar carries the SCHOOL's name, so
@@ -60,13 +60,55 @@ export function ModulePage({ moduleKey, subtitle, actions, children }) {
 
       {layout.isDesktop
         ? <TabStrip tabs={tabs} value={tab} onChange={setTab} />
-        : <ChipTabs tabs={tabs} value={tab} onChange={setTab} />}
+        : <ChipTabs tabs={tabs} value={tab} onChange={setTab} gutter={layout.gutter} />}
 
       <Embedded>
         {body || <EmptyState icon="note" title="Nothing here yet"
                              message="This section has nothing to show for the current term." />}
       </Embedded>
-    </View>
+    </>
+  );
+
+  // ── who owns the scrolling, and the margin ────────────────────────────────
+  //
+  // On a desktop the shell does. `DeskShell` puts `children` inside a
+  // ScrollView with a padded content container, so a module page is a plain
+  // box and everything already works.
+  //
+  // On a phone NOTHING above this does, and that is not an oversight in the
+  // shell — it is the consequence of a module page not being a `Screen`. Every
+  // other route in the app IS one, and `Screen` brings its own ScrollView and
+  // its own gutter; `AppShell` therefore hands the route straight to the
+  // screen, correctly. A module page is a page OF Screens, each of which has
+  // stood down (see `Embedded`) so as not to nest a second scroller inside the
+  // first — which left a page with no scroller at all.
+  //
+  // What that looked like on a phone was the whole bug report: a page taller
+  // than the window with nothing to scroll it, so the window itself was
+  // dragged around and the bottom bar was pushed off the bottom of it; and a
+  // page with no gutter, so cards sat flush against both edges and the tab
+  // strip — which pulls itself out to the gutter with a negative margin so the
+  // chips can run to the edge — ran 16px past the right of the screen.
+  //
+  // So on a phone the module page brings the scroller and the margin itself,
+  // exactly as `Screen` does, and `Embedded` keeps meaning what it says.
+  if (layout.isDesktop) return <View style={{ width: '100%' }}>{page}</View>;
+
+  return (
+    <ScrollView
+      style={styles.pageScroll}
+      contentContainerStyle={[
+        styles.pageBody,
+        { paddingHorizontal: layout.gutter, paddingTop: layout.gutter,
+          // Room under the last card so it clears the bottom bar's shadow and
+          // a thumb can reach it.
+          paddingBottom: layout.gutter + spacing.xl },
+      ]}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
+      {page}
+    </ScrollView>
   );
 }
 
@@ -77,11 +119,16 @@ export function ModulePage({ moduleKey, subtitle, actions, children }) {
  * scrolls sideways gives no hint that it scrolls — a chip half off the edge of
  * the screen does.
  */
-function ChipTabs({ tabs, value, onChange }) {
+function ChipTabs({ tabs, value, onChange, gutter = spacing.lg }) {
   if (!tabs || tabs.length < 2) return null;
   return (
+    // Pulled out to the page's gutter and padded back in, so the strip scrolls
+    // edge to edge and a chip half off the screen says that it does. The two
+    // have to be the SAME number — a strip pulled out further than the page is
+    // padded is a page that scrolls sideways.
     <ScrollView horizontal showsHorizontalScrollIndicator={false}
-                style={styles.chipsWrap} contentContainerStyle={styles.chips}>
+                style={[styles.chipsWrap, { marginHorizontal: -gutter }]}
+                contentContainerStyle={[styles.chips, { paddingHorizontal: gutter }]}>
       {tabs.map((t) => {
         const on = t.id === value;
         return (
@@ -122,8 +169,10 @@ const styles = StyleSheet.create({
   phoneActions: {
     flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap', marginBottom: spacing.md,
   },
-  chipsWrap: { marginBottom: spacing.md, marginHorizontal: -spacing.lg, flexGrow: 0 },
-  chips: { flexDirection: 'row', gap: 7, paddingHorizontal: spacing.lg },
+  pageScroll: { flex: 1, width: '100%' },
+  pageBody: { width: '100%' },
+  chipsWrap: { marginBottom: spacing.md, flexGrow: 0 },
+  chips: { flexDirection: 'row', gap: 7 },
   chip: {
     paddingHorizontal: 13, paddingVertical: 8, borderRadius: radius.control,
     backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,

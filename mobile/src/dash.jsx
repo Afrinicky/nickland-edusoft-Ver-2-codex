@@ -241,7 +241,15 @@ export function DashRow({ children, weights }) {
     <View style={styles.dashRow}>
       {kids.map((child, i) => (
         <View key={i} style={[styles.dashCell,
-          layout.isDesktop ? { flexBasis: `${((w[i] || 1) / total) * 100}%` } : { flexBasis: '100%' }]}>
+          // The 300px floor is a DESKTOP rule — it stops a three-column row
+          // becoming three slivers — and it belongs with the columns rather
+          // than in the shared cell. A `min-width` a flex item cannot shrink
+          // below is, on a 320px handset with 288px of content, a row 12px
+          // wider than the screen: a whole page scrolling sideways to show
+          // nothing. One panel per row on a phone, and no floor under it.
+          layout.isDesktop
+            ? { flexBasis: `${((w[i] || 1) / total) * 100}%`, minWidth: 300 }
+            : { flexBasis: '100%' }]}>
           {child}
         </View>
       ))}
@@ -719,7 +727,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: colors.border,
   },
   dashRow: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -8, marginBottom: 2 },
-  dashCell: { flexGrow: 1, flexShrink: 1, minWidth: 300, paddingHorizontal: 8, paddingBottom: 16 },
+  dashCell: { flexGrow: 1, flexShrink: 1, paddingHorizontal: 8, paddingBottom: 16 },
 
   empty: { alignItems: 'center', paddingVertical: 30, paddingHorizontal: spacing.lg },
   emptyText: { ...type.small, fontSize: 12, color: colors.muted, textAlign: 'center' },

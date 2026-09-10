@@ -35,6 +35,7 @@ import {
 import { usePathname, useRouter } from 'expo-router';
 import { colors, type, spacing, radius, shadow, motion } from './theme';
 import { useLayout } from './responsive';
+import { ScreenBoundary } from './boundary';
 import { Icon } from './icons';
 import { Avatar, Crest, IconButton, Sheet, Muted } from './ui';
 import { Press, Appear } from './motion';
@@ -119,7 +120,8 @@ export function DeskShell({
           showsVerticalScrollIndicator
         >
           <View style={{ width: '100%', maxWidth: 1480, marginHorizontal: 'auto' }}>
-            {children}
+            {/* Same reason as the phone's: see src/boundary.jsx. */}
+            <ScreenBoundary resetKey={pathname}>{children}</ScreenBoundary>
           </View>
         </ScrollView>
         <DeskStatusBar status={status} person={person} />
@@ -495,8 +497,23 @@ const STAT_TONES = {
 
 export function Stat({ label, value, note, icon, tone = 'primary', onPress, action, index = 0 }) {
   const t = STAT_TONES[tone] || STAT_TONES.primary;
+  const layout = useLayout();
+  // ── where the sizing has to live ──────────────────────────────────────────
+  //
+  // On the CELL, which is what `statRow` lays out — and the cell is `Appear`,
+  // not the card two levels below it. The width rules used to sit on the card,
+  // where flexbox never read them: the row saw an item with the default
+  // `flex: 0 0 auto`, sized it to the card's 210px minimum, and stopped. On a
+  // desktop that left a gap at the end of the row. On a 393px phone it left a
+  // 210px card in a 361px column with a third of the row empty beside it,
+  // which is what "the mobile view is distorted" looked like on every
+  // dashboard in the app.
+  //
+  // A phone gets one card per row that FILLS the row; a tablet and a desktop
+  // get as many 210px cards as fit, each growing into the space left over.
   return (
-    <Appear delay={Math.min(index, 6) * motion.stagger} distance={10}>
+    <Appear delay={Math.min(index, 6) * motion.stagger} distance={10}
+            style={layout.isPhone ? styles.statCellPhone : styles.statCell}>
       <Press onPress={onPress} disabled={!onPress}>
         <View style={styles.stat}>
           <View style={styles.statTop}>
@@ -709,10 +726,13 @@ const styles = StyleSheet.create({
   statRow: {
     flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.lg,
   },
+  // The cell — see Stat. `statRow` lays these out, not the card inside them.
+  statCell:      { flexGrow: 1, flexShrink: 1, flexBasis: 210, minWidth: 210 },
+  statCellPhone: { flexGrow: 1, flexShrink: 1, flexBasis: '100%', minWidth: 0 },
   stat: {
     backgroundColor: colors.card, borderRadius: radius.md,
     borderWidth: 1, borderColor: colors.border,
-    padding: spacing.lg, minWidth: 210, flexGrow: 1, flexBasis: 210,
+    padding: spacing.lg, width: '100%',
     ...shadow.rest,
   },
   statTop: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
