@@ -471,6 +471,20 @@ function buildApi(invoke) {
       history:       (limit)     => invoke('workbook:import-history', limit || 200),
     },
 
+    // ── Onboarding workbook (bringing a school across) ────
+    // The same idea as the finance workbook, pointed the other way: one Excel
+    // file holding the roll, the staff, the classes, the subjects, the fee
+    // schedule and what each pupil owes, so a school moves onto the system in
+    // an afternoon instead of a term of typing.
+    onboarding: {
+      status:      ()        => invoke('onboarding:status'),
+      exportBook:  (options) => invoke('onboarding:export', options || {}),
+      openFolder:  ()        => invoke('onboarding:open-folder'),
+      pickFile:    ()        => invoke('onboarding:pick-file'),
+      preview:     (data)    => invoke('onboarding:preview', data),
+      runImport:   (data)    => invoke('onboarding:import', data),
+    },
+
     finance: {
       dashboard:         (termId)              => invoke('finance:dashboard', termId),
       listIncome:        (filters)             => invoke('finance:list-income', filters),

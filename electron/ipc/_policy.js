@@ -186,6 +186,18 @@ const POLICY = {
   'reports:generate-canteen-bills':     ['fees', 'view'],
   'reports:generate-books-bills':       ['fees', 'view'],
   'workbook:import-history':            ['finance', 'view'],
+  // The onboarding workbook writes pupils, staff, classes, the fee schedule and
+  // the school's own identity from one file, so it is governed by the settings
+  // permission rather than any single module's. `preview` is named here
+  // explicitly: it reads like a view and is not one — it is the gate the import
+  // is taken through, and an account that may not change the school's
+  // configuration has no business standing at it.
+  'onboarding:status':                  ['settings', 'view'],
+  'onboarding:export':                  ['settings', 'view'],
+  'onboarding:open-folder':             ['settings', 'view'],
+  'onboarding:pick-file':               ['settings', 'edit'],
+  'onboarding:preview':                 ['settings', 'edit'],
+  'onboarding:import':                  ['settings', 'edit'],
   'payroll:paid-summary':               ['payroll', 'view'],
   'payroll:bulk-preview':               ['payroll', 'view'],
   'reports:generate-report-cards':      ['academics', 'view'],
@@ -257,6 +269,7 @@ const PREFIX_MODULE = {
   notifications: 'notifications', messages: 'notifications', announcements: 'notifications',
   settings: 'settings', access: 'settings', backup: 'settings', cloud: 'settings',
   mobile: 'settings', 'mobile-sync': 'settings', session: 'settings',
+  onboarding: 'settings',
   dashboard: 'dashboard',
 };
 

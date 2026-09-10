@@ -13,10 +13,10 @@ than discover.
 
 | | What it is | Answers |
 |---|---|---|
-| **The installed application** | The school's own computer | all 399 |
-| **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 374 of 399 (94%) |
-| **Hosted — the installer's own code** | The internet, running host/server.js | 374 of 399 (94%) |
-| **Hosted — the Python service** | The internet, running cloud-python | 107 of 399 (27%) |
+| **The installed application** | The school's own computer | all 405 |
+| **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 378 of 405 (93%) |
+| **Hosted — the installer's own code** | The internet, running host/server.js | 378 of 405 (93%) |
+| **Hosted — the Python service** | The internet, running cloud-python | 107 of 405 (26%) |
 
 There are two ways to be hosted and they are not equal. **host/server.js**
 runs the installed application's own handlers on a server — the same code, so
@@ -398,6 +398,19 @@ The school's own computer only.
 | `notifications:save-template` | not yet |
 | `notifications:send` | not yet |
 | `notifications:send-bulk` | not yet |
+
+## Onboarding
+
+0 of 4 online.
+
+| Channel | Hosted |
+|---|---|
+| `onboarding:export` | not yet |
+| `onboarding:import` | not yet |
+| `onboarding:open-folder` | office PC |
+| `onboarding:pick-file` | office PC |
+| `onboarding:preview` | not yet |
+| `onboarding:status` | not yet |
 
 ## The payment desk
 

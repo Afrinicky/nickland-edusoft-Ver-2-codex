@@ -44,6 +44,7 @@ const registerFeesBillingHandlers = require('./ipc/fees_billing');
 const registerSchoolFeesHandlers = require('./ipc/fees_schoolfees');
 const registerPaymentDeskHandlers = require('./ipc/payments_desk');
 const registerFinanceWorkbookHandlers = require('./ipc/finance_workbook');
+const registerOnboardingHandlers = require('./ipc/onboarding');
 const registerCanteenExtraHandlers = require('./ipc/canteen_extra');
 const registerStaffHrHandlers = require('./ipc/staff_hr');
 const registerPayrollHandlers = require('./ipc/payroll');
@@ -117,6 +118,10 @@ function registerModules({ ipcMain, db, userDataPath, getResourcePath, app, logg
     transport: require('./ipc/transport'),
   }));
   mount('finance.workbook', () => registerFinanceWorkbookHandlers(guarded, db, app, userDataPath));
+  // Bringing a school's existing records onto the system from its own Excel.
+  // Governed by the settings permission, not any one module's: one workbook
+  // writes pupils, staff, classes, the fee schedule and the school's identity.
+  mount('onboarding', () => registerOnboardingHandlers(guarded, db, app, userDataPath));
   mount('canteen.extra', () => registerCanteenExtraHandlers(guarded, db));
   mount('staff.hr', () => registerStaffHrHandlers(guarded, db, userDataPath));
   mount('payroll', () => registerPayrollHandlers(guarded, db));
