@@ -760,7 +760,23 @@ def submit_scores(store, school_id, rec, body):
         # teacher finds out while they are still looking at the sheet.
         if v < 0 or v > 100:
             return {"ok": False, "status": 400, "error": "Exam scores must be between 0 and 100."}
-        clean.append({"student_id": sid, "exam_score": v})
+        entry = {"student_id": sid, "exam_score": v}
+        # What the sheet was showing this teacher when they typed. Carried
+        # through untouched so the desktop can tell an ordinary entry from one
+        # that would overwrite a correction made at the school after the sheet
+        # was read. It confers no authority — a teacher who may write the mark
+        # may write it either way — it only decides who wins a race, so taking
+        # the client's word for it costs nothing.
+        if "base_exam_score" in m:
+            b = m.get("base_exam_score")
+            if b is None or b == "":
+                entry["base_exam_score"] = None
+            else:
+                try:
+                    entry["base_exam_score"] = float(b)
+                except (TypeError, ValueError):
+                    pass          # unreadable: omit it, and the desktop applies as before
+        clean.append(entry)
     if not clean:
         return {"ok": False, "status": 400, "error": "No marks to save."}
     store.enqueue_change(school_id, {"type": "score_entry", "payload": {
@@ -864,10 +880,22 @@ def submit_remarks(store, school_id, rec, body):
         return {"ok": False, "status": 403,
                 "error": "Only the class teacher can write end-of-term remarks for this class."}
     trim = lambda v, n: None if v is None else str(v)[:n]
-    store.enqueue_change(school_id, {"type": "term_remarks", "payload": {
+    payload = {
         "uuid": _ref(), "user_id": rec["user_id"], "student_id": sid,
         "conduct": trim(body.get("conduct"), 500), "interests": trim(body.get("interests"), 500),
-        "talents": trim(body.get("talents"), 500), "remarks": trim(body.get("remarks"), 1000)}})
+        "talents": trim(body.get("talents"), 500), "remarks": trim(body.get("remarks"), 1000)}
+    # What the report was showing when this teacher opened it. Remarks are the
+    # one field two people genuinely both write, so the desktop needs to tell a
+    # fresh remark from one that would paint over the head teacher's edit.
+    # Each of the four is settled on its own: a teacher who filled in the
+    # conduct while the head reworded the remark should lose neither.
+    base = body.get("base")
+    if isinstance(base, dict):
+        limits = {"conduct": 500, "interests": 500, "talents": 500, "remarks": 1000}
+        kept = {k: trim(base.get(k), n) for k, n in limits.items() if k in base}
+        if kept:
+            payload["base"] = kept
+    store.enqueue_change(school_id, {"type": "term_remarks", "payload": payload})
     return {"ok": True, "queued": True}
 
 

@@ -2178,6 +2178,45 @@ function runMigrations(db) {
     add('special_needs');
   });
 
+  // 36. What the cloud tried to write over, and what the school had instead.
+  //
+  //     A teacher enters 62 from home on Monday night. On Tuesday morning the
+  //     head teacher spots a marking error on the desktop and corrects it to
+  //     68. The sync timer then drains Monday's queue and puts it back to 62,
+  //     and NOBODY IS TOLD. That is the whole reason this table exists.
+  //
+  //     The desktop is the source of truth, so on a clash the desktop wins and
+  //     the cloud's value is written here instead of over the top. A row is a
+  //     record of a decision, not an error: somebody has to be able to look at
+  //     the mark and see that a teacher believed it was something else.
+  //
+  //     Kept local. It is not projected to the cloud, because a conflict is a
+  //     statement about what the school's own database held.
+  safe(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sync_conflicts (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        change_type  TEXT NOT NULL,    -- score_entry | term_remarks | …
+        change_uuid  TEXT,             -- the cloud's id for the batch it came in
+        entity_type  TEXT NOT NULL,    -- exam_score | term_remark
+        student_id   INTEGER,
+        subject_id   INTEGER,
+        term_id      INTEGER,
+        field        TEXT,             -- which one of them disagreed
+        base_value   TEXT,             -- what the cloud thought the school held
+        cloud_value  TEXT,             -- what the cloud wanted to write
+        local_value  TEXT,             -- what the school actually held — the winner
+        user_id      INTEGER,          -- the teacher whose work was set aside
+        resolution   TEXT DEFAULT 'kept_local',
+        reviewed_at  TEXT,
+        created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_sync_conflicts_open
+        ON sync_conflicts(reviewed_at, created_at);
+    `);
+  });
+
   //  Rename the "Administrator" designation to "Super Admin".
   //
   //  Every school has administrators — the secretary who keeps the roll, the

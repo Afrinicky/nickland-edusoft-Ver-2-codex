@@ -103,8 +103,34 @@ function createPgStore(connectionString) {
       const next = rows.length ? rows[rows.length - 1].id : cur;
       // The desktop asking for everything after `cur` is its receipt for
       // everything up to it — see setAppliedCursor.
-      if (cur > 0) { try { await this.setAppliedCursor(school_id, cur); } catch (_) {} }
+      if (cur > 0) {
+        try { await this.setAppliedCursor(school_id, cur); } catch (_) {}
+        try { await this.pruneChanges(school_id); } catch (_) {}
+      }
       return { changes: rows.map(r => ({ type: r.type, payload: r.payload })), cursor: next };
+    },
+
+    // Clear out changes the school has both taken and had time to keep.
+    //
+    // The queue used to grow without limit — the cursor simply advanced past
+    // rows that then stayed forever. Never a correctness problem, because
+    // replays are already safe, but one school's year of registers and marks
+    // is a table nobody empties, on a database every school shares.
+    //
+    // Bounded by the applied cursor AND by age, so a row goes only once the
+    // desktop has confirmed it has it and ninety days have passed. Ninety and
+    // not zero, deliberately: a desktop restored from a backup comes back with
+    // an older cursor, and a queue trimmed to the last receipt would have
+    // nothing left to give it.
+    async pruneChanges(school_id) {
+      await pool.query(
+        `DELETE FROM cloud_changes
+          WHERE school_id = $1
+            AND id <= (SELECT COALESCE(applied_cursor, 0) FROM schools WHERE school_id = $1)
+            AND created_at < now() - interval '90 days'`,
+        [school_id]
+      );
+      return true;
     },
 
     // How far the desktop has consumed. Recorded on every pull, and the only

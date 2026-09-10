@@ -75,6 +75,14 @@ jobs:
       - name: Onboarding workbook (a school's records, brought across)
         run: node test/onboarding_workbook.js
 
+      # The school's own database against a phone that disagrees with it. What
+      # this guards is a correction made at the school surviving a change that
+      # was queued before it — which used to be silently reverted, and is the
+      # one failure in the sync engine that loses a teacher's work without
+      # anybody finding out.
+      - name: Sync conflicts (the desktop is the source of truth)
+        run: node test/sync_conflicts.js
+
       - name: Web app serving (desktop host)
         run: node test/webapp.js
 

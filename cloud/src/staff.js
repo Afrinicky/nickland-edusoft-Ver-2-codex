@@ -736,7 +736,19 @@ async function submitScores(store, school_id, rec, { subjectId, marks, classId }
     if (!Number.isFinite(v) || v < 0 || v > 100) {
       return { ok: false, status: 400, error: 'Exam scores must be between 0 and 100.' };
     }
-    clean.push({ student_id: student, exam_score: v });
+    const entry = { student_id: student, exam_score: v };
+    // What the sheet was showing this teacher when they typed, carried through
+    // untouched. The desktop uses it to tell an ordinary entry from one that
+    // would overwrite a correction made at the school after the sheet was read.
+    // It grants nothing — a teacher who may write the mark may write it either
+    // way — so taking the client's word for it costs nothing.
+    if (Object.prototype.hasOwnProperty.call(m, 'base_exam_score')) {
+      const b = m.base_exam_score;
+      if (b === null || b === '') entry.base_exam_score = null;
+      else if (Number.isFinite(Number(b))) entry.base_exam_score = Number(b);
+      // Unreadable: omitted, and the desktop applies as it always did.
+    }
+    clean.push(entry);
   }
   if (!clean.length) return { ok: false, status: 400, error: 'No marks to save.' };
   await store.enqueueChange(school_id, {
@@ -825,14 +837,25 @@ async function submitRemarks(store, school_id, rec, body) {
     return { ok: false, status: 403, error: 'Only the class teacher can write end-of-term remarks for this class.' };
   }
   const trim = (v, n) => (v == null ? null : String(v).slice(0, n));
-  await store.enqueueChange(school_id, {
-    type: 'term_remarks',
-    payload: {
-      uuid: newRef(), user_id: rec.user_id, student_id: sid,
-      conduct: trim(body.conduct, 500), interests: trim(body.interests, 500),
-      talents: trim(body.talents, 500), remarks: trim(body.remarks, 1000),
-    },
-  });
+  const payload = {
+    uuid: newRef(), user_id: rec.user_id, student_id: sid,
+    conduct: trim(body.conduct, 500), interests: trim(body.interests, 500),
+    talents: trim(body.talents, 500), remarks: trim(body.remarks, 1000),
+  };
+  // What the report was showing when this teacher opened it. Remarks are the
+  // one field two people genuinely both write, so the desktop needs to tell a
+  // fresh remark from one that would paint over the head teacher's edit. Each
+  // of the four is settled on its own: a teacher who filled in the conduct
+  // while the head reworded the remark should lose neither.
+  if (body.base && typeof body.base === 'object') {
+    const limits = { conduct: 500, interests: 500, talents: 500, remarks: 1000 };
+    const kept = {};
+    for (const [k, n] of Object.entries(limits)) {
+      if (Object.prototype.hasOwnProperty.call(body.base, k)) kept[k] = trim(body.base[k], n);
+    }
+    if (Object.keys(kept).length) payload.base = kept;
+  }
+  await store.enqueueChange(school_id, { type: 'term_remarks', payload });
   return { ok: true, queued: true };
 }
 

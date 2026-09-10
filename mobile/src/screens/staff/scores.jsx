@@ -65,19 +65,47 @@ function ScoresScreen() {
     .filter(([, v]) => { const n = Number(v); return !Number.isFinite(n) || n < 0 || n > 100; })
     .map(([id]) => id), [values]);
 
+  // What the sheet was showing when this teacher started typing. It travels
+  // with the marks so the school can tell "nobody else touched this" from
+  // "the head teacher corrected it while you were on the bus" — see
+  // electron/server/sync/apply_staff.js. Without it the later write simply
+  // wins, which is how a correction made on the school's own computer used to
+  // disappear.
+  const baseline = useMemo(
+    () => Object.fromEntries((sheet?.students || []).map(s => [String(s.id), s.exam_score ?? null])),
+    [sheet]);
+
   async function save() {
     if (invalid.length) { setError('Exam marks must be between 0 and 100.'); return; }
     setSaving(true); setError(null); setSaved(null);
     try {
       const marks = Object.entries(values)
         .filter(([, v]) => v !== '' && v != null)
-        .map(([student_id, v]) => ({ student_id: Number(student_id), exam_score: Number(v) }));
+        .map(([student_id, v]) => ({
+          student_id: Number(student_id),
+          exam_score: Number(v),
+          // null is a real base — the cell was empty — and is not the same as
+          // omitting it, which means "this client does not know".
+          base_exam_score: baseline[String(student_id)] ?? null,
+        }));
       const r = await api.saveScores(token, subjectId, marks);
       setSaved(mode === 'cloud'
         ? `${marks.length} mark${marks.length === 1 ? '' : 's'} saved and queued — they reach the school when its computer next syncs.`
         : `Saved ${r.saved} mark${r.saved === 1 ? '' : 's'}.`);
       setDirty(false);
-      if (mode !== 'cloud') load();
+      // Offline there is no reload to refresh the baseline, so move it on by
+      // hand: what was just sent is what this teacher now believes the sheet
+      // holds. Leaving it behind would make their own next save look like a
+      // clash with themselves.
+      if (mode === 'cloud') {
+        setSheet(prev => prev && ({
+          ...prev,
+          students: (prev.students || []).map(st => {
+            const typed = values[st.id];
+            return typed === '' || typed == null ? st : { ...st, exam_score: Number(typed) };
+          }),
+        }));
+      } else load();
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   }

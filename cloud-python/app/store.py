@@ -102,6 +102,11 @@ class MemoryStore:
         self.set_applied_cursor(sid, cur)
         return {"changes": [{"type": i["type"], "payload": i["payload"]} for i in items], "cursor": nxt}
 
+    def prune_changes(self, sid):
+        """The in-memory store lives for one process, so there is nothing to
+        reclaim. Present so the two stores answer the same calls."""
+        return True
+
     def set_applied_cursor(self, sid, cursor):
         """How far the desktop has consumed the change queue.
 
@@ -231,7 +236,37 @@ class PgStore:
         # everything up to it — see set_applied_cursor.
         if cur > 0:
             self.set_applied_cursor(sid, cur)
+            self.prune_changes(sid)
         return {"changes": [{"type": r[1], "payload": r[2]} for r in rows], "cursor": nxt}
+
+    # How long a change the school has already taken is kept before it is
+    # cleared out. Not zero, and deliberately: a desktop restored from a backup
+    # comes back with an older cursor, and a queue trimmed to the last receipt
+    # would have nothing left to give it. Ninety days is longer than any school
+    # holiday and longer than any repair.
+    PRUNE_AFTER_DAYS = 90
+
+    def prune_changes(self, sid):
+        """Clear out changes the school has both taken and had time to keep.
+
+        The queue used to grow without limit — the cursor simply advanced past
+        rows that stayed forever. Not a correctness problem, since replays are
+        already safe, but one school's year of registers and marks is a table
+        nobody ever empties, on a database every school shares.
+
+        Bounded by the applied cursor AND by age, so a row is only ever removed
+        once the desktop has confirmed it has it and ninety days have passed.
+        """
+        try:
+            self._q(
+                "DELETE FROM cloud_changes WHERE school_id = %s AND id <= "
+                "(SELECT COALESCE(applied_cursor, 0) FROM schools WHERE school_id = %s) "
+                "AND created_at < now() - make_interval(days => %s)",
+                (sid, sid, self.PRUNE_AFTER_DAYS))
+        except Exception:
+            # Housekeeping must never fail a teacher's pull.
+            pass
+        return True
 
     def set_applied_cursor(self, sid, cursor):
         """How far the desktop has consumed the change queue. GREATEST so an
