@@ -10,6 +10,8 @@ export default function Cloud() {
   const [st, setSt] = useState(null);
   const [form, setForm] = useState({ baseUrl: '', apiKey: '', schoolId: '' });
   const [busy, setBusy] = useState(false);
+  const [conflicts, setConflicts] = useState([]);
+  const [showConflicts, setShowConflicts] = useState(false);
 
   async function refresh() {
     const s = await window.api.cloud.status();
@@ -46,7 +48,35 @@ export default function Cloud() {
   }
   async function test() { setBusy(true); const r = await window.api.cloud.test(); setBusy(false); showToast(r.ok ? `Connected${r.school ? ' — ' + (r.school.name || r.school) : ''}` : (r.error || 'Failed'), r.ok ? 'success' : 'error'); }
   async function pushNow() { setBusy(true); const r = await window.api.cloud.pushNow(); setBusy(false); showToast(r.ok ? `Pushed ${r.pushed} update(s)` : (r.error || 'Push failed'), r.ok ? 'success' : 'error'); refresh(); }
-  async function pullNow() { setBusy(true); const r = await window.api.cloud.pullNow(); setBusy(false); showToast(r.ok ? `Applied ${r.applied} change(s)` : (r.error || 'Pull failed'), r.ok ? 'success' : 'error'); refresh(); }
+  // "More to come" matters after a long outage: a school whose computer was off
+  // for a month has thousands of queued changes, and a pull that stops at a
+  // full batch with no explanation looks stuck rather than busy.
+  async function pullNow() {
+    setBusy(true);
+    const r = await window.api.cloud.pullNow();
+    setBusy(false);
+    showToast(
+      r.ok
+        ? `Applied ${r.applied} change(s)${r.more ? ' — more still to come, the next sync will carry on' : ''}`
+        : (r.error || 'Pull failed'),
+      r.ok ? 'success' : 'error');
+    refresh();
+  }
+
+  // What the school kept when a teacher's off-LAN work disagreed with it. Shown
+  // only when there is something to show: a row reading "0" every day trains
+  // people to stop reading it.
+  async function loadConflicts() {
+    const r = await window.api.cloud.conflicts({ limit: 50 });
+    setConflicts(r?.ok ? (r.conflicts || []) : []);
+    setShowConflicts(true);
+  }
+
+  async function dismissConflict(id) {
+    await window.api.cloud.conflictReviewed(id);
+    setConflicts(cs => cs.filter(c => c.id !== id));
+    refresh();
+  }
 
   return (
     <div className="settings-stack" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -94,7 +124,39 @@ export default function Cloud() {
           <div>Pending to send: <strong>{st?.pending ?? 0}</strong></div>
           <div>Last push: <strong>{st?.last_push_at ? fmtDate(st.last_push_at) : '—'}</strong></div>
           <div>Last pull: <strong>{st?.last_pull_at ? fmtDate(st.last_pull_at) : '—'}</strong></div>
+          {st?.conflicts > 0 && (
+            <div style={{ color: 'var(--warning)' }}>
+              Kept this computer's version: <strong>{st.conflicts}</strong>{' '}
+              <button className="btn btn-ghost btn-sm" onClick={loadConflicts}>See which</button>
+            </div>
+          )}
         </div>
+
+        {showConflicts && (
+          <div style={{ marginTop: 10 }}>
+            <p className="text-sm text-muted" style={{ lineHeight: 1.6 }}>
+              A teacher entered these away from the school, but this computer's record had
+              already moved on by the time the change arrived. <strong>This computer's
+              version was kept.</strong> Nothing here has changed anything — open the mark
+              or the report card if one of them should be the teacher's figure after all.
+            </p>
+            {!conflicts.length && <p className="text-sm">Nothing outstanding.</p>}
+            {conflicts.map(c => (
+              <div key={c.id} className="row" style={{
+                justifyContent: 'space-between', alignItems: 'baseline',
+                gap: 8, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                <span className="text-sm">
+                  <strong>{c.student_name || `Pupil #${c.student_id}`}</strong>
+                  {c.subject_name ? ` · ${c.subject_name}` : ''}
+                  {' — kept '}<strong>{c.local_value ?? '(blank)'}</strong>
+                  {' rather than '}{c.cloud_value ?? '(blank)'}
+                  {c.user_name ? ` from ${c.user_name}` : ''}
+                </span>
+                <button className="btn btn-ghost btn-sm" onClick={() => dismissConflict(c.id)}>Seen</button>
+              </div>
+            ))}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           <button className="btn btn-outline" onClick={pushNow} disabled={busy || !st?.enabled}>⬆ Push now</button>
           <button className="btn btn-outline" onClick={pullNow} disabled={busy || !st?.enabled}>⬇ Pull now</button>

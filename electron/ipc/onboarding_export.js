@@ -19,6 +19,9 @@
 // where to type.
 
 const S = require('./_onboarding_schema');
+// The exporter reads back exactly the line the importer writes, so the label
+// is taken from there rather than spelt a second time here.
+const { OPENING_BALANCE_LABEL } = require('./onboarding_import');
 const { SHEETS, SHEET_ORDER, IMPORT_SHEETS } = S;
 
 function ExcelJS() { return require('exceljs'); }
@@ -252,11 +255,18 @@ function liveRows(db, sheetName) {
                   FROM staff ORDER BY surname, first_name`);
 
     case SHEETS.STUDENTS:
+      // Every column the Students sheet declares, and no fewer. A field the
+      // importer writes but the export omits comes back as an empty cell and
+      // CLEARS it — so exporting a school to correct one phone number would
+      // quietly wipe every pupil's allergies. The two lists have to match, and
+      // `test/onboarding_workbook.js` now checks that they do rather than
+      // trusting this query to be kept in step by hand.
       return q(`SELECT s.index_number, s.surname, s.first_name, s.other_names, s.gender,
                        s.date_of_birth, c.name AS class_name, s.admission_date, s.status,
                        s.denomination, s.place_of_birth, s.place_of_residence, s.digital_address,
                        s.father_name, s.father_contact, s.mother_name, s.mother_contact,
-                       s.guardian_name, s.guardian_contact, s.nhis_number, s.notes
+                       s.guardian_name, s.guardian_contact, s.previous_school, s.nhis_number,
+                       s.blood_group, s.allergies, s.notes
                   FROM students s LEFT JOIN class_groups c ON c.id = s.current_class_id
                  ORDER BY c.level_order, s.surname, s.first_name`);
 
@@ -270,27 +280,50 @@ function liveRows(db, sheetName) {
                  GROUP BY p.id ORDER BY p.full_name`);
 
     case SHEETS.FEES:
-      return q(`SELECT c.name AS class_name, t.label AS term_label, li.category AS part,
+      // The term is written year-qualified — "First Term 2025/2026", not
+      // "First Term". Two academic years each have a First Term, and an
+      // unqualified name resolves to whichever is current: a schedule exported
+      // from last year would be re-imported onto this year's term. A school
+      // typing a sheet by hand may still write the bare name and have it mean
+      // the current year, which is what they mean; an export cannot afford the
+      // guess, because it is describing a year it may not be in.
+      return q(`SELECT c.name AS class_name,
+                       t.label || ' ' || COALESCE(y.label, '') AS term_label,
+                       li.category AS part,
                        li.description AS item_name, li.amount, li.is_optional
                   FROM fee_line_items li
                   JOIN fee_templates ft ON ft.id = li.fee_template_id
                   LEFT JOIN class_groups c ON c.id = ft.class_group_id
                   LEFT JOIN terms t ON t.id = ft.term_id
+                  LEFT JOIN academic_years y ON y.id = t.academic_year_id
                  WHERE COALESCE(ft.is_active,1) = 1 AND c.name IS NOT NULL AND t.label IS NOT NULL
                  ORDER BY c.level_order, t.term_number, li.item_number`)
         .map(r => ({ ...r, part: String(r.part || '').replace(/^Part\s+/i, '') }));
 
     case SHEETS.BALANCES:
-      // Only pupils who actually owe something: a sheet with four hundred zeroes
-      // on it is a sheet nobody reads.
+      // ONLY the opening-balance line, never the bill's balance.
+      //
+      // They are not the same figure and confusing them compounds. A pupil with
+      // an ordinary unpaid GHS 400 tuition bill has a balance of 400 and an
+      // opening balance of nothing; exporting the balance and re-importing it
+      // adds 400 of arrears on top of the 400 already billed, and the child owes
+      // 800. Import the file a third time and it is 1200.
+      //
+      // What this sheet means is "what the pupil owed on the day the school
+      // moved onto this system" — a position stated once, which is exactly the
+      // line `applyOpeningBalance` writes and the only line it should read back.
+      // Everything else on the bill is the system's own working.
       return q(`SELECT s.index_number,
                        TRIM(s.surname || ' ' || s.first_name) AS student_name,
-                       t.label AS term_label, b.balance AS amount_owing
-                  FROM student_bills b
+                       t.label || ' ' || COALESCE(y.label, '') AS term_label,
+                       li.amount AS amount_owing
+                  FROM bill_line_items li
+                  JOIN student_bills b ON b.id = li.student_bill_id
                   JOIN students s ON s.id = b.student_id
                   JOIN terms t ON t.id = b.term_id
-                 WHERE b.balance > 0 AND s.index_number IS NOT NULL
-                 ORDER BY s.surname, s.first_name`);
+                  LEFT JOIN academic_years y ON y.id = t.academic_year_id
+                 WHERE li.description = ? AND li.amount > 0 AND s.index_number IS NOT NULL
+                 ORDER BY s.surname, s.first_name`, [OPENING_BALANCE_LABEL]);
 
     default: return [];
   }

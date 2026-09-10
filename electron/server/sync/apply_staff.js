@@ -51,6 +51,71 @@ function currentTermId(db) {
   catch (_) { return null; }
 }
 
+// ── Conflicts ───────────────────────────────────────────────────────────────
+//
+// The desktop is the source of truth. That is not a slogan — it decides what
+// happens when the school's own database and a change queued from a phone
+// disagree about the same field.
+//
+// The case that matters, and which used to lose data silently:
+//
+//   Monday 8pm    a teacher enters 62 from home. The cloud queues it, stamped
+//                 with the value the sheet was showing them at the time.
+//   Tuesday 9am   the head teacher spots a marking error on the desktop and
+//                 corrects it to 68.
+//   Tuesday 9.05  the sync timer drains Monday's queue.
+//
+// Before this, the queue won and 68 became 62 again with nobody told. Now the
+// three cases are separated, and only one of them is a conflict:
+//
+//   local === incoming   already applied. A redelivered batch is a no-op, which
+//                        is rule 2 and must stay true.
+//   local === base       nothing has moved underneath the change. Apply it.
+//   otherwise            somebody changed it on the desktop after the teacher
+//                        read it. The desktop keeps its value and the teacher's
+//                        is written to sync_conflicts, where it can be seen.
+//
+// `base` is what the cloud believed the school held when the change was made —
+// the value the teacher was actually looking at. A change from an older cloud
+// carries no base at all, and then there is nothing to compare: those apply as
+// they always did, because refusing them would be worse than the risk.
+function sameValue(a, b) {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  const na = Number(a), nb = Number(b);
+  if (Number.isFinite(na) && Number.isFinite(nb)) return Math.abs(na - nb) < 1e-9;
+  return String(a).trim() === String(b).trim();
+}
+
+/**
+ * What to do with one field of one incoming change.
+ * Returns 'applied' (write it), 'noop' (already there) or 'conflict'.
+ */
+function decide(local, base, incoming) {
+  if (sameValue(local, incoming)) return 'noop';
+  if (base === undefined) return 'applied';      // an older cloud; nothing to check
+  if (sameValue(local, base)) return 'applied';
+  return 'conflict';
+}
+
+function recordConflict(db, row) {
+  try {
+    db.prepare(`
+      INSERT INTO sync_conflicts
+        (change_type, change_uuid, entity_type, student_id, subject_id, term_id,
+         field, base_value, cloud_value, local_value, user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      row.change_type, row.change_uuid || null, row.entity_type,
+      row.student_id || null, row.subject_id || null, row.term_id || null,
+      row.field || null,
+      row.base_value == null ? null : String(row.base_value),
+      row.cloud_value == null ? null : String(row.cloud_value),
+      row.local_value == null ? null : String(row.local_value),
+      row.user_id || null);
+  } catch (_) { /* never let bookkeeping stop the rest of the batch */ }
+}
+
 // ── attendance ──────────────────────────────────────────────────────────────
 // Naturally idempotent: one row per (student, date), upserted.
 function applyAttendance(db, payload) {
@@ -107,7 +172,17 @@ function applyScores(db, payload) {
   if (!termId) return false;
 
   const { saveExamMark } = require('../../ipc/scores');
+  // What the school holds right now, per pupil, for this subject and term. Read
+  // once for the batch rather than per mark: a class of forty is forty marks.
+  const current = new Map();
+  try {
+    for (const r of db.prepare(
+      'SELECT student_id, exam_score FROM scores WHERE subject_id = ? AND term_id = ?'
+    ).all(subjectId, termId)) current.set(r.student_id, r.exam_score);
+  } catch (_) { /* no scores yet — every mark is new */ }
+
   const touched = [];
+  let conflicts = 0;
   const tx = db.transaction(() => {
     for (const m of marks) {
       const sid = parseInt(m.student_id, 10);
@@ -117,13 +192,39 @@ function applyScores(db, payload) {
       // must not block the rest of the class, and the change is not coming
       // back for a retry.
       if (!Number.isFinite(v) || v < 0 || v > 100) continue;
-      saveExamMark(db, { studentId: sid, subjectId, termId, examScore: v });
-      touched.push(sid);
+
+      const local = current.has(sid) ? current.get(sid) : null;
+      // `base_exam_score` absent entirely means an older cloud that does not
+      // stamp one; `null` means the sheet showed the teacher an empty cell,
+      // which is a real base and not the same thing.
+      const base = Object.prototype.hasOwnProperty.call(m, 'base_exam_score')
+        ? m.base_exam_score : undefined;
+
+      switch (decide(local, base, v)) {
+        case 'noop':
+          continue;
+        case 'conflict':
+          conflicts++;
+          recordConflict(db, {
+            change_type: 'score_entry', change_uuid: payload.uuid,
+            entity_type: 'exam_score', student_id: sid, subject_id: subjectId,
+            term_id: termId, field: 'exam_score',
+            base_value: base, cloud_value: v, local_value: local,
+            user_id: user.id,
+          });
+          continue;
+        default:
+          saveExamMark(db, { studentId: sid, subjectId, termId, examScore: v });
+          touched.push(sid);
+      }
     }
   });
   tx();
   refresh(db, touched);
-  return touched.length > 0;
+  // A batch that was entirely conflicts still counts as handled: it has been
+  // dealt with and recorded, and returning false would have the cursor stall
+  // on it and redeliver it forever.
+  return touched.length > 0 || conflicts > 0;
 }
 
 // ── canteen ─────────────────────────────────────────────────────────────────
@@ -253,6 +354,59 @@ function applyTermRemarks(db, payload) {
   if (!termId) return false;
   let classId = null;
   try { classId = db.prepare('SELECT current_class_id AS id FROM students WHERE id = ?').get(sid)?.id || null; } catch (_) { return false; }
+
+  // The dangerous one. Marks usually belong to a single subject teacher, which
+  // is why overwriting them rarely bit; remarks are genuinely written by two
+  // people — the class teacher fills them in, the head teacher rewords them
+  // before the report goes out — so the head's edit being silently replaced by
+  // a phone is not a hypothetical.
+  //
+  // Each of the four fields is settled on its own. A teacher who filled in the
+  // conduct while the head was rewriting the remark should lose neither.
+  const FIELDS = [
+    ['conduct_traits',    'conduct'],
+    ['learner_interests', 'interests'],
+    ['learner_talents',   'talents'],
+    ['teacher_remarks',   'remarks'],
+  ];
+  const bases = payload.base || {};
+
+  let existing = null;
+  try {
+    existing = db.prepare(
+      'SELECT conduct_traits, learner_interests, learner_talents, teacher_remarks FROM student_term_summary WHERE student_id = ? AND term_id = ?'
+    ).get(sid, termId) || null;
+  } catch (_) { /* nothing recorded yet */ }
+
+  const write = {};
+  let conflicts = 0, changes = 0;
+  for (const [column, key] of FIELDS) {
+    const incoming = payload[key] == null || payload[key] === '' ? null : payload[key];
+    const local = existing ? existing[column] : null;
+    const base = Object.prototype.hasOwnProperty.call(bases, key) ? bases[key] : undefined;
+
+    switch (decide(local, base, incoming)) {
+      case 'noop':
+        write[column] = local;
+        break;
+      case 'conflict':
+        conflicts++;
+        write[column] = local;          // the desktop keeps what it has
+        recordConflict(db, {
+          change_type: 'term_remarks', change_uuid: payload.uuid,
+          entity_type: 'term_remark', student_id: sid, term_id: termId,
+          field: column, base_value: base, cloud_value: incoming, local_value: local,
+          user_id: user.id,
+        });
+        break;
+      default:
+        write[column] = incoming;
+        changes++;
+    }
+  }
+
+  if (!changes && !conflicts) return true;   // nothing to do; already recorded
+
   try {
     db.prepare(`
       INSERT INTO student_term_summary (student_id, term_id, class_group_id, conduct_traits, learner_interests, learner_talents, teacher_remarks)
@@ -263,7 +417,8 @@ function applyTermRemarks(db, payload) {
         learner_talents   = excluded.learner_talents,
         teacher_remarks   = excluded.teacher_remarks
     `).run(sid, termId, classId,
-      payload.conduct || null, payload.interests || null, payload.talents || null, payload.remarks || null);
+      write.conduct_traits || null, write.learner_interests || null,
+      write.learner_talents || null, write.teacher_remarks || null);
   } catch (_) { return false; }
   refresh(db, [sid]);
   return true;
@@ -680,4 +835,5 @@ function applyStaffChange(db, change) {
   try { return !!fn(db, change.payload || {}); } catch (_) { return false; }
 }
 
-module.exports = { applyStaffChange, HANDLERS, ensureLedger, alreadyApplied, markApplied };
+module.exports = { applyStaffChange, HANDLERS, ensureLedger, alreadyApplied, markApplied,
+                   decide, sameValue, recordConflict };

@@ -192,6 +192,10 @@ const POLICY = {
   // explicitly: it reads like a view and is not one — it is the gate the import
   // is taken through, and an account that may not change the school's
   // configuration has no business standing at it.
+  // Reading what the school kept when a phone disagreed with it is a read, and
+  // the derived verb would have made it a change. Marking one seen is not.
+  'cloud:conflicts':                    ['settings', 'view'],
+  'cloud:conflict-reviewed':            ['settings', 'edit'],
   'onboarding:status':                  ['settings', 'view'],
   'onboarding:export':                  ['settings', 'view'],
   'onboarding:open-folder':             ['settings', 'view'],

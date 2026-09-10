@@ -279,6 +279,9 @@ function buildApi(invoke) {
       pullNow:           ()                    => invoke('cloud:pull-now'),
       test:              ()                    => invoke('cloud:test'),
       backfill:          ()                    => invoke('cloud:backfill'),
+      // What the school kept when a teacher's off-LAN work disagreed with it.
+      conflicts:         (opts)                => invoke('cloud:conflicts', opts || {}),
+      conflictReviewed:  (id)                  => invoke('cloud:conflict-reviewed', { id }),
     },
 
     // ── Mobile payment intents (accounts office review) ──

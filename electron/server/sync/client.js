@@ -27,6 +27,11 @@ function config(db) {
   };
 }
 
+// What the cloud's /sync/pull answers with at most. Kept here as a named
+// number because the drain loop's "was that the last page?" test depends on
+// agreeing with the service — see cloud-python/app/store.py.
+const PULL_PAGE = 500;
+
 function retentionDays(db) {
   return Math.max(1, parseInt(getSetting(db, 'cloud_outbox_retention_days', '14'), 10) || 14);
 }
@@ -90,24 +95,64 @@ async function push(db) {
   return { ok: false, error: (res.json && res.json.error) || res.error || `push_failed_${res.status}` };
 }
 
+// The cloud answers a pull with at most 500 changes. One pull per timer tick
+// therefore meant a school whose computer had been off for a month — a long
+// holiday, a dead power supply, a machine away being repaired — took several
+// ticks to catch up, showing "still catching up" for an hour while nothing
+// looked wrong. So a pull now keeps asking until the cloud comes back short.
+//
+// Bounded, because a loop that talks to the network until it is satisfied is a
+// loop that can be kept talking: a cloud answering a full page forever would
+// otherwise hold the tick open indefinitely. Twenty rounds is 10,000 changes,
+// far more than a term of one school's off-LAN work, and the sync screen is
+// told when there is still more to come rather than being left to look stuck.
+const PULL_ROUNDS = 20;
+
 async function pull(db) {
   const blocked = blockedReason(db);
   if (blocked) return { ok: false, error: blocked };
   const c = config(db);
-  const res = await httpJson(`${c.base}/api/v1/sync/pull?since=${encodeURIComponent(c.cursor)}`, {
-    headers: { 'x-school-key': c.key },
-  });
-  if (!(res.status >= 200 && res.status < 300 && res.json && res.json.ok)) {
-    return { ok: false, error: (res.json && res.json.error) || res.error || `pull_failed_${res.status}` };
+
+  let cursor = c.cursor;
+  let applied = 0, received = 0, rounds = 0, more = false;
+
+  for (; rounds < PULL_ROUNDS; rounds++) {
+    const res = await httpJson(`${c.base}/api/v1/sync/pull?since=${encodeURIComponent(cursor)}`, {
+      headers: { 'x-school-key': c.key },
+    });
+    if (!(res.status >= 200 && res.status < 300 && res.json && res.json.ok)) {
+      // A round that fails after earlier rounds succeeded is not a failed pull:
+      // the work already applied is applied, and its cursor is saved. Report
+      // what got through rather than throwing it away.
+      const error = (res.json && res.json.error) || res.error || `pull_failed_${res.status}`;
+      if (!rounds) return { ok: false, error };
+      break;
+    }
+
+    const changes = res.json.changes || [];
+    for (const ch of changes) { if (applyChange(db, ch)) applied++; }
+    received += changes.length;
+
+    const next = res.json.cursor;
+    if (next != null) {
+      try { setSetting(db, 'cloud_cursor', String(next), 'cloud'); } catch (_) {}
+    }
+    // Stop on an empty page, or on a cursor that did not move — either means
+    // there is nothing further, and trusting the page size alone would spin
+    // forever against a cloud that always answers with the same batch.
+    if (!changes.length || next == null || String(next) === String(cursor)) break;
+    cursor = next;
+
+    // A short page is the last page. Anything else and we go round again.
+    if (changes.length < PULL_PAGE) break;
+    more = true;
   }
-  const changes = res.json.changes || [];
-  let applied = 0;
-  for (const ch of changes) { if (applyChange(db, ch)) applied++; }
-  if (res.json.cursor != null) {
-    try { setSetting(db, 'cloud_cursor', String(res.json.cursor), 'cloud'); } catch (_) {}
-  }
+
+  // Whether the cloud still owes us something after the rounds ran out.
+  more = more && rounds >= PULL_ROUNDS;
+
   try { setSetting(db, 'cloud_last_pull_at', new Date().toISOString(), 'cloud'); } catch (_) {}
-  return { ok: true, applied, cursor: res.json.cursor };
+  return { ok: true, applied, received, rounds: rounds + 1, more, cursor };
 }
 
 // Apply one cloud-origin change locally. Whitelisted + authority-aware: parent

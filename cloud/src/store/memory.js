@@ -97,6 +97,10 @@ function createMemoryStore() {
       return { changes: items.map(({ id, ...rest }) => rest), cursor: next };
     },
 
+    // Nothing to reclaim: this store lives for one process. Present so both
+    // stores answer the same calls.
+    async pruneChanges() { return true; },
+
     // How far the desktop has consumed. Recorded on every pull, and the only
     // way the cloud can tell a write that is still waiting from one the school
     // has already applied — which is what lets a teacher who marked a register

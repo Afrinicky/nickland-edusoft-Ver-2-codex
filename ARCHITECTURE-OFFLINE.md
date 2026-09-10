@@ -1,6 +1,8 @@
 # Working while the desktop is off
 
-*Advice, not a plan of work. Nothing here has been built.*
+*Written as advice before any of it was built. Three of the four rough edges in
+§3 have since been closed and are marked as such; the rest still reads as the
+recommendation it was.*
 
 The ask: no API backend or server for the cloud. The desktop host stays the
 source of truth but will not always be on. Teachers and parents keep using the
@@ -96,7 +98,13 @@ cold start lands squarely on the teacher opening the app at 8pm.
 
 ## 3. The four rough edges
 
-These are worth fixing before the host is routinely off for days at a time.
+Three of the four are now closed. What follows describes each problem as it
+stood, and then what was done about it — the problem is left in because the
+reason for the fix is the useful half.
+
+**Status:** the silent overwrite is fixed (`sync_conflicts`, and a base stamped
+on every queued mark and remark); the queue is pruned; the drain loops. Cached
+report cards are still not built.
 
 ### The cloud silently overwrites a desktop correction
 
@@ -110,12 +118,26 @@ So: a teacher enters 62 from home on Monday night. On Tuesday morning the head
 teacher spots a marking error on the desktop and corrects it to 68. The sync
 timer then drains Monday's queue and puts it back to 62. Nobody is told.
 
-The fix is ordinary optimistic concurrency: stamp each cloud change with the
-version of the row it was based on, and on apply, skip — and record — any
-change whose base no longer matches. `applyPasswordChange` already does a
-version of this (`if (existing.status === 'approved') return true; // reviewed;
-not theirs to rewrite`); the same idea needs to reach scores, remarks and
-assessments.
+**Fixed.** Ordinary optimistic concurrency: every queued mark carries
+`base_exam_score` — the value the sheet was showing the teacher when they typed
+— and every queued remark carries a `base` for each of its four fields. On
+apply, `apply_staff.js` separates three cases rather than one:
+
+```
+local === incoming   already applied; a redelivered batch stays a no-op
+local === base       nothing moved underneath it; apply
+otherwise            the school changed it after the teacher read it:
+                     the desktop keeps its value, and the teacher's is
+                     written to sync_conflicts where somebody can see it
+```
+
+Remarks are settled field by field, so a teacher who filled in the conduct while
+the head teacher reworded the remark loses neither. A change from a cloud that
+stamps no base still applies exactly as before — there is nothing to compare,
+and refusing it would be worse than the risk.
+
+The count appears on Settings → Cloud Sync, because a conflict nobody is told
+about is the same failure in a quieter form. See `test/sync_conflicts.js`.
 
 Note that this is *only* a risk for the fields both sides edit. Marks are
 usually owned by one subject teacher, which is why it has not bitten yet. Term
@@ -138,16 +160,23 @@ would take it: a report card for a closed term does not change.
 
 `cloud_changes` rows are kept forever; the cursor just advances past them. Not a
 correctness problem — replays are already safe — but it grows without limit.
-A `DELETE FROM cloud_changes WHERE id <= applied_cursor AND created_at < now() -
-interval '90 days'` on a schedule is enough.
+**Fixed.** `prune_changes` runs on each pull, bounded by BOTH the applied cursor
+and ninety days. Ninety and not zero deliberately: a desktop restored from a
+backup comes back with an older cursor, and a queue trimmed to the last receipt
+would have nothing left to give it.
 
 ### A long outage drains slowly
 
 `pending_changes` returns at most 500 per pull, and one pull happens per timer
 tick. A host that was off for a month with a few thousand queued changes takes
 several ticks to catch up. Nothing breaks; the school just sees the desktop
-"still catching up" for a while. Either loop the pull until the batch comes back
-short, or say so on the sync screen so it does not look stuck.
+"still catching up" for a while.
+
+**Fixed, both ways.** A pull now keeps asking until the cloud comes back short,
+bounded at twenty rounds — 10,000 changes, far more than a term of one school's
+off-LAN work — because a loop that talks to the network until it is satisfied is
+a loop that can be kept talking. When the rounds run out with more still queued,
+the sync screen says so rather than leaving it to look stuck.
 
 ---
 
@@ -155,12 +184,13 @@ short, or say so on the sync screen so it does not look stuck.
 
 1. **Move the cloud onto functions + Neon.** No behaviour changes; it is where
    the money and the operations burden go away. `DEPLOY.md` covers the Neon half
-   already.
-2. **Add version stamps to the queued changes** and make `apply_staff.js` skip a
-   change whose base has moved. This is the one with real data at stake.
+   already. — *still to do*
+2. ~~**Add version stamps to the queued changes** and make `apply_staff.js` skip
+   a change whose base has moved.~~ — **done.** This was the one with real data
+   at stake.
 3. **Cache report-card HTML in the cloud on push.** Small, and it removes the
-   last thing a parent cannot do while the host is off.
-4. **Prune the queue; loop the pull.** Housekeeping.
+   last thing a parent cannot do while the host is off. — *still to do*
+4. ~~**Prune the queue; loop the pull.**~~ — **done.**
 
 One thing not to do: make the cloud authoritative for anything. The value of
 "the desktop is the source of truth" is that the school's own machine, sitting

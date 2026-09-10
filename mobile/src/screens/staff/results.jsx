@@ -53,6 +53,7 @@ function ResultsScreen() {
   const [open, setOpen] = useState(null);        // the pupil whose report is open
   const [report, setReport] = useState(null);
   const [remarks, setRemarks] = useState({ conduct: '', interests: '', talents: '', remarks: '' });
+  const [remarksBase, setRemarksBase] = useState(null);
   const [savingRemarks, setSavingRemarks] = useState(false);
   const [savedRemarks, setSavedRemarks] = useState(null);
   const [tab, setTab] = useState('report');
@@ -76,22 +77,33 @@ function ResultsScreen() {
       const r = await api.studentReport(token, student.id, termId);
       setReport(r);
       const s = r.summary || {};
-      setRemarks({
+      const loaded = {
         conduct: s.conduct_traits || '',
         interests: s.learner_interests || '',
         talents: s.learner_talents || '',
         remarks: s.teacher_remarks || '',
-      });
+      };
+      setRemarks(loaded);
+      // What the school held when this teacher opened the report. Remarks are
+      // the one thing two people genuinely both write — the class teacher fills
+      // them in, the head teacher rewords them before the report goes out — so
+      // the school has to be able to tell a fresh remark from one that would
+      // paint over the head's edit. Kept separate from `remarks`, which the
+      // teacher is busy changing.
+      setRemarksBase(loaded);
     } catch (e) { setReport({ error: e.message, subjects: [] }); }
   }, [token]);
 
   async function saveRemarks() {
     setSavingRemarks(true); setSavedRemarks(null);
     try {
-      await api.saveRemarks(token, { studentId: open.id, ...remarks });
+      await api.saveRemarks(token, { studentId: open.id, ...remarks, base: remarksBase });
       setSavedRemarks(mode === 'cloud'
         ? 'Saved and queued — it reaches the school when its computer next syncs.'
         : 'Saved to the report card.');
+      // Offline nothing reloads, so the baseline moves on by hand: what was
+      // just sent is what this teacher now believes the school holds.
+      if (mode === 'cloud') setRemarksBase(remarks);
     } catch (e) { setSavedRemarks(null); setReport(r => ({ ...r, error: e.message })); }
     finally { setSavingRemarks(false); }
   }

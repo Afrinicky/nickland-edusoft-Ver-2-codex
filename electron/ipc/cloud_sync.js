@@ -10,6 +10,15 @@ const { getSetting, setSetting } = require('../utils/idgen');
 
 let timer = null;
 
+// Unreviewed conflicts. Cheap enough to answer on every status poll, and the
+// number is the whole point: a school that is never told keeps the mark it does
+// not know was disputed.
+function conflictCount(db) {
+  try {
+    return db.prepare('SELECT COUNT(*) AS n FROM sync_conflicts WHERE reviewed_at IS NULL').get().n;
+  } catch (_) { return 0; }
+}
+
 function startScheduler(db) {
   if (timer) return;
   const tick = async () => {
@@ -45,7 +54,43 @@ module.exports = function registerCloudSyncHandlers(ipcMain, db) {
         : null,
       last_push_at: getSetting(db, 'cloud_last_push_at', '') || null,
       last_pull_at: getSetting(db, 'cloud_last_pull_at', '') || null,
+      // Work a teacher did off-LAN that the school's own database had already
+      // moved past. The desktop kept its own value; somebody should still be
+      // told, or "the mark I entered is not there" becomes a support call with
+      // no answer.
+      conflicts: conflictCount(db),
     };
+  });
+
+  // What the desktop kept, and what it kept it instead of. Read-only: resolving
+  // one means opening the mark or the remark and deciding, which is the ordinary
+  // screen's job, not a second editor bolted onto the sync page.
+  ipcMain.handle('cloud:conflicts', (_e, { limit = 100, includeReviewed = false } = {}) => {
+    if (!security.checkPermission(db, 'settings', 'view')) return { ok: false, error: 'Access denied.' };
+    try {
+      const rows = db.prepare(`
+        SELECT c.*, s.index_number, TRIM(s.surname || ' ' || s.first_name) AS student_name,
+               sub.name AS subject_name, u.full_name AS user_name
+          FROM sync_conflicts c
+          LEFT JOIN students s ON s.id = c.student_id
+          LEFT JOIN subjects sub ON sub.id = c.subject_id
+          LEFT JOIN users u ON u.id = c.user_id
+         WHERE (? = 1 OR c.reviewed_at IS NULL)
+         ORDER BY c.created_at DESC, c.id DESC
+         LIMIT ?
+      `).all(includeReviewed ? 1 : 0, Math.max(1, Math.min(500, limit)));
+      return { ok: true, conflicts: rows, open: conflictCount(db) };
+    } catch (_) { return { ok: true, conflicts: [], open: 0 }; }
+  });
+
+  // Marking one seen is not the same as changing anything: the mark stays what
+  // the school says it is. This only takes it off the list.
+  ipcMain.handle('cloud:conflict-reviewed', (_e, { id } = {}) => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return { ok: false, error: 'Access denied.' };
+    try {
+      db.prepare('UPDATE sync_conflicts SET reviewed_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+      return { ok: true, open: conflictCount(db) };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
   });
 
   ipcMain.handle('cloud:configure', (_e, patch) => {
