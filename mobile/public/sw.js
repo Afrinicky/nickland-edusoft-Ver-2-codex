@@ -15,7 +15,11 @@
  * Registration only succeeds on a secure origin, so this runs for the HTTPS
  * portal and not for the plain-HTTP desktop host on the school Wi-Fi.
  */
-const VERSION = 'edusoft-shell-v1';
+// Bumped when the SHELL ITSELF changes rather than the bundle inside it —
+// index.html carries the reset that decides whether the document scrolls, and
+// a phone still holding the old one would still be dragging the whole page
+// around. `activate` deletes every cache that is not this name.
+const VERSION = 'edusoft-shell-v2';
 const SHELL = ['/', '/index.html', '/manifest.json', '/app-icon.png', '/favicon.ico'];
 
 self.addEventListener('install', (event) => {
