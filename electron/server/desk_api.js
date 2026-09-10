@@ -69,6 +69,8 @@ const HOST_ONLY = new Map([
   ['workbook:open-folder', 'This opens a folder on the school’s computer.'],
   ['workbook:reveal', 'This opens a folder on the school’s computer.'],
   ['workbook:pick-file', 'This opens a file chooser on the school’s computer.'],
+  ['onboarding:open-folder', 'This opens a folder on the school’s computer.'],
+  ['onboarding:pick-file', 'This opens a file chooser on the school’s computer.'],
   ['students:bulk-upload', 'Choose the file with the Import button, which uploads it.'],
   ['students:bulk-preview', 'Choose the file with the Import button, which uploads it.'],
   ['exams:import-template', 'Choose the file with the Import button, which uploads it.'],

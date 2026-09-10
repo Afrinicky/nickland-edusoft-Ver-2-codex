@@ -22,6 +22,7 @@ import Guard from '../../components/RequirePermission.jsx';
 import AccessControl from './AccessControl.jsx';
 import TeacherAssignments from './TeacherAssignments.jsx';
 import Backup from './Backup.jsx';
+import Onboarding from './Onboarding.jsx';
 
 // Settings grouped into logical sections.
 //
@@ -35,6 +36,7 @@ const SECTIONS = [
     title: 'School',
     items: [
       { to: 'school',     label: 'School Identity',   icon: '🏫' },
+      { to: 'onboarding', label: 'Onboarding',        icon: '📘' },
       { to: 'branding',   label: 'Appearance',        icon: '🎨' },
       { to: 'signatures', label: 'Signatures',        icon: '✍️' },
     ],
@@ -114,6 +116,7 @@ export default function SettingsIndex() {
           <Routes>
             <Route index element={<Navigate to="school" replace />} />
             <Route path="school" element={<SchoolIdentity />} />
+            <Route path="onboarding" element={<Onboarding />} />
             <Route path="branding" element={<Branding />} />
             <Route path="signatures" element={<Signatures />} />
             <Route path="receipts" element={<Guard module="fees"><ReceiptTemplates /></Guard>} />
