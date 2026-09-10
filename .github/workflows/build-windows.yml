@@ -66,6 +66,15 @@ jobs:
       - name: Desktop regression tests
         run: node test/regressions.js
 
+      # Bringing a school onto the system from its own Excel. Here rather than
+      # only in `npm test`, because what it guards is a school's whole record
+      # arriving exactly once: a re-import that corrects rather than clones, an
+      # opening balance that does not accumulate, and a pupil who cannot be
+      # confused with a namesake. The round-trip case builds a real .xlsx, so it
+      # needs the dependency install two steps up.
+      - name: Onboarding workbook (a school's records, brought across)
+        run: node test/onboarding_workbook.js
+
       - name: Web app serving (desktop host)
         run: node test/webapp.js
 
