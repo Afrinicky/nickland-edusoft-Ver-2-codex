@@ -1,7 +1,7 @@
 # Working while the desktop is off
 
-*Written as advice before any of it was built. Three of the four rough edges in
-§3 have since been closed and are marked as such; the rest still reads as the
+*Written as advice before any of it was built. All four rough edges in §3 have
+since been closed and are marked as such; the rest still reads as the
 recommendation it was.*
 
 The ask: no API backend or server for the cloud. The desktop host stays the
@@ -102,9 +102,10 @@ Three of the four are now closed. What follows describes each problem as it
 stood, and then what was done about it — the problem is left in because the
 reason for the fix is the useful half.
 
-**Status:** the silent overwrite is fixed (`sync_conflicts`, and a base stamped
-on every queued mark and remark); the queue is pruned; the drain loops. Cached
-report cards are still not built.
+**Status:** all four are closed. The silent overwrite is fixed
+(`sync_conflicts`, and a base stamped on every queued mark and remark); the
+queue is pruned; the drain loops; and a closed term's report cards are
+published.
 
 ### The cloud silently overwrites a desktop correction
 
@@ -151,10 +152,24 @@ was the right call, and is why the teacher app, the parent app and the desktop
 print byte-identical documents. The consequence is that with the host off, a
 parent asking for a report card gets nothing.
 
-If that matters, the honest options are to say so in the app ("report cards are
-available when the school's computer is on") or to cache the last generated HTML
-per pupil per term in the cloud when the host pushes. The second is cheap and I
-would take it: a report card for a closed term does not change.
+**Fixed, and both options taken.** The app already said so, which was the
+honest half; the document is now cached as well.
+
+Only for a term that has ENDED, and that is what makes it affordable: a closed
+term's card does not change, so it is projected once and never again, while the
+current term's — which moves every time a mark is entered — is never projected
+at all. Asking for this term's card still says the school's computer is needed,
+which beats a stale document with this morning's marks missing from it.
+
+The finished HTML is stored rather than the figures. The figures are already up
+there in the student snapshot and were never the problem: the crest, the
+signatures, the grading scale and the layout are, and a document rebuilt from a
+projection would be a different document wearing the same name.
+
+Publishing is a decision somebody makes (Settings → Cloud Sync), not something
+on a timer: it is the act of saying "this term is finished and these are the
+cards", and a school still correcting marks should not have yesterday's version
+of them sitting on the internet.
 
 ### The queue is never pruned
 
@@ -188,8 +203,8 @@ the sync screen says so rather than leaving it to look stuck.
 2. ~~**Add version stamps to the queued changes** and make `apply_staff.js` skip
    a change whose base has moved.~~ — **done.** This was the one with real data
    at stake.
-3. **Cache report-card HTML in the cloud on push.** Small, and it removes the
-   last thing a parent cannot do while the host is off. — *still to do*
+3. ~~**Cache report-card HTML in the cloud on push.**~~ — **done.** It was the
+   last thing a parent could not do while the host is off.
 4. ~~**Prune the queue; loop the pull.**~~ — **done.**
 
 One thing not to do: make the cloud authoritative for anything. The value of

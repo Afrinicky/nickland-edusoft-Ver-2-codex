@@ -162,6 +162,46 @@ function makeDesktopDb() {
       kidsBack.json.ok && kidsBack.json.children.length === 1, kidsBack.json.children);
   }
 
+  // ── Last term's report card, with the school's computer off ─────────────
+  // Every printout is normally fetched from the desktop's own generator, which
+  // is why the office, the phone and the browser print the same document — and
+  // why, with the host off, a parent asking for one used to get nothing.
+  {
+    const outboxMod = require(path.join(ROOT, 'electron/server/sync/outbox.js'));
+
+    // The current term is never published: it changes on every mark entered.
+    const live = outboxMod.enqueueReportCard(db, 1, 3);
+    ck('the term still running is NOT published', live === null);
+
+    // Close it, and publish.
+    db.prepare('UPDATE terms SET is_current = 0, end_date = ? WHERE id = 3').run('2026-07-31');
+    const pub = outboxMod.enqueueClosedTermReportCards(db, {});
+    ck('a closed term publishes the pupils who have marks in it',
+      pub.ok && pub.published === 1, pub);
+    await client.push(db);
+
+    const listed = await httpJson(`${base}/api/v1/portal/report-cards`,
+      { headers: { Authorization: 'Bearer ' + login.json.token } });
+    ck('the parent is told a card is waiting',
+      listed.json.ok && listed.json.report_cards.length === 1, listed.json);
+
+    const card = await httpJson(`${base}/api/v1/portal/report-card?student_id=1`,
+      { headers: { Authorization: 'Bearer ' + login.json.token } });
+    ck('THE PARENT CAN OPEN IT WITH THE SCHOOL SHUT',
+      card.json.ok && typeof card.json.document === 'string', card.json && card.json.error);
+    ck('and it is the school\'s own document, crest and all',
+      card.json.document.includes('<!doctype html>') && card.json.document.includes('Report card'),
+      (card.json.document || '').slice(0, 80));
+
+    // Another parent's child is not theirs to open.
+    const notMine = await httpJson(`${base}/api/v1/portal/report-card?student_id=99`,
+      { headers: { Authorization: 'Bearer ' + login.json.token } });
+    ck('another child\'s card is refused', notMine.status === 403, notMine.status);
+
+    // Put the term back so nothing below sees a school between terms.
+    db.prepare('UPDATE terms SET is_current = 1 WHERE id = 3').run();
+  }
+
   // Wrong key is rejected by the cloud.
   setS('school_api_key', 'sk_wrong');
   outbox.postToOutbox(db, { entity_type: 'receipt', entity_key: 'r1', payload: {} });

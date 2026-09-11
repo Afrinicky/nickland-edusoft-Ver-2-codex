@@ -13,10 +13,10 @@ than discover.
 
 | | What it is | Answers |
 |---|---|---|
-| **The installed application** | The school's own computer | all 407 |
-| **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 380 of 407 (93%) |
-| **Hosted — the installer's own code** | The internet, running host/server.js | 380 of 407 (93%) |
-| **Hosted — the Python service** | The internet, running cloud-python | 107 of 407 (26%) |
+| **The installed application** | The school's own computer | all 408 |
+| **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 381 of 408 (93%) |
+| **Hosted — the installer's own code** | The internet, running host/server.js | 381 of 408 (93%) |
+| **Hosted — the Python service** | The internet, running cloud-python | 107 of 408 (26%) |
 
 There are two ways to be hosted and they are not equal. **host/server.js**
 runs the installed application's own handlers on a server — the same code, so
@@ -190,7 +190,7 @@ The school's own computer only.
 
 ## Cloud sync
 
-0 of 2 online.
+0 of 3 online.
 
 | Channel | Hosted |
 |---|---|
@@ -198,6 +198,7 @@ The school's own computer only.
 | `cloud:configure` | office PC |
 | `cloud:conflict-reviewed` | not yet |
 | `cloud:conflicts` | not yet |
+| `cloud:publish-report-cards` | not yet |
 | `cloud:pull-now` | office PC |
 | `cloud:push-now` | office PC |
 | `cloud:status` | office PC |

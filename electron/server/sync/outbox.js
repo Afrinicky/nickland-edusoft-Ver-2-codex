@@ -342,6 +342,91 @@ function enqueueStudentSnapshot(db, studentId) {
 
 // Enqueue everything the portal needs to serve a school that already has data.
 //
+// ── Report cards, for when the school's computer is off ─────────────────────
+//
+// Every printout in the apps is fetched from the desktop's own generator, which
+// was the right call: it is why the teacher app, the parent app and the office
+// print byte-identical documents, and why the portal carries no report-card
+// layout of its own. The consequence is that with the host off, a parent asking
+// for a report card gets nothing — the app says so rather than failing quietly,
+// which is honest but is not the document.
+//
+// So the document itself is cached, and ONLY for a term that has ended. That is
+// the whole reason this is affordable: a closed term's report card does not
+// change, so it is projected once and never again, while the current term's —
+// which moves every time a mark is entered — is never projected at all. A
+// parent asking for this term's card still needs the school's computer, and is
+// still told so.
+//
+// It is stored as the finished HTML rather than the figures, because the
+// figures are already up there in the student snapshot and are not the problem:
+// the crest, the signatures, the grading scale and the layout are, and a
+// document rebuilt from a projection would be a different document wearing the
+// same name.
+function enqueueReportCard(db, studentId, termId, getResourcePath) {
+  if (!syncEnabled(db)) return null;
+  try {
+    const term = db.prepare('SELECT id, is_current FROM terms WHERE id = ?').get(termId);
+    // Refused rather than skipped quietly: projecting the current term would
+    // re-push every pupil's card on every mark entered, which is exactly the
+    // cloud consumption this is supposed to avoid.
+    if (!term || term.is_current) return null;
+
+    const reports = require('../../ipc/reports');
+    if (!reports || !reports.reportCardDocument) return null;
+    const r = reports.reportCardDocument(db, getResourcePath || (() => null),
+      { studentId, termId, colorMode: 'color' });
+    if (!r || !r.ok || !r.document) return null;
+
+    return postToOutbox(db, {
+      entity_type: 'report_card',
+      entity_key: `report:${studentId}:${termId}`,
+      payload: {
+        student_id: studentId,
+        term_id: termId,
+        // What the parent's app shows beside it, so it need not fetch the
+        // document to label the button.
+        student_name: (r.meta && r.meta.student_name) || null,
+        term_label: (r.meta && r.meta.term_label) || null,
+        generated_at: new Date().toISOString(),
+        document: r.document,
+      },
+    });
+  } catch (_) { return null; }
+}
+
+/** Every active pupil's card for one closed term — or the latest closed one. */
+function enqueueClosedTermReportCards(db, { termId = null, getResourcePath = null } = {}) {
+  if (!syncEnabled(db)) return { ok: false, error: 'Cloud sync is switched off.' };
+  let term;
+  try {
+    term = termId
+      ? db.prepare('SELECT id, is_current FROM terms WHERE id = ?').get(termId)
+      : db.prepare(`SELECT id, is_current FROM terms
+                     WHERE COALESCE(is_current, 0) = 0 AND end_date IS NOT NULL
+                     ORDER BY end_date DESC LIMIT 1`).get();
+  } catch (_) { term = null; }
+  if (!term) return { ok: false, error: 'No closed term to publish report cards for.' };
+  if (term.is_current) {
+    return { ok: false, error: 'This term is still running. A report card is published once the term has ended.' };
+  }
+
+  let n = 0;
+  try {
+    // Only pupils who actually have marks in it. A card with nothing on it is
+    // not worth the row, and would read as a school that lost the marks.
+    const rows = db.prepare(`
+      SELECT DISTINCT s.id FROM students s
+        JOIN scores sc ON sc.student_id = s.id AND sc.term_id = ?
+       WHERE s.status = 'Active'
+    `).all(term.id);
+    for (const row of rows) {
+      if (enqueueReportCard(db, row.id, term.id, getResourcePath)) n++;
+    }
+  } catch (_) {}
+  return { ok: true, term_id: term.id, published: n };
+}
+
 // Every other enqueue in the app is event-driven: a payment, a score entry, an
 // attendance mark. That means switching cloud sync on for an existing school
 // projected NOTHING — "Push now" reported 0 records, the school's portal page
@@ -425,7 +510,7 @@ function backfillAll(db, { receiptLimit = 200 } = {}) {
 
 module.exports = {
   syncEnabled, postToOutbox, listUnsynced, markSynced, markFailed, pendingCount, enqueueStudentSnapshot,
-  enqueueTombstone,
+  enqueueTombstone, enqueueReportCard, enqueueClosedTermReportCards,
   enqueueSchoolProfile,
   nextVersion, retryAll, deadCount, pruneSynced, backoffSeconds, MAX_ATTEMPTS, backfillAll,
 };

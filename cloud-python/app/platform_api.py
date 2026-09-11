@@ -124,6 +124,26 @@ def allocate_school_id(store, name, requested=None):
     return f"{base}-{secrets.token_hex(3)}"
 
 
+# ── Writing it down ─────────────────────────────────────────────────────────
+# PRD §1 asks for audit logging and for protection against cross-tenant access.
+# Isolation is structural and always was — a connection is pinned to one
+# school's schema and a key resolves to exactly one school — but "it cannot
+# happen" and "we would know if it did" are different properties, and only the
+# second survives being wrong.
+#
+# So the acts that belong to no school are written here: a school enrolled, a
+# key reissued, a key presented that belongs to nobody. A school's own log
+# cannot hold any of them — it cannot record its own creation, and a key aimed
+# at a school that rejected it must not be filed under that school, or the
+# victim's log becomes the attacker's diary.
+def audit(store, action, **fields):
+    """Record one act. Never raises: see PgStore.record_audit."""
+    try:
+        store.record_audit({"action": action, **fields})
+    except Exception:
+        pass
+
+
 # ── Enrolling a school ──────────────────────────────────────────────────────
 def provision_school(store, name, school_id=None, seed=True):
     """Bring a school into existence — both halves of it, in one call.
@@ -147,6 +167,8 @@ def provision_school(store, name, school_id=None, seed=True):
     """
     sid = school_id or allocate_school_id(store, name)
     if store.get_school(sid):
+        audit(store, "school_enrol_refused", school_id=sid, actor="platform",
+              outcome="refused", detail=f'"{sid}" is already enrolled.')
         return {"ok": False, "status": 409,
                 "error": f'A school with the id "{sid}" is already enrolled.'}
 
@@ -154,6 +176,8 @@ def provision_school(store, name, school_id=None, seed=True):
     try:
         schema = sdb.provision(sid, seed=seed)
     except Exception as exc:
+        audit(store, "school_enrol_failed", school_id=sid, actor="platform",
+              outcome="failed", detail=f"The school's database could not be created: {exc}")
         return {"ok": False, "status": 503,
                 "error": f"The school's database could not be created: {exc}"}
 
@@ -168,10 +192,17 @@ def provision_school(store, name, school_id=None, seed=True):
     try:
         created = store.create_school(name=name, school_id=sid)
     except Exception as exc:
+        # The half-school case, and the reason the listing reconciles two
+        # registers: this is written down so it is findable later.
+        audit(store, "school_enrol_incomplete", school_id=sid, actor="platform",
+              outcome="failed",
+              detail=f"Database created, registry row failed: {exc}")
         return {"ok": False, "status": 503,
                 "error": f"The school's database was created but it could not be enrolled: {exc}",
                 "school_id": sid, "schema": schema}
 
+    audit(store, "school_enrolled", school_id=created["school_id"], actor="platform",
+          detail=f'Enrolled "{name}" with its own database ({schema}).')
     return {
         "ok": True,
         "school_id": created["school_id"],
@@ -232,6 +263,8 @@ def rotate_key(store, school_id):
     changes, so the school must be told before this is called, not after.
     """
     if not store.get_school(school_id):
+        audit(store, "key_rotate_refused", school_id=school_id, actor="platform",
+              outcome="refused", detail="No such school.")
         return {"ok": False, "status": 404, "error": "Unknown school."}
     key = auth.gen_key()
     try:
@@ -239,6 +272,10 @@ def rotate_key(store, school_id):
     except AttributeError:
         return {"ok": False, "status": 501,
                 "error": "This store cannot rotate a school key."}
+    # The key itself is never written down — only that it changed, and when.
+    # A log that held the credential would be a second place to steal it from.
+    audit(store, "key_rotated", school_id=school_id, actor="platform",
+          detail="A new sync key was issued; the previous one stopped working.")
     return {"ok": True, "school_id": school_id, "api_key": key}
 
 

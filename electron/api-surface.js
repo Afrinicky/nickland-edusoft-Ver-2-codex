@@ -282,6 +282,9 @@ function buildApi(invoke) {
       // What the school kept when a teacher's off-LAN work disagreed with it.
       conflicts:         (opts)                => invoke('cloud:conflicts', opts || {}),
       conflictReviewed:  (id)                  => invoke('cloud:conflict-reviewed', { id }),
+      // Last term's report cards, so a parent can open one with the
+      // school's computer switched off.
+      publishReportCards: (termId)             => invoke('cloud:publish-report-cards', { termId }),
     },
 
     // ── Mobile payment intents (accounts office review) ──

@@ -515,6 +515,51 @@ function createServer(store) {
           return json(res, 200, { ok: true, children });
         }
 
+        // ── A report card, with the school's computer off ─────────────
+        // The desktop publishes the finished document for a term that has
+        // ENDED (see electron/server/sync/outbox.js). A closed term's card
+        // does not change, so it is projected once; the current term's is
+        // never projected at all, and asking for it still says the school's
+        // computer is needed — which beats a stale document with this
+        // morning's marks missing from it.
+        if (p === '/api/v1/portal/report-card' && req.method === 'GET') {
+          const studentId = q.student_id || '';
+          const termId = q.term_id || '';
+          const mine = new Set(authRec.student_keys || []);
+          if (!studentId || !mine.has(`student:${studentId}`)) {
+            return json(res, 403, { ok: false, error: 'Not your child.' });
+          }
+          let cards = (await store.listSnapshots(claims.school_id, 'report_card'))
+            .map(s => s.payload).filter(Boolean)
+            .filter(c => String(c.student_id) === String(studentId));
+          if (termId) cards = cards.filter(c => String(c.term_id) === String(termId));
+          if (!cards.length) {
+            return json(res, 404, { ok: false, error:
+              'No report card has been published for this child yet. Report cards ' +
+              'become available once the term has ended.' });
+          }
+          cards.sort((a, b) => String(b.generated_at || '').localeCompare(String(a.generated_at || '')));
+          const c = cards[0];
+          return json(res, 200, {
+            ok: true, student_id: c.student_id, term_id: c.term_id,
+            term_label: c.term_label, student_name: c.student_name,
+            generated_at: c.generated_at, document: c.document,
+          });
+        }
+
+        // Which terms have a card waiting, without shipping the documents.
+        if (p === '/api/v1/portal/report-cards' && req.method === 'GET') {
+          const studentId = q.student_id || '';
+          const mine = new Set(authRec.student_keys || []);
+          const out = (await store.listSnapshots(claims.school_id, 'report_card'))
+            .map(s => s.payload).filter(Boolean)
+            .filter(c => mine.has(`student:${c.student_id}`))
+            .filter(c => !studentId || String(c.student_id) === String(studentId))
+            .map(({ document, ...rest }) => rest)
+            .sort((a, b) => String(b.generated_at || '').localeCompare(String(a.generated_at || '')));
+          return json(res, 200, { ok: true, report_cards: out });
+        }
+
         if (p === '/api/v1/portal/announcements' && req.method === 'GET') {
           const mine = new Set(authRec.student_keys || []);
           const items = (await store.listSnapshots(claims.school_id, 'announcement'))

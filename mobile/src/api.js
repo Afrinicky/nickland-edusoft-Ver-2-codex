@@ -631,10 +631,24 @@ export const api = {
   // Host-only, and it says so. The projection the internet portal carries has
   // no crest, no signatures and no grading scale, so a report card built from
   // it would be a different document wearing the same name.
-  reportCardDocument: (token, studentId, termId) =>
+  // Over the internet the school publishes the finished document for a term
+  // that has ENDED, so a parent can open last term's report card with the
+  // school's computer switched off. The current term's is never published —
+  // it changes every time a mark is entered — and asking for it still says
+  // the school's computer is needed, which beats a stale document with this
+  // morning's marks missing from it.
+  reportCardDocument: async (token, studentId, termId) => {
+    if (MODE !== 'cloud') {
+      return requestHtml(`/results/student/${studentId}/report.html${termId ? `?termId=${termId}` : ''}`, { token });
+    }
+    const q = `?student_id=${encodeURIComponent(studentId)}${termId ? `&term_id=${encodeURIComponent(termId)}` : ''}`;
+    const r = await request(`/portal/report-card${q}`, { token });
+    return r && r.document ? r.document : r;
+  },
+  publishedReportCards: (token, studentId) =>
     MODE === 'cloud'
-      ? hostOnly('Printing a report card')()
-      : requestHtml(`/results/student/${studentId}/report.html${termId ? `?termId=${termId}` : ''}`, { token }),
+      ? request(`/portal/report-cards${studentId ? `?student_id=${encodeURIComponent(studentId)}` : ''}`, { token })
+      : Promise.resolve({ ok: true, report_cards: [] }),
   studentProfileDocument: (token, studentId) =>
     MODE === 'cloud'
       ? hostOnly('Printing a pupil profile')()
