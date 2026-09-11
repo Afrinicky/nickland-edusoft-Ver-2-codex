@@ -21,6 +21,7 @@ from . import school_api
 from . import desk_api
 from . import portal_auth as pauth
 from . import portals as portal_model
+from . import platform_api
 from . import ratelimit
 from . import staff as staff_api
 from . import webapp
@@ -229,7 +230,14 @@ def create_app(store=None) -> FastAPI:
     @app.get("/api/v1/portal/children")
     def children(authorization: str = Header(None)):
         claims, rec = require_parent(authorization)
-        by_key = {s["entity_key"]: s["payload"] for s in S().list_snapshots(claims["school_id"], "student_snapshot")}
+        # A withdrawn pupil is pushed up as a tombstone: the row stays so its
+        # version keeps counting, but its payload is emptied. Skipping the empty
+        # ones is what actually removes the child from the parent's app — and it
+        # is a skip rather than a `null` in the list, which is what the app would
+        # otherwise be handed and would draw as a blank card.
+        by_key = {s["entity_key"]: s["payload"]
+                  for s in S().list_snapshots(claims["school_id"], "student_snapshot")
+                  if s.get("payload")}
         kids = [by_key[k] for k in (rec.get("student_keys") or []) if k in by_key]
         return {"ok": True, "children": kids}
 
@@ -809,6 +817,44 @@ def create_app(store=None) -> FastAPI:
         return {"ok": True}
 
     # ── School-key: admin (portal backend / read model) ──
+    # ── Nickland's own admin ────────────────────────────────────────────
+    # Every other admin route is authenticated with a SCHOOL's key and can only
+    # ever reach that school. These are the vendor's, and are the only way a
+    # school comes into existence. A service with no PLATFORM_ADMIN_KEY set
+    # refuses them all rather than falling back to something weaker.
+    def require_platform(key):
+        if not platform_api.platform_enabled():
+            raise HTTPException(status_code=404, detail={
+                "ok": False,
+                "error": "This service has no platform administration configured."})
+        if not platform_api.check_key(key):
+            raise HTTPException(status_code=401, detail={
+                "ok": False, "error": "invalid platform key"})
+        return True
+
+    @app.get("/api/v1/platform/schools")
+    def platform_schools(x_platform_key: str = Header(None)):
+        require_platform(x_platform_key)
+        return {"ok": True, "schools": platform_api.list_schools(S())}
+
+    @app.post("/api/v1/platform/schools")
+    async def platform_create_school(request: Request, x_platform_key: str = Header(None)):
+        require_platform(x_platform_key)
+        body = await _json(request)
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return _err(400, "A school name is required.")
+        res = platform_api.provision_school(
+            S(), name,
+            school_id=(body.get("school_id") or None),
+            seed=body.get("seed") is not False)
+        return _send(res)
+
+    @app.post("/api/v1/platform/schools/{school_id}/rotate-key")
+    def platform_rotate_key(school_id: str, x_platform_key: str = Header(None)):
+        require_platform(x_platform_key)
+        return _send(platform_api.rotate_key(S(), school_id))
+
     @app.get("/api/v1/admin/snapshots")
     def admin_snapshots(type: str = None, x_school_key: str = Header(None)):
         school = require_school(x_school_key)

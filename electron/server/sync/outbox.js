@@ -204,14 +204,45 @@ function enqueueSchoolProfile(db) {
   } catch (_) { return null; }
 }
 
+// A pupil who has gone, said out loud.
+//
+// Until this, leaving the school was invisible to the cloud. `students:delete`
+// removed the row and enqueued nothing, so the snapshot pushed up last term
+// stayed there — the parent kept seeing their child's balance, the staff app
+// kept listing them, and the only way to remove them was to wipe the school and
+// re-send it. Marking a pupil Inactive did the same nothing: backfill stopped
+// re-sending them, which is not the same as withdrawing what was already sent.
+//
+// A tombstone carries `op: 'delete'` AND a NULL payload, and the null is the
+// important half. It is not a flag saying "treat this as gone" that a reader
+// might forget to check: the record's contents are actually removed from the
+// cloud, which is what a school withdrawing a child's details is entitled to
+// expect. `nextVersion` keeps counting up across it, so a tombstone cannot be
+// overtaken by a stale upsert still sitting in a retry queue.
+function enqueueTombstone(db, entityType, entityKey) {
+  if (!syncEnabled(db)) return null;
+  return postToOutbox(db, {
+    entity_type: entityType, entity_key: entityKey, op: 'delete', payload: null,
+  });
+}
+
 function enqueueStudentSnapshot(db, studentId) {
   if (!syncEnabled(db)) return null;
   try {
     const s = db.prepare(`
-      SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names, s.current_class_id, c.name AS class_name
+      SELECT s.id, s.index_number, s.surname, s.first_name, s.other_names,
+             s.current_class_id, s.status, c.name AS class_name
       FROM students s LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?
     `).get(studentId);
-    if (!s) return null;
+    // Gone from the school, or no longer on its roll. Both are withdrawals as
+    // far as the cloud is concerned, and handling them here rather than at each
+    // call site is deliberate: every path that already re-projects a pupil —
+    // a payment, an admission edit, a status change, the backfill — becomes
+    // correct without being found and changed one at a time.
+    if (!s) return enqueueTombstone(db, 'student_snapshot', `student:${studentId}`);
+    if (String(s.status || 'Active') !== 'Active') {
+      return enqueueTombstone(db, 'student_snapshot', `student:${studentId}`);
+    }
     const term = db.prepare('SELECT id, label FROM terms WHERE is_current = 1').get();
     // A voided bill is not money owed, so it must not be projected into the
     // cloud snapshot the parent portal reads.
@@ -394,6 +425,7 @@ function backfillAll(db, { receiptLimit = 200 } = {}) {
 
 module.exports = {
   syncEnabled, postToOutbox, listUnsynced, markSynced, markFailed, pendingCount, enqueueStudentSnapshot,
+  enqueueTombstone,
   enqueueSchoolProfile,
   nextVersion, retryAll, deadCount, pruneSynced, backoffSeconds, MAX_ATTEMPTS, backfillAll,
 };

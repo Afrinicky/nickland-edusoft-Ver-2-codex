@@ -118,6 +118,15 @@ jobs:
         run: python3 tests/test_staff.py
         working-directory: cloud-python
 
+      # Enrolling a school: who may create one, the id it keeps for good, and
+      # the hostname rules. The half that provisions a real schema needs
+      # Postgres and skips without it — but the half that decides who can
+      # create a school at all does not, and that is the half worth guarding
+      # on every pull request.
+      - name: Enrolling a school (the platform's own admin)
+        run: python3 tests/test_platform.py
+        working-directory: cloud-python
+
       - name: Cross-language end-to-end (Node client → Python cloud)
         run: bash tests/cross_lang.sh
         working-directory: cloud-python

@@ -252,6 +252,22 @@ def provision(school_id, seed=True):
         conn.execute(_read("school.sql"))
         if seed:
             conn.execute(_read("seed.sql"))
+        # The school's own id, written inside its own database.
+        #
+        # `schema_name` is deliberately lossy — it has to be, because a schema
+        # name may hold only letters, digits and underscores, and a school id is
+        # a readable slug that may hold hyphens. So the name cannot be turned
+        # back into the id: `ave-maria` and `ave_maria` both become
+        # `school_ave_maria`. It went unnoticed while ids were random hex, which
+        # contains neither.
+        #
+        # Rather than sanitise less and quote more, the id is simply recorded.
+        # `provisioned()` reads it back instead of guessing at it.
+        conn.execute(
+            """INSERT INTO settings (key, value, category)
+                    VALUES ('cloud_school_id', %s, 'cloud')
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+            (str(school_id),))
     return name
 
 
@@ -271,13 +287,20 @@ def provisioned():
                 ORDER BY schema_name""").fetchall()
         for row in rows:
             name = row["schema_name"]
-            school_id = name[len("school_"):]
+            # The last resort, and only that: the schema name with its prefix
+            # removed is the id ONLY when the id contained nothing `schema_name`
+            # would have rewritten. A school provisioned before ids were
+            # recorded has no better answer available.
+            derived = name[len("school_"):]
             try:
                 conn.execute(f'SET search_path TO "{name}"')
-                found = conn.execute(
-                    "SELECT value FROM settings WHERE key = 'school_name'").fetchone()
+                rows2 = conn.execute(
+                    "SELECT key, value FROM settings WHERE key IN ('school_name', 'cloud_school_id')"
+                ).fetchall()
+                kv = {r["key"]: r["value"] for r in rows2}
+                school_id = kv.get("cloud_school_id") or derived
                 out.append({"school_id": school_id,
-                            "name": (found or {}).get("value") or school_id})
+                            "name": kv.get("school_name") or school_id})
             except Exception:
                 # A schema that is not a school, or one half-provisioned. Skip
                 # it rather than failing the whole list.

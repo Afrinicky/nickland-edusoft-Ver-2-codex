@@ -95,7 +95,9 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
         const dup = db.prepare('SELECT id FROM students WHERE index_number = ?').get(idx);
         if (dup) return { ok: false, error: `Index number "${idx}" is already used by another student.` };
       }
-      return createStudentInternal(db, data);
+      const created = createStudentInternal(db, data);
+      if (created && created.ok && created.id) project(created.id);
+      return created;
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -126,6 +128,11 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
       db.prepare(
         `UPDATE students SET ${setClauses.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
       ).run(...params);
+      // A pupil marked Inactive has left, and the cloud has to hear about it:
+      // the projection withdraws them. An ordinary edit re-projects instead, so
+      // a corrected name or a new phone number reaches the parent's app rather
+      // than waiting for the next payment to happen to push it.
+      project(id);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err.message };
@@ -134,8 +141,20 @@ function registerStudentHandlers(ipcMain, db, userDataPath) {
 
   ipcMain.handle('students:delete', (_e, id) => {
     db.prepare('DELETE FROM students WHERE id = ?').run(id);
+    // Told to the cloud AFTER the row has gone, which is what makes it a
+    // withdrawal rather than a guess: enqueueStudentSnapshot finds no pupil and
+    // posts a tombstone. Without this the snapshot pushed up last term stayed
+    // there for good — the parent kept seeing a child the school had removed.
+    project(id);
     return { ok: true };
   });
+
+  // Keeping the cloud in step with the office. Wrapped so a sync that is
+  // switched off, or a projection that throws, can never turn an admission into
+  // an error the school sees — the outbox is a mailbox, not part of the write.
+  function project(studentId) {
+    try { require('../server/sync/outbox').enqueueStudentSnapshot(db, studentId); } catch (_) {}
+  }
 
   // Upload photo: copy from source path into userData/uploads/students/{id}.{ext}
   ipcMain.handle('students:upload-photo', (_e, { studentId, sourcePath }) => {

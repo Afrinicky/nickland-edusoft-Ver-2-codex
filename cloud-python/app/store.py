@@ -52,6 +52,15 @@ class MemoryStore:
         s = self._schools.get(sid)
         return {"school_id": sid, "name": s["name"]} if s else None
 
+    def set_school_key(self, sid, api_key):
+        """Replace a school's sync key. Only the hash is kept, here as in
+        Postgres, so this is a rotation and never a recovery."""
+        s = self._schools.get(sid)
+        if not s:
+            return False
+        s["key_hash"] = auth.hash_key(api_key)
+        return True
+
     def list_schools(self):
         return [{"school_id": sid, "name": s["name"]} for sid, s in self._schools.items()]
 
@@ -167,6 +176,15 @@ class PgStore:
     def get_school(self, sid):
         row = self._q("SELECT school_id, name FROM schools WHERE school_id=%s", (sid,), "one")
         return {"school_id": row[0], "name": row[1]} if row else None
+
+    def set_school_key(self, sid, api_key):
+        """Replace a school's sync key. The column is a hash and always was,
+        so the old key cannot be read back — this rotates, it does not recover.
+        The school's data is untouched; only what its desktop signs in with
+        changes, which is why the school has to be told first."""
+        self._q("UPDATE schools SET key_hash=%s WHERE school_id=%s",
+                (auth.hash_key(api_key), sid))
+        return True
 
     def list_schools(self):
         rows = self._q("SELECT school_id, name FROM schools ORDER BY name", (), "all") or []

@@ -125,6 +125,86 @@ the change queue on a timer.
 
 ---
 
+## Enrolling a school
+
+A school is **two things** in this service and needs both:
+
+| | |
+|---|---|
+| a row in `schools` | what the desktop's sync key is checked against, and what the parent portal's school picker lists |
+| a Postgres **schema** | the eighty-one tables the hosted office application reads |
+
+Onboarding used to write the first and stop, so an enrolled school could sync
+and could not be opened on the web — and nothing said so. Both are now done in
+one act, by the command line and the API alike.
+
+### From the command line
+
+```bash
+DATABASE_URL="postgres://…?sslmode=require" \
+PORTAL_BASE_DOMAIN="edusoft.gh" \
+python cloud-python/scripts/create_school.py "Ave Maria School"
+```
+
+It prints the school id, the sync key (**once** — it is stored only as a hash)
+and the portal address.
+
+### Over the API
+
+Set `PLATFORM_ADMIN_KEY` on the service to a long random string. This is
+**Nickland's** key, not a school's: it is the only credential that can bring a
+school into existence, which is why it is kept apart from the school keys every
+desktop holds. With it unset, the platform routes answer `404` — there is no
+fallback to something weaker.
+
+```bash
+curl -X POST https://api.example/api/v1/platform/schools \
+  -H "x-platform-key: $PLATFORM_ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"name":"Ave Maria School"}'
+
+curl https://api.example/api/v1/platform/schools -H "x-platform-key: $PLATFORM_ADMIN_KEY"
+curl -X POST https://api.example/api/v1/platform/schools/ave-maria-school/rotate-key \
+  -H "x-platform-key: $PLATFORM_ADMIN_KEY"
+```
+
+The listing reads **both** registers and says, per school, whether each half is
+there — so a school that "does not work" is explained on the first screen
+instead of from a `psql` session.
+
+### The school's own address
+
+`PORTAL_BASE_DOMAIN` holds one domain or several, separated by commas,
+semicolons or whitespace:
+
+```
+PORTAL_BASE_DOMAIN="edusoft.gh"
+PORTAL_BASE_DOMAIN="edusoft.gh, nickland.edu.gh"
+PORTAL_BASE_DOMAIN="edusoft.gh nickland.edu.gh localhost"
+```
+
+A school is reachable under every one of them, and **the first is canonical** —
+the address the platform hands out and prints. Putting a new domain at the
+front is therefore how a deployment moves house, and the old address keeps
+working for as long as it stays in the list. Nothing is written into the code.
+
+A school's id is a slug of its own name (`ave-maria-school`), so
+`ave-maria-school.edusoft.gh` needs no lookup table: resolving a host is string
+work, and a school enrolled a second ago is reachable immediately. Point a
+wildcard `*.edusoft.gh` record at the service and every school is addressed.
+
+Two rules the resolver will not bend on: the host must sit under one of the
+configured domains — anyone pointing their own DNS at the service must not be
+able to pick a tenant by name — and exactly one label, so `a.b.edusoft.gh` is
+never school `a.b`. Names that already mean something on the domain (`www`,
+`api`, `admin`, …) are refused as school ids and as hosts.
+
+With no domain configured the service still works; schools simply have no
+address, which is a real state for a deployment reached by IP, and not an
+error.
+
+---
+
 ## Checking a deploy
 
 ```bash

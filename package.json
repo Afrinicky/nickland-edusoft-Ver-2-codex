@@ -29,7 +29,7 @@
     "test:regressions": "node test/regressions.js && node test/school_fees.js && node test/onboarding_workbook.js && node test/sync_conflicts.js && node test/payment_desk.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/app_shell.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js && node test/headless_host.js && node test/host_dialect.js && node test/host_postgres.js",
     "test:contrast": "node scripts/contrast.mjs",
     "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
-    "test:online": "cd cloud-python && python3 tests/test_school.py && python3 tests/test_payments.py && python3 tests/test_dashboards.py && python3 tests/test_desk.py && cd .. && node scripts/desk-coverage.mjs --check",
+    "test:online": "cd cloud-python && python3 tests/test_platform.py && python3 tests/test_school.py && python3 tests/test_payments.py && python3 tests/test_dashboards.py && python3 tests/test_desk.py && cd .. && node scripts/desk-coverage.mjs --check",
     "pretest": "npm run build:preload",
     "pretest:regressions": "npm run build:preload"
   },
