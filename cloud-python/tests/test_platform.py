@@ -212,6 +212,61 @@ def main():
             try: sdb.drop(sid)
             except Exception: pass
 
+    # ── The platform's own audit trail ─────────────────────────────────
+    # PRD §1. Isolation here is structural — a key resolves to exactly one
+    # school and a connection is pinned to one schema — but "it cannot happen"
+    # and "we would know if it did" are different properties, and only the
+    # second survives being wrong.
+    print("\nWhat the platform writes down")
+    s5 = MemoryStore()
+    app5 = TestClient(create_app(s5), raise_server_exceptions=False)
+
+    def entries(**kw):
+        return s5.list_audit(**kw)
+
+    ck("it starts empty", entries() == [])
+
+    # A key that belongs to nobody.
+    app5.get("/api/v1/admin/snapshots", headers={"x-school-key": "sk_not_a_real_key"})
+    refused = [e for e in entries() if e["action"] == "key_refused"]
+    ck("a school key that belongs to no school is written down", len(refused) == 1, entries())
+    ck("...as a refusal, not as ordinary traffic", refused and refused[0]["outcome"] == "refused")
+    ck("...belonging to NO school, so a victim's log is not an attacker's diary",
+       refused and refused[0].get("school_id") is None, refused)
+    ck("...and the key itself is never recorded",
+       refused and "sk_not_a_real_key" not in str(refused[0]), refused)
+
+    # A platform key that belongs to nobody — the one that would matter most.
+    app5.get("/api/v1/platform/schools", headers={"x-platform-key": "pk_wrong"})
+    pk = [e for e in entries() if e["action"] == "platform_key_refused"]
+    ck("a refused platform key is written down too", len(pk) == 1, entries())
+
+    # Enrolment and rotation, on the memory store (no schema to create).
+    s6 = MemoryStore()
+    s6.create_school(name="Audit Me", school_id="audit-me")
+    platform_api.rotate_key(s6, "audit-me")
+    rot = [e for e in s6.list_audit() if e["action"] == "key_rotated"]
+    ck("reissuing a key is written down", len(rot) == 1, s6.list_audit())
+    ck("...against the school it was for", rot and rot[0]["school_id"] == "audit-me")
+    ck("...without the new key in it",
+       rot and "sk_" not in str(rot[0].get("detail") or ""), rot)
+    platform_api.rotate_key(s6, "nobody-at-all")
+    ck("rotating a key for a school that does not exist is written down as a refusal",
+       any(e["action"] == "key_rotate_refused" and e["outcome"] == "refused"
+           for e in s6.list_audit()), s6.list_audit())
+
+    # Reading it back is the platform's alone.
+    ck("a school cannot read the platform's log",
+       app5.get("/api/v1/platform/audit",
+                headers={"x-platform-key": sch["api_key"]}).status_code == 401)
+    r = app5.get("/api/v1/platform/audit", headers={"x-platform-key": KEY})
+    ck("the operator can", r.status_code == 200 and r.json().get("ok"), r.status_code)
+    ck("and reading it does not bury the refusals it was opened to find",
+       len([e for e in r.json()["audit"] if e["outcome"] != "ok"]) >= 2, r.json()["audit"])
+    only = app5.get("/api/v1/platform/audit?refused=true", headers={"x-platform-key": KEY}).json()
+    ck("which can be narrowed to refusals alone",
+       only["audit"] and all(e["outcome"] != "ok" for e in only["audit"]), only["audit"])
+
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0
 

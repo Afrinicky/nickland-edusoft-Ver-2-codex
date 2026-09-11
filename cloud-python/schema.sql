@@ -45,3 +45,36 @@ CREATE INDEX IF NOT EXISTS idx_changes_pending ON cloud_changes(school_id, type,
 
 -- Row-level security is recommended in production so a leaked query can't cross
 -- tenants; the app also always scopes by school_id.
+
+-- ── The platform's own audit trail ──────────────────────────────────────────
+-- Every school keeps its own audit log INSIDE its own schema, which is right:
+-- who changed a mark is the school's business and nobody else's. But some acts
+-- are not any one school's — enrolling one, reissuing its sync key, a key
+-- presented that belongs to nobody — and those have nowhere to be written. A
+-- school cannot hold the record of its own creation, and an attempt to use a
+-- key against a school that rejected it must not be filed under the school the
+-- attacker was aiming at.
+--
+-- So this is deliberately OUTSIDE any tenant. `school_id` is the school an
+-- entry is ABOUT and is nullable, because a refused key is about no school.
+-- Nothing here is served to a school; it answers only to the platform key.
+--
+-- No ON DELETE CASCADE on school_id, and that is the point: retiring a school
+-- must not erase the record that it existed, was enrolled on a date, and was
+-- removed on another.
+CREATE TABLE IF NOT EXISTS platform_audit (
+  id          BIGSERIAL PRIMARY KEY,
+  at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  action      TEXT NOT NULL,           -- school_enrolled | key_rotated | key_refused | …
+  school_id   TEXT,                    -- the school it is about; NULL when none
+  actor       TEXT,                    -- 'platform' | 'school' | 'anonymous'
+  outcome     TEXT NOT NULL DEFAULT 'ok',   -- ok | refused | failed
+  detail      TEXT,                    -- one sentence, for a person to read
+  remote_addr TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_platform_audit_at ON platform_audit(at DESC);
+CREATE INDEX IF NOT EXISTS idx_platform_audit_school ON platform_audit(school_id, at DESC);
+-- Refusals are what an operator comes looking for, so they are indexed apart
+-- from the ordinary traffic they would otherwise be buried in.
+CREATE INDEX IF NOT EXISTS idx_platform_audit_refused ON platform_audit(outcome, at DESC)
+  WHERE outcome <> 'ok';

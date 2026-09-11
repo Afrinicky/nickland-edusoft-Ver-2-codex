@@ -131,6 +131,27 @@ module.exports = function registerCloudSyncHandlers(ipcMain, db) {
     return r;
   });
 
+  // Publishing a closed term's report cards. Deliberately a decision somebody
+  // makes rather than something that happens on a timer: it is the act of
+  // saying "this term is finished and these are the cards", and a school that
+  // is still correcting marks should not have yesterday's version of them
+  // sitting on the internet.
+  ipcMain.handle('cloud:publish-report-cards', (_e, { termId = null } = {}) => {
+    if (!security.checkPermission(db, 'settings', 'edit')) return { ok: false, error: 'Access denied.' };
+    const outboxMod = require('../server/sync/outbox');
+    const res = outboxMod.enqueueClosedTermReportCards(db, { termId });
+    if (res.ok) {
+      try {
+        db.prepare(`
+          INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+          VALUES ('cloud_sync', NULL, 'report_cards_published', ?, ?, 'normal')
+        `).run(security.getCurrentUserId(),
+          `Published ${res.published} report card(s) for term ${res.term_id} to the cloud.`);
+      } catch (_) {}
+    }
+    return res;
+  });
+
   ipcMain.handle('cloud:push-now', async () => {
     if (!security.checkPermission(db, 'settings', 'edit')) return { ok: false, error: 'Access denied.' };
     // An explicit push is also the operator's "try again": clear any backoff and

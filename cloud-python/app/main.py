@@ -58,9 +58,20 @@ def create_app(store=None) -> FastAPI:
     def S():
         return app.state.store
 
-    def require_school(x_school_key):
+    def require_school(x_school_key, request=None):
         school = S().get_school_by_key(x_school_key) if x_school_key else None
         if not school:
+            # A key that belongs to no school. Written to the PLATFORM's log and
+            # never to a school's: the school an attacker was aiming at must not
+            # end up holding the record of the attempt, or the victim's audit
+            # trail becomes the attacker's diary. The key itself is not recorded
+            # — a log that held credentials would be a second place to steal
+            # them from — only that one was presented and refused.
+            platform_api.audit(
+                S(), "key_refused", actor="anonymous", outcome="refused",
+                detail=("A school key was presented that belongs to no school."
+                        if x_school_key else "A school-key route was called with no key."),
+                remote_addr=_client_addr(request))
             raise HTTPException(status_code=401, detail={"ok": False, "error": "invalid school key"})
         return school
 
@@ -240,6 +251,54 @@ def create_app(store=None) -> FastAPI:
                   if s.get("payload")}
         kids = [by_key[k] for k in (rec.get("student_keys") or []) if k in by_key]
         return {"ok": True, "children": kids}
+
+    # ── A report card, with the school's computer off ───────────────────
+    # The desktop publishes the finished document for a term that has ENDED
+    # (see electron/server/sync/outbox.js). A closed term's card does not
+    # change, so it is projected once; the current term's is never projected at
+    # all, and asking for it still says the school's computer is needed — which
+    # is the truth rather than a stale document with this morning's marks
+    # missing from it.
+    @app.get("/api/v1/portal/report-card")
+    def portal_report_card(student_id: str = "", term_id: str = "",
+                           authorization: str = Header(None)):
+        claims, rec = require_parent(authorization)
+        if not student_id or f"student:{student_id}" not in set(rec.get("student_keys") or []):
+            return _err(403, "Not your child.")
+
+        cards = [s for s in S().list_snapshots(claims["school_id"], "report_card")
+                 if s.get("payload")
+                 and str((s["payload"] or {}).get("student_id")) == str(student_id)]
+        if term_id:
+            cards = [c for c in cards if str(c["payload"].get("term_id")) == str(term_id)]
+        if not cards:
+            return _err(404, "No report card has been published for this child yet. "
+                             "Report cards become available once the term has ended.")
+        # Newest first, so asking without a term gets the most recent one.
+        cards.sort(key=lambda c: str((c["payload"] or {}).get("generated_at") or ""), reverse=True)
+        p = cards[0]["payload"]
+        return {"ok": True, "student_id": p.get("student_id"), "term_id": p.get("term_id"),
+                "term_label": p.get("term_label"), "student_name": p.get("student_name"),
+                "generated_at": p.get("generated_at"), "document": p.get("document")}
+
+    @app.get("/api/v1/portal/report-cards")
+    def portal_report_cards(student_id: str = "", authorization: str = Header(None)):
+        """Which terms have a card waiting, without shipping the documents."""
+        claims, rec = require_parent(authorization)
+        mine = set(rec.get("student_keys") or [])
+        out = []
+        for s in S().list_snapshots(claims["school_id"], "report_card"):
+            p = s.get("payload") or {}
+            if f"student:{p.get('student_id')}" not in mine:
+                continue
+            if student_id and str(p.get("student_id")) != str(student_id):
+                continue
+            out.append({"student_id": p.get("student_id"), "term_id": p.get("term_id"),
+                        "term_label": p.get("term_label"),
+                        "student_name": p.get("student_name"),
+                        "generated_at": p.get("generated_at")})
+        out.sort(key=lambda c: str(c.get("generated_at") or ""), reverse=True)
+        return {"ok": True, "report_cards": out}
 
     @app.get("/api/v1/portal/announcements")
     def announcements(authorization: str = Header(None)):
@@ -822,12 +881,35 @@ def create_app(store=None) -> FastAPI:
     # ever reach that school. These are the vendor's, and are the only way a
     # school comes into existence. A service with no PLATFORM_ADMIN_KEY set
     # refuses them all rather than falling back to something weaker.
+    def _client_addr(request):
+        """Best-effort, and labelled as such.
+
+        Behind a proxy the socket address is the proxy's, so the forwarded
+        header is preferred — while being exactly the header a caller can set
+        themselves. It is recorded as a hint for an operator reading the log,
+        never as an identity anything is decided on.
+        """
+        if request is None:
+            return None
+        try:
+            fwd = request.headers.get("x-forwarded-for")
+            if fwd:
+                return fwd.split(",")[0].strip()[:64]
+            return (request.client.host if request.client else None)
+        except Exception:
+            return None
+
     def require_platform(key):
         if not platform_api.platform_enabled():
             raise HTTPException(status_code=404, detail={
                 "ok": False,
                 "error": "This service has no platform administration configured."})
         if not platform_api.check_key(key):
+            # The one that would matter most if it ever succeeded, so it is the
+            # one most worth being able to count.
+            platform_api.audit(
+                S(), "platform_key_refused", actor="anonymous", outcome="refused",
+                detail="A platform administration key was presented and refused.")
             raise HTTPException(status_code=401, detail={
                 "ok": False, "error": "invalid platform key"})
         return True
@@ -854,6 +936,13 @@ def create_app(store=None) -> FastAPI:
     def platform_rotate_key(school_id: str, x_platform_key: str = Header(None)):
         require_platform(x_platform_key)
         return _send(platform_api.rotate_key(S(), school_id))
+
+    @app.get("/api/v1/platform/audit")
+    def platform_audit(limit: int = 200, school_id: str = None, refused: bool = False,
+                       x_platform_key: str = Header(None)):
+        require_platform(x_platform_key)
+        return {"ok": True,
+                "audit": S().list_audit(limit=limit, school_id=school_id, refused_only=refused)}
 
     @app.get("/api/v1/admin/snapshots")
     def admin_snapshots(type: str = None, x_school_key: str = Header(None)):

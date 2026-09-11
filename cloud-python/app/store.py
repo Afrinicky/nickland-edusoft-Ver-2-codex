@@ -21,6 +21,8 @@ class MemoryStore:
         # Snapshots are what the staff and parent endpoints read from; a secret
         # kept among them is one forgotten filter away from being served.
         self._payments = {}   # school_id -> {gateway, secret, public_key, ...}
+        # Outside every tenant on purpose — see platform_audit in schema.sql.
+        self._audit = []
         self._sid = 1
 
     def _ensure(self, sid):
@@ -115,6 +117,19 @@ class MemoryStore:
         """The in-memory store lives for one process, so there is nothing to
         reclaim. Present so the two stores answer the same calls."""
         return True
+
+    # ── the platform's own audit trail ──────────────────────────────────
+    def record_audit(self, entry):
+        self._audit.append({"id": len(self._audit) + 1, "at": _now_iso(), **entry})
+        return True
+
+    def list_audit(self, limit=200, school_id=None, refused_only=False):
+        rows = list(reversed(self._audit))
+        if school_id:
+            rows = [r for r in rows if r.get("school_id") == school_id]
+        if refused_only:
+            rows = [r for r in rows if r.get("outcome") != "ok"]
+        return rows[: max(1, min(1000, int(limit or 200)))]
 
     def set_applied_cursor(self, sid, cursor):
         """How far the desktop has consumed the change queue.
@@ -296,6 +311,41 @@ class PgStore:
     def applied_cursor(self, sid):
         row = self._q("SELECT COALESCE(applied_cursor, 0) FROM schools WHERE school_id=%s", (sid,), "one")
         return int(row[0]) if row else 0
+
+    # ── the platform's own audit trail ──────────────────────────────────
+    def record_audit(self, entry):
+        """Write one line to the platform's log.
+
+        Never raises. An audit write that could fail a request would make the
+        logging itself a way to break the service — and an operator who cannot
+        enrol a school because the log is full is worse off than one with a gap
+        in it. Failures here are swallowed deliberately.
+        """
+        try:
+            self._q(
+                """INSERT INTO platform_audit (action, school_id, actor, outcome, detail, remote_addr)
+                     VALUES (%s,%s,%s,%s,%s,%s)""",
+                (entry.get("action"), entry.get("school_id"), entry.get("actor"),
+                 entry.get("outcome", "ok"), entry.get("detail"), entry.get("remote_addr")))
+        except Exception:
+            pass
+        return True
+
+    def list_audit(self, limit=200, school_id=None, refused_only=False):
+        n = max(1, min(1000, int(limit or 200)))
+        where, params = [], []
+        if school_id:
+            where.append("school_id = %s")
+            params.append(school_id)
+        if refused_only:
+            where.append("outcome <> 'ok'")
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        rows = self._q(
+            f"""SELECT id, at, action, school_id, actor, outcome, detail, remote_addr
+                  FROM platform_audit {clause} ORDER BY at DESC, id DESC LIMIT {n}""",
+            tuple(params), "all") or []
+        keys = ["id", "at", "action", "school_id", "actor", "outcome", "detail", "remote_addr"]
+        return [dict(zip(keys, (str(r[1]) if i == 1 else r[i] for i, _ in enumerate(keys)))) for r in rows]
 
     def pending_changes(self, sid, types=None, limit=500):
         cur = self.applied_cursor(sid)

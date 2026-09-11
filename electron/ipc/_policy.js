@@ -195,6 +195,7 @@ const POLICY = {
   // Reading what the school kept when a phone disagreed with it is a read, and
   // the derived verb would have made it a change. Marking one seen is not.
   'cloud:conflicts':                    ['settings', 'view'],
+  'cloud:publish-report-cards':         ['settings', 'edit'],
   'cloud:conflict-reviewed':            ['settings', 'edit'],
   'onboarding:status':                  ['settings', 'view'],
   'onboarding:export':                  ['settings', 'view'],
