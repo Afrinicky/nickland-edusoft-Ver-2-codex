@@ -69,6 +69,12 @@ You'll need Python and Visual Studio Build Tools installed; Node.js usually prom
 
 ---
 
+## Setting it up
+
+Step by step, from an empty PC to a school running online:
+**[`SETUP.md`](SETUP.md)**. Three parts, and they are independent — a school
+can run on the first alone, forever, with no internet at all.
+
 ## Quick Start (Development)
 
 ```bash
