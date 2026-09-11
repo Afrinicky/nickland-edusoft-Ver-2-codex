@@ -127,6 +127,41 @@ function makeDesktopDb() {
   ck('website serves message threads to the parent',
     threads.json.ok && threads.json.threads.length === 1 && threads.json.threads[0].messages[0].body.includes('exercise books'));
 
+  // ── A pupil leaves the school ───────────────────────────────────────────
+  // Until tombstones, this was invisible to the cloud: the snapshot pushed up
+  // stayed there, and the parent kept seeing a child the school had removed.
+  {
+    const kidsBefore = await httpJson(`${base}/api/v1/portal/children`, { headers: { Authorization: 'Bearer ' + login.json.token } });
+    ck('the parent can see their child to begin with',
+      kidsBefore.json.ok && kidsBefore.json.children.length === 1);
+
+    // The office marks them Inactive — the ordinary way a pupil leaves.
+    db.prepare("UPDATE students SET status = 'Inactive' WHERE id = 1").run();
+    outbox.enqueueStudentSnapshot(db, 1);
+    const withdrawn = await client.push(db);
+    ck('withdrawing a pupil pushes something, rather than nothing at all', withdrawn.ok && withdrawn.pushed === 1);
+
+    const row = (await store.listSnapshots(school_id, 'student_snapshot'))
+      .find(x => x.entity_key === 'student:1');
+    ck('the cloud holds a tombstone, not the child\'s details', row && !row.payload, row);
+    ck('and it is marked as a deletion', row && row.op === 'delete', row && row.op);
+
+    const kidsAfter = await httpJson(`${base}/api/v1/portal/children`, { headers: { Authorization: 'Bearer ' + login.json.token } });
+    ck('THE PARENT NO LONGER SEES THEM',
+      kidsAfter.json.ok && kidsAfter.json.children.length === 0, kidsAfter.json.children);
+    ck('and is not handed a blank card instead',
+      !(kidsAfter.json.children || []).includes(null));
+
+    // Coming back — a pupil re-admitted after a term away — must work too, or
+    // the withdrawal is a one-way door.
+    db.prepare("UPDATE students SET status = 'Active' WHERE id = 1").run();
+    outbox.enqueueStudentSnapshot(db, 1);
+    await client.push(db);
+    const kidsBack = await httpJson(`${base}/api/v1/portal/children`, { headers: { Authorization: 'Bearer ' + login.json.token } });
+    ck('a pupil who comes back is visible again',
+      kidsBack.json.ok && kidsBack.json.children.length === 1, kidsBack.json.children);
+  }
+
   // Wrong key is rejected by the cloud.
   setS('school_api_key', 'sk_wrong');
   outbox.postToOutbox(db, { entity_type: 'receipt', entity_key: 'r1', payload: {} });

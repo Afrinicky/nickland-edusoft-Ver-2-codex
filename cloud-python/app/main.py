@@ -229,7 +229,14 @@ def create_app(store=None) -> FastAPI:
     @app.get("/api/v1/portal/children")
     def children(authorization: str = Header(None)):
         claims, rec = require_parent(authorization)
-        by_key = {s["entity_key"]: s["payload"] for s in S().list_snapshots(claims["school_id"], "student_snapshot")}
+        # A withdrawn pupil is pushed up as a tombstone: the row stays so its
+        # version keeps counting, but its payload is emptied. Skipping the empty
+        # ones is what actually removes the child from the parent's app — and it
+        # is a skip rather than a `null` in the list, which is what the app would
+        # otherwise be handed and would draw as a blank card.
+        by_key = {s["entity_key"]: s["payload"]
+                  for s in S().list_snapshots(claims["school_id"], "student_snapshot")
+                  if s.get("payload")}
         kids = [by_key[k] for k in (rec.get("student_keys") or []) if k in by_key]
         return {"ok": True, "children": kids}
 
