@@ -1,0 +1,20 @@
+# The cloud image is built from the repository root (see cloud-python/Dockerfile),
+# so the context is everything here unless it is named below. Installed packages
+# and build output are the bulk of it and are all produced inside the build.
+.git
+**/node_modules
+dist
+dist-app
+dist-desk
+mobile/dist-web
+mobile/.expo
+mobile/android
+mobile/ios
+resources/webapp
+cloud/webapp
+cloud-python/webapp
+**/__pycache__
+**/*.pyc
+**/*.log
+.venv
+.env

@@ -267,6 +267,46 @@ def main():
     ck("which can be narrowed to refusals alone",
        only["audit"] and all(e["outcome"] != "ok" for e in only["audit"]), only["audit"])
 
+    # ── The address, as a request actually arrives ─────────────────────
+    # Resolving a hostname was tested above and was called by nothing, which
+    # made the whole subdomain design a helper function: a parent opening
+    # their school's address got every school on the platform and a picker.
+    #
+    # The list is read from /portal/schools rather than /info because /info
+    # answers from the PROVISIONED schemas when this suite is run with a real
+    # DATABASE_URL — a different register, and not the one under test here.
+    print("\nA school's own address, asked over HTTP")
+    s7 = MemoryStore()
+    s7.add_school("ave-maria", "Ave Maria School", "sk_ave")
+    s7.add_school("st-johns", "St John's School", "sk_john")
+    app7 = TestClient(create_app(s7), raise_server_exceptions=False)
+
+    def ids_at(host, header="host"):
+        return sorted(s["school_id"] for s in
+                      app7.get("/api/v1/portal/schools", headers={header: host}).json()["schools"])
+
+    ck("a school's address answers with that school alone",
+       ids_at("ave-maria.nickland.edu.gh") == ["ave-maria"], ids_at("ave-maria.nickland.edu.gh"))
+    ck("...and /info says which school it resolved to, so curl can show it",
+       app7.get("/api/v1/info", headers={"host": "ave-maria.nickland.edu.gh"})
+          .json().get("school_id") == "ave-maria")
+    ck("...while the bare domain names no school",
+       "school_id" not in app7.get("/api/v1/info",
+                                   headers={"host": "nickland.edu.gh"}).json())
+    ck("the edge's forwarded host wins over the internal Host it replaced,\n"
+       "  because TLS ends at the edge and Host by then is the platform's own",
+       ids_at("st-johns.nickland.edu.gh", header="x-forwarded-host") == ["st-johns"])
+    ck("the bare domain still lists every school, for the picker",
+       ids_at("nickland.edu.gh") == ["ave-maria", "st-johns"])
+    ck("an address under no configured domain lists them too",
+       ids_at("ave-maria.evil.com") == ["ave-maria", "st-johns"])
+    ck("an address for a school that is not enrolled lists NOBODY",
+       ids_at("not-a-school.nickland.edu.gh") == [],
+       "a typo must not hand a parent somebody else's school")
+    ck("...and says so as an answer, not as an error",
+       app7.get("/api/v1/portal/schools",
+                headers={"host": "not-a-school.nickland.edu.gh"}).status_code == 200)
+
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0
 

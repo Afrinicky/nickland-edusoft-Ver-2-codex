@@ -188,14 +188,15 @@ DATABASE_URL=postgres://…  PORT=8080  npm start
 ```
 
 **Python (`cloud-python/`):** use the included `Dockerfile` / `render.yaml` /
-`fly.toml`; set `DATABASE_URL` as an environment variable on the platform, and
-apply `cloud-python/schema.sql` once.
+`fly.toml`, building from the **repository root** — the image also builds the
+parents' app out of `mobile/`. Set `DATABASE_URL` on the platform; the tables
+are created on first boot. Step by step: [`SETUP.md`](../SETUP.md) part C.
 
-You now have a URL like `https://portal.yourschool.com`. That is the **API**;
-`/legacy` on it serves the old hand-written parent page, and `/` serves the web
-app if one has been installed alongside it.
+You now have a URL like `https://portal.yourschool.com`, and it is the whole
+product: `/` is the parents' and teachers' app, `/api/v1` its API, `/desk` the
+office application, and `/legacy` the old hand-written parent page.
 
-The web app is normally deployed separately, on **Vercel** — import the repo
+The app can also be deployed separately, on **Vercel** — import the repo
 (`vercel.json` at the root configures the build) and set one environment
 variable, `EXPO_PUBLIC_PORTAL_URL`, to this service's URL. Parents then open the
 Vercel address. See [`WEB_APP.md`](WEB_APP.md).

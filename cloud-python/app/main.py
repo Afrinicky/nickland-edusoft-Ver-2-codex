@@ -35,6 +35,79 @@ except OSError:
     SITE = "<!doctype html><title>Nickland Edusoft</title><p>Portal site not found.</p>"
 
 
+_reported = False
+
+
+def boot_report(store):
+    """What this service is, in the log, at the moment it starts.
+
+    Once per process. A worker's configuration is a property of the worker, not
+    of each app object built inside it — and the test suites build several.
+
+    Every line here is something that has been got wrong on a deploy and found
+    out later by the wrong person: the database not migrated (a parent gets a
+    500), no operator key (enrolment answers 404), an operator key a few
+    characters short (enrolment answers 404 and the operator concludes the
+    variable did not apply), no base domain (schools have no address), no web
+    app in the image (the portal serves a placeholder page). None of it is
+    secret — the values are never printed, only whether they are there.
+    """
+    global _reported
+    if _reported:
+        return
+    _reported = True
+
+    lines = [f"store: {store.kind}"]
+
+    if store.kind == "pg":
+        try:
+            if store.platform_tables_ready():
+                lines.append("database: ready")
+            else:
+                store.apply_schema()
+                lines.append("database: the platform tables were missing and have been created")
+        except Exception as err:
+            # Not fatal. A database that is briefly unreachable must not stop
+            # the service from booting — it opens connections on first use, and
+            # the tables are created then instead.
+            lines.append(f"database: not reachable at boot ({err.__class__.__name__}); "
+                         "will be set up on the first request that needs it")
+
+    key = os.environ.get(platform_api.ENV_KEY, "")
+    if platform_api.platform_enabled():
+        lines.append("platform administration: on")
+    elif key:
+        lines.append(f"platform administration: OFF — {platform_api.ENV_KEY} is only "
+                     f"{len(key)} characters and at least {platform_api.MIN_KEY_LENGTH} "
+                     "are required, so no school can be enrolled over the API")
+    else:
+        lines.append(f"platform administration: off ({platform_api.ENV_KEY} is not set)")
+
+    domains = platform_api.portal_base_domains()
+    lines.append("school addresses: " + (
+        f"*.{domains[0]}" + (f" (also {', '.join(domains[1:])})" if len(domains) > 1 else "")
+        if domains else "none — set PORTAL_BASE_DOMAIN to give schools an address"))
+
+    lines.append("parents' app: " + ("served from this service" if webapp.is_available()
+                                     else "not in this build — / serves the placeholder page"))
+
+    # A school's own tables are read from files when it is enrolled. They were
+    # once left out of the image, which nothing noticed until the first school
+    # was enrolled on a real deployment — by which point somebody is on the
+    # phone. Checked here instead, where it costs a stat call at boot.
+    try:
+        from .school import db as school_db
+        missing = [f for f in ("school.sql", "seed.sql")
+                   if not os.path.isfile(os.path.join(school_db._SCHEMA_DIR, f))]
+        if missing:
+            lines.append("school template: MISSING (" + ", ".join(missing) + ") — "
+                         "no school can be enrolled until this build carries it")
+    except Exception as err:
+        lines.append(f"school template: could not be checked ({err.__class__.__name__})")
+
+    print("\n".join("[edusoft] " + l for l in lines), flush=True)
+
+
 def create_app(store=None) -> FastAPI:
     app = FastAPI(title="Nickland Edusoft Cloud", docs_url=None, redoc_url=None)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -49,6 +122,9 @@ def create_app(store=None) -> FastAPI:
     app.include_router(desk_api.router)
     app.include_router(parent_api.router)
     app.include_router(parent_api.webhook_router)
+
+    if os.environ.get("EDUSOFT_QUIET_BOOT") != "1":
+        boot_report(app.state.store)
 
     # Optional seed for dev / cross-language testing: provision a known school.
     seed_id, seed_key = os.environ.get("SEED_SCHOOL_ID"), os.environ.get("SEED_SCHOOL_KEY")
@@ -111,12 +187,56 @@ def create_app(store=None) -> FastAPI:
     def health():
         return {"ok": True, "store": S().kind, "web_app": webapp.is_available()}
 
+    # ── The address a school was given ──
+    # `ave-maria-school.edusoft.gh` is not a lookup table and not a redirect:
+    # the id is a slug of the school's own name, so the host IS the answer, and
+    # a school enrolled a second ago is reachable without anything being
+    # configured for it. What that address has to do is narrow the two public
+    # discovery routes to the one school it names, because the app adopts a
+    # single school without asking (mobile/src/auth.jsx) and offers a picker
+    # for several. Answering a school's own address with every school on the
+    # platform is how a parent ends up picking somebody else's.
+    #
+    # Narrowing only. The host says which school is being ASKED for; every
+    # existing check on whether that school exists and who may read it is
+    # untouched, and a request arriving on the bare domain, on an unconfigured
+    # deployment, or on a host under no configured domain still sees the list
+    # it always saw.
+    def _host_school(request):
+        """The school this request's address names, or None.
+
+        The forwarded header first: TLS is terminated at the platform's edge,
+        so `Host` by then is the internal one. It is a header a caller can set
+        themselves, which is why it can only ever narrow what is already
+        public — the tenant list — and authorises nothing.
+        """
+        if request is None:
+            return None
+        try:
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+        except Exception:
+            return None
+        return platform_api.school_id_from_host(host)
+
+    def _only(schools, sid):
+        """The named school alone, or every school when the name is not one.
+
+        An address under the platform's domain that belongs to no school is
+        answered with nothing rather than with everything: it is a school that
+        has not been enrolled yet, or a typo, and either way the app saying
+        "no schools are available at that address yet" is the truth, where a
+        picker listing every other school in the country is not.
+        """
+        if not sid:
+            return schools
+        return [s for s in schools if str(s.get("school_id")) == sid]
+
     # ── Public portal ──
     # The same path a desktop host answers, so a client can ask one question —
     # "what are you?" — instead of probing endpoint by endpoint. A host returns
     # a `school`; this returns the tenant list.
     @app.get("/api/v1/info")
-    def info():
+    def info(request: Request):
         """One question — "what are you?" — so a client never has to be told.
 
         `online` says this service holds whole schools in Postgres, not only
@@ -130,13 +250,19 @@ def create_app(store=None) -> FastAPI:
             online = bool(schools)
         except Exception:
             online, schools = False, []
-        return {"ok": True, "mode": "online" if online else "cloud",
-                "portal": True, "staff": True, "online": online,
-                "schools": schools or S().list_schools()}
+        sid = _host_school(request)
+        out = {"ok": True, "mode": "online" if online else "cloud",
+               "portal": True, "staff": True, "online": online,
+               "schools": _only(schools or S().list_schools(), sid)}
+        if sid:
+            # Said plainly as well as shown, so an operator checking a new
+            # school's address with curl can see that it resolved.
+            out["school_id"] = sid
+        return out
 
     @app.get("/api/v1/portal/schools")
-    def schools():
-        return {"ok": True, "schools": S().list_schools()}
+    def schools(request: Request):
+        return {"ok": True, "schools": _only(S().list_schools(), _host_school(request))}
 
     # ── One school's identity ──
     # Public, and answered before anyone signs in: a parent opening the portal
