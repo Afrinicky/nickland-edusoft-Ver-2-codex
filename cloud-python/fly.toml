@@ -1,4 +1,11 @@
-# Fly.io config — deploy with: fly launch --copy-config --now  (from cloud-python/)
+# Fly.io config — deploy from the REPOSITORY ROOT, not from cloud-python/:
+#
+#   fly deploy --config cloud-python/fly.toml
+#
+# The root is the build context because the image also builds the parents' and
+# teachers' app out of mobile/, so that one address is the whole product rather
+# than an API endpoint. Running `fly deploy` from inside cloud-python/ leaves
+# mobile/ outside the context and the build fails on the first COPY.
 #
 # Set the secrets FIRST — the service refuses to boot without them, by design:
 #   fly secrets set PORTAL_SECRET=$(openssl rand -hex 32) DATABASE_URL="postgres://…?sslmode=require"
@@ -7,11 +14,17 @@
 # every parent is signed out. DATABASE_URL must point at Neon/Postgres — the
 # machines run multiple workers, so in-memory storage would serve inconsistent
 # data as well as losing it on restart.
+#
+# Two more are worth setting now rather than later:
+#   fly secrets set PLATFORM_ADMIN_KEY=…      Nickland's own key, 24+ characters,
+#                                             the only one that can enrol a school
+#   fly secrets set PORTAL_BASE_DOMAIN=edusoft.gh
+#                                             gives every school <id>.edusoft.gh
 app = "nickland-edusoft-cloud"
 primary_region = "jnb"   # Johannesburg — closest to Ghana; change as needed
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "cloud-python/Dockerfile"
 
 [env]
   PORT = "8080"

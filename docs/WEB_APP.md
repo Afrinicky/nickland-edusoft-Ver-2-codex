@@ -383,29 +383,38 @@ queued writes back down — see [`CLOUD_SYNC.md`](CLOUD_SYNC.md).
 
 ### 1. Neon — the database
 
-Create a project, then load the schema once:
+Create a project. The schema is applied by the service itself on the first boot
+that finds the tables missing, so there is nothing to run — including on an
+upgrade, which is the case that used to be missed: a deployment predating the
+staff surface needs a column added for tracking how far each school's desktop
+has consumed the queue, and gets it on the next start.
+
+To apply it by hand instead:
 
 ```bash
 psql "$DATABASE_URL" -f cloud-python/schema.sql
 ```
 
 It is safe to re-run against an existing database — every statement is
-`IF NOT EXISTS` or an `ADD COLUMN IF NOT EXISTS` — and you **must** re-run it
-when upgrading a deployment that predates the staff surface, which added a
-column for tracking how far each school's desktop has consumed the queue.
+`IF NOT EXISTS` or an `ADD COLUMN IF NOT EXISTS`, which is exactly what makes
+applying it automatically safe too.
 
 Keep the connection string; it goes into Render as `DATABASE_URL` (include
 `?sslmode=require`).
 
-### 2. Render — the API
+### 2. Render — the service
 
 `cloud-python/render.yaml` is a Render blueprint: point Render at this repo and
-it builds `cloud-python/` from its Dockerfile. Set:
+it builds the image from `cloud-python/Dockerfile` **with the repository root
+as the build context**, because the image also builds the parents' app out of
+`mobile/` and serves it from the same origin as the API. Set:
 
 | Variable | Value |
 |---|---|
 | `DATABASE_URL` | the Neon connection string |
 | `PORTAL_SECRET` | generated once — **never regenerate it**; it signs parent session tokens, and changing it signs every parent out |
+| `PLATFORM_ADMIN_KEY` | generated once — Nickland's own key, the only one that can enrol a school. 24 characters minimum, or it counts as unset |
+| `PORTAL_BASE_DOMAIN` | the domain schools are addressed under, e.g. `edusoft.gh` |
 
 Provision each school and note the key the desktop needs:
 
@@ -415,7 +424,11 @@ DATABASE_URL=… python3 cloud-python/scripts/create_school.py "Ave Maria School
 
 Enter that key on the desktop under **Settings → Cloud Sync**.
 
-### 3. Vercel — the web app
+### 3. Vercel — the web app, hosted separately (optional)
+
+Step 2 already serves the app, and serving it there is what makes a school's
+own subdomain resolve to that school. Do this only if you specifically want the
+app on a CDN instead.
 
 Import the repo. `vercel.json` at the root already sets the build command,
 output directory, single-page rewrite and cache headers, so the only thing to

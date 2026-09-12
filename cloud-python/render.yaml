@@ -1,21 +1,59 @@
-# Render.com blueprint — one-click deploy of the Nickland Edusoft cloud.
+# Render.com blueprint — the Nickland Edusoft cloud, in one service.
 # Docs: https://render.com/docs/blueprint-spec
+#
+# Create it with "New → Blueprint" pointed at this repository, then set
+# DATABASE_URL and PORTAL_BASE_DOMAIN in the dashboard and copy the generated
+# PLATFORM_ADMIN_KEY out of it. Nothing else is needed: the service creates its
+# own tables on first boot and carries the parents' app inside the image.
 services:
   - type: web
     name: nickland-edusoft-cloud
     runtime: docker
-    rootDir: cloud-python
-    dockerfilePath: ./Dockerfile
+
+    # The build context is the REPOSITORY ROOT and not cloud-python/, because
+    # the image also builds the parents' and teachers' app out of mobile/ so
+    # that one address is the whole product. (This is why there is no rootDir:
+    # it would put mobile/ outside the context and the COPY would fail.)
+    dockerfilePath: ./cloud-python/Dockerfile
+    dockerContext: .
+
     healthCheckPath: /health
-    plan: starter
+    plan: starter          # the free plan sleeps, and a sleeping portal is a portal parents stop trusting
     autoDeploy: true
+
+    # SAME REGION AS THE DATABASE. Choose the Neon region first, then match it
+    # here: an online school's screen is many small queries, and each one is a
+    # round trip. Frankfurt is the shortest hop for Ghana.
+    region: frankfurt
+
     envVars:
-      # Both are mandatory — the service refuses to boot without them.
-      # Do NOT regenerate PORTAL_SECRET on later deploys: it signs parent
-      # session tokens, so changing it signs every parent out.
-      - key: PORTAL_SECRET
-        generateValue: true          # signs parent session tokens
+      # ── Required ──
       - key: DATABASE_URL
-        sync: false                  # paste your Neon connection string (with ?sslmode=require)
+        sync: false                  # the Neon connection string, POOLED, with ?sslmode=require
+
+      # Signs parent and teacher sessions. Generated once, on creation.
+      # Do NOT regenerate it on a later deploy: every signed-in parent and
+      # teacher is signed out the moment it changes.
+      - key: PORTAL_SECRET
+        generateValue: true
+
+      # ── Nickland's own key ──
+      # The only credential that can bring a school into existence, which is
+      # why it is not a school key and is not in this file. Render generates
+      # it; read it once from the dashboard and keep it where the school keys
+      # are not. Under 24 characters the platform routes stay off — the boot
+      # log says so in those words.
+      - key: PLATFORM_ADMIN_KEY
+        generateValue: true
+
+      # ── The schools' addresses ──
+      # One domain or several, comma-separated; the first is canonical. Point a
+      # wildcard DNS record (*.edusoft.gh) at this service and every school
+      # enrolled from now on is reachable at <school-id>.edusoft.gh with
+      # nothing further to configure. Leave it unset and the service still
+      # works — schools simply have no address of their own.
+      - key: PORTAL_BASE_DOMAIN
+        sync: false
+
       - key: WEB_CONCURRENCY
         value: "2"
