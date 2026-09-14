@@ -8,8 +8,13 @@ PORT=8791
 SID="sch_cross"
 KEY="sk_crosstest_key"
 
+# The service refuses to start without a licence signing key — deliberately,
+# so that a deployment cannot quietly serve every desktop unlicensed. A fixed
+# test key rather than a generated one, so a failure here is reproducible.
+LICENCE_KEY="drupkjj9JHpGfnLIFkr0V0jdVaDBK8O0qkXIzKNHCEg"
+
 SEED_SCHOOL_ID="$SID" SEED_SCHOOL_KEY="$KEY" SEED_SCHOOL_NAME="Ave Maria" \
-  ALLOW_DEV_SECRET=1 ALLOW_MEMORY_STORE=1 \
+  ALLOW_DEV_SECRET=1 ALLOW_MEMORY_STORE=1 LICENCE_SIGNING_KEY="$LICENCE_KEY" \
   python3 -m uvicorn app.main:app --port "$PORT" --log-level warning &
 UV_PID=$!
 trap 'kill $UV_PID 2>/dev/null' EXIT

@@ -307,7 +307,8 @@ service itself has no address to miss.
 
 ```bash
 cd cloud-python
-DATABASE_URL="postgres://…?sslmode=require" PORTAL_SECRET=dev uvicorn app.main:app --reload
+DATABASE_URL="postgres://…?sslmode=require" PORTAL_SECRET=dev \
+  ALLOW_UNMANAGED_LICENCE_KEY=1 uvicorn app.main:app --reload
 ```
 
 and in another terminal:

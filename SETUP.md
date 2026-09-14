@@ -240,7 +240,8 @@ npm run test:regressions  # the desktop suites alone
 
 # the cloud service, against a throwaway store
 cd cloud-python
-ALLOW_MEMORY_STORE=1 ALLOW_DEV_SECRET=1 uvicorn app.main:app --reload
+ALLOW_MEMORY_STORE=1 ALLOW_DEV_SECRET=1 ALLOW_UNMANAGED_LICENCE_KEY=1 \
+  uvicorn app.main:app --reload
 ```
 
 `ALLOW_MEMORY_STORE=1` and `ALLOW_DEV_SECRET=1` are **development only**. The
