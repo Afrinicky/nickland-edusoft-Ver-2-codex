@@ -413,7 +413,7 @@ def save_remarks(db, actor, student_id, term_id, data):
     existing = db.one("SELECT id FROM student_term_summary WHERE student_id = %s AND term_id = %s",
                       (student_id, term_id))
     if existing:
-        sets = ", ".join(f'"{k}" = %s' for k in fields)
+        sets = db.assignments(fields)
         db.run(f"UPDATE student_term_summary SET {sets} WHERE id = %s",
                tuple(fields.values()) + (existing["id"],))
         row_id = existing["id"]

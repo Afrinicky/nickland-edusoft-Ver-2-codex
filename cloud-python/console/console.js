@@ -1211,7 +1211,6 @@
     licence_lease_days: 'Offline licence: days a desktop runs on one lease',
     licence_lease_grace_days: 'Offline licence: extra days while it cannot reach us',
     licence_expired_access: 'When both run out (read_only or blocked)',
-    licence_signing_key: 'Licence signing key — leave alone unless you know why',
     default_device_seats: 'Computers a school may activate, when its plan says nothing',
 
     // Reminders.

@@ -84,7 +84,7 @@ def save_activity(db, actor, data):
             return {"ok": False, "status": 404, "error": "No such activity."}
         if not security.can(actor, "staff", "edit") and existing["staff_id"] != actor.get("staff_id"):
             return {"ok": False, "status": 403, "error": "That is not your activity."}
-        sets = ", ".join(f'"{k}" = %s' for k in row)
+        sets = db.assignments(row)
         db.run(f"UPDATE staff_activities SET {sets} WHERE id = %s", tuple(row.values()) + (activity_id,))
     else:
         activity_id = db.insert("staff_activities", row)
@@ -162,7 +162,7 @@ def save_budget(db, actor, data):
     items = data.get("items")
     with db.tx() as tx:
         if budget_id:
-            sets = ", ".join(f'"{k}" = %s' for k in row)
+            sets = db.assignments(row)
             tx.run(f"UPDATE budgets SET {sets} WHERE id = %s", tuple(row.values()) + (budget_id,))
         else:
             row["created_by"] = actor["user_id"]

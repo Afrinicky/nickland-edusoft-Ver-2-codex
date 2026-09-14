@@ -121,7 +121,7 @@ def save(db, actor, data):
 
     if not patch:
         return {"ok": False, "status": 400, "error": "Nothing to change."}
-    sets = ", ".join(f'"{k}" = %s' for k in patch)
+    sets = db.assignments(patch)
     db.run(f"UPDATE staff SET {sets} WHERE id = %s", tuple(patch.values()) + (staff_id,))
     security.audit(db, actor, "staff", staff_id, "update_staff", ", ".join(patch.keys()))
     return {"ok": True, "id": staff_id}
@@ -338,7 +338,7 @@ def save_lesson_note(db, actor, data):
         if wanted_status in ("draft", "submitted"):
             fields["status"] = wanted_status
         fields["updated_at"] = _now()
-        sets = ", ".join(f'"{k}" = %s' for k in fields)
+        sets = db.assignments(fields)
         db.run(f"UPDATE lesson_notes SET {sets} WHERE id = %s", tuple(fields.values()) + (note_id,))
     else:
         fields["staff_id"] = staff_id

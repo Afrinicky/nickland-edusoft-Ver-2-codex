@@ -9,6 +9,7 @@ const { httpJson } = require('../server/gateways/http');
 const { getSetting, setSetting } = require('../utils/idgen');
 const licenceLib = require('../licence');
 const refresh = require('../licence/refresh');
+const seals = require('../licence/seals');
 
 let timer = null;
 
@@ -32,6 +33,10 @@ function startScheduler(db) {
     // way to run an unpaid copy forever was a toggle in Settings. So it is
     // asked for on its own, needing only the cloud address and the school key.
     try { await refresh.ensure(db); } catch (_) {}
+    // Top the chequebook up while there is a connection, and tell the cloud
+    // which seals have been used. Both are best effort: a school offline for a
+    // fortnight keeps issuing receipts from the stock it is carrying.
+    try { await seals.replenish(db); } catch (_) {}
     try {
       if (client.blockedReason(db)) return;
       await client.syncOnce(db);
@@ -94,6 +99,10 @@ module.exports = function registerCloudSyncHandlers(ipcMain, db) {
       // no answer.
       conflicts: conflictCount(db),
       licence: licenceState(db),
+      // What the school is carrying. Shown on the sync screen so a bursar can
+      // see it running low before the day it runs out.
+      seals: { receipt: seals.stock(db, 'receipt'),
+               report_card: seals.stock(db, 'report_card') },
     };
   });
 

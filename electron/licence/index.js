@@ -38,6 +38,7 @@
 const crypto = require('crypto');
 const os = require('os');
 const { getSetting, setSetting } = require('../utils/idgen');
+const integrity = require('./integrity');
 
 // The deployment this build talks to. Overridable per install for a private
 // deployment (see `licence:public-key` in the settings), because a school on
@@ -170,6 +171,18 @@ function verify(db, token) {
     // an installation, which is the one case here that is deliberate.
     return { ok: false, reason: 'wrong_device', licence: payload };
   }
+
+  // Is the code running the code this lease was issued for?
+  //
+  // A genuine lease cannot be lifted onto a modified copy: the lease names the
+  // real build's fingerprint, and the modified copy does not hash to it.
+  // Forging one that names the modified build needs the private key, which
+  // never leaves the service. `null` means the lease predates this and is
+  // treated as no opinion rather than as a failure.
+  if (integrity.matchesLease(payload) === false) {
+    return { ok: false, reason: 'modified', licence: payload };
+  }
+
   return { ok: true, verified: true, licence: payload };
 }
 
@@ -265,6 +278,9 @@ const MESSAGES = {
     + 'internet soon so it can renew its licence.',
   read_only: 'This subscription is not active, so the system can be read but not '
     + 'changed. Nothing has been deleted.',
+  modified: 'This copy of Edusoft has been changed since it was installed, so it '
+    + 'can only be read. Reinstall it from the school portal — nothing of yours '
+    + 'is lost, and everything comes back.',
 };
 
 // ── Storing one ─────────────────────────────────────────────────────────────
@@ -305,4 +321,5 @@ module.exports = {
   SETTINGS, UNLICENSED, MESSAGES, ACTIVATION_DAYS, firstRun,
   deviceId, publicKeyPem, verify, state, install, recordFailure, setPublicKey,
   allows, clockOk, highWater, noteTime,
+  buildId: integrity.buildId,
 };

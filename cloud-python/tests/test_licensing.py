@@ -33,7 +33,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 os.environ.setdefault("ALLOW_DEV_SECRET", "1")
 os.environ["PLATFORM_ADMIN_KEY"] = "pk_test_" + ("x" * 32)
 os.environ["EDUSOFT_QUIET_BOOT"] = "1"
-os.environ.pop("LICENCE_SIGNING_KEY", None)
+# A FIXED key rather than a generated one: this suite asserts that a lease
+# edited by hand stops verifying, and a run that signs differently every time
+# is a run whose failure cannot be reproduced.
+os.environ["LICENCE_SIGNING_KEY"] = "drupkjj9JHpGHCss-T0QStTqdmrajb4_uNJK3z7FKqk"
+os.environ.pop("LICENCE_SIGNING_KEY_PREVIOUS", None)
 
 from fastapi.testclient import TestClient                          # noqa: E402
 
@@ -115,6 +119,73 @@ def main():
     ck("...and the school keeps every record it had",
        suspended["licence"]["status"] == subs.SUSPENDED)
     subs.set_status(store, repo, sid, subs.ACTIVE, actor="test")
+
+    # ══ The key that all of it rests on ═════════════════════════════════
+    print("\nThe signing key")
+    import importlib
+
+    saved = dict(os.environ)
+    try:
+        # A platform that cannot sign serves every desktop unlicensed and looks
+        # perfectly healthy doing it. It must not start.
+        os.environ.pop("LICENCE_SIGNING_KEY", None)
+        os.environ.pop("ALLOW_UNMANAGED_LICENCE_KEY", None)
+        importlib.reload(licence_lib)
+        refused = False
+        try:
+            licence_lib.require_key()
+        except licence_lib.KeyMissing:
+            refused = True
+        ck("a platform with no signing key refuses to start", refused)
+
+        # A key that is present and unreadable is a deployment mistake, and
+        # falling back to unlicensed would hide it.
+        os.environ["LICENCE_SIGNING_KEY"] = "obviously-not-a-key"
+        broke = False
+        try:
+            licence_lib.require_key()
+        except licence_lib.KeyMissing:
+            broke = True
+        ck("...and one with an unreadable key refuses too", broke)
+
+        # The only way to run unlicensed is to say so, in words nobody types
+        # by accident.
+        os.environ.pop("LICENCE_SIGNING_KEY", None)
+        os.environ["ALLOW_UNMANAGED_LICENCE_KEY"] = "1"
+        ck("...and the escape hatch has to be asked for by name",
+           licence_lib.require_key() is False and not licence_lib.managed())
+
+        # Rotation: a lease signed by the outgoing key still verifies, so the
+        # schools with the worst connections are not the ones locked out.
+        old_key = licence_lib.generate_key()
+        new_key = licence_lib.generate_key()
+        os.environ.pop("ALLOW_UNMANAGED_LICENCE_KEY", None)
+        os.environ["LICENCE_SIGNING_KEY"] = old_key
+        importlib.reload(licence_lib)
+        older = licence_lib.issue(store, repo, sid, device="machine-a")["token"]
+
+        os.environ["LICENCE_SIGNING_KEY"] = new_key
+        os.environ["LICENCE_SIGNING_KEY_PREVIOUS"] = old_key
+        importlib.reload(licence_lib)
+        ck("during a rotation the outgoing key still verifies",
+           licence_lib.read(older).get("verified"))
+        ck("...and both keys are offered to the desktops",
+           len(licence_lib.public_keys()) == 2)
+
+        # And once the old variable is dropped, leases signed with it die.
+        os.environ.pop("LICENCE_SIGNING_KEY_PREVIOUS", None)
+        importlib.reload(licence_lib)
+        ck("...and dropping it retires those leases for good",
+           not licence_lib.read(older).get("ok"))
+
+        # The key must never be readable back out of the platform.
+        ck("the signing key is not a platform setting anybody can read",
+           "licence_signing_key" not in __import__(
+               "app.billing.defaults", fromlist=["SETTINGS"]).SETTINGS)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+        importlib.reload(licence_lib)
 
     # ══ Seats ═══════════════════════════════════════════════════════════
     print("\nSeats")

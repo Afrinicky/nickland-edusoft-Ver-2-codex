@@ -27,6 +27,12 @@ import threading
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+# A plain SQL identifier: a letter or underscore, then letters, digits or
+# underscores. Deliberately narrower than Postgres allows — every column in
+# this schema looks like this, and a name that does not is a name nobody
+# meant to write.
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 _SCHEMA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "schema")
 _SAFE_ID = re.compile(r"[^a-z0-9_]")
 
@@ -140,6 +146,30 @@ class SchoolDb:
         finally:
             cm.__exit__(None, None, None)
 
+    # ── Identifiers that reach SQL ──────────────────────────────────────────
+    # Column and table names cannot be passed as parameters, so anything that
+    # interpolates one has to be certain of it. Every caller in this codebase
+    # builds its key list from a literal — and "every caller does the right
+    # thing" is an invariant nobody can check and one careless `patch = data`
+    # away from an injection.
+    #
+    # So it is checked here instead. A name that is not a plain identifier is
+    # refused before it reaches the database, whatever the caller believed.
+    @staticmethod
+    def ident(name):
+        text = str(name or "")
+        if not text or len(text) > 63 or not _IDENT.match(text):
+            raise ValueError(f"{text!r} is not a column name.")
+        return f'"{text}"'
+
+    @classmethod
+    def assignments(cls, keys):
+        """`"a" = %s, "b" = %s` — the SET clause of an UPDATE, checked."""
+        keys = list(keys)
+        if not keys:
+            raise ValueError("Nothing to set.")
+        return ", ".join(f"{cls.ident(k)} = %s" for k in keys)
+
     def insert(self, table, data, returning="id"):
         """One row, and the id it was given.
 
@@ -149,8 +179,8 @@ class SchoolDb:
         """
         cols = list(data.keys())
         placeholders = ", ".join(["%s"] * len(cols))
-        names = ", ".join(f'"{c}"' for c in cols)
-        sql = f'INSERT INTO "{table}" ({names}) VALUES ({placeholders})'
+        names = ", ".join(self.ident(c) for c in cols)
+        sql = f'INSERT INTO {self.ident(table)} ({names}) VALUES ({placeholders})'
         if returning:
             sql += f' RETURNING "{returning}"'
         row = self.run(sql, tuple(data.values()))
