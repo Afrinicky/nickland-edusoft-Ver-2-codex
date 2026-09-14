@@ -41,6 +41,34 @@ and a queue of changes made while the desktop was unreachable; the desktop
 drains that queue when it next comes online. Nothing in the cloud is
 authoritative.
 
+### Which hostname gets which interface
+
+One service answers on all of them, and `/api/v1/*` is identical on every one.
+The hostname decides only which HTML is served (`cloud-python/app/site.py`):
+
+| Address | Interface |
+|---|---|
+| `www.<domain>` and the bare `<domain>` | the public website — pricing, registration |
+| `admin.<domain>` | the Superadmin console |
+| `app.<domain>`, `<school>.<domain>`, anything else | the school application |
+
+So point `www`, `admin` and a wildcard `*` at the same service.
+
+**A deployment that has no `PORTAL_BASE_DOMAIN` set is unchanged**: every
+address still gets the school application at `/`, and the website and the
+console are reached at `/welcome` and `/console` instead. Those two paths also
+work on a configured deployment, which is what makes local development
+possible — on `localhost` every hostname is the same hostname.
+
+**One thing does change for a deployment that HAS a base domain configured**:
+the bare domain used to serve the parents' app and now serves the public
+website. Parents and teachers are given their own school's address
+(`ave-maria.<domain>`), which is unaffected, and `app.<domain>` also still
+serves the application.
+
+The subscription and billing engine, the Superadmin console and the public
+website are documented in **[`docs/SAAS_PLATFORM.md`](docs/SAAS_PLATFORM.md)**.
+
 ---
 
 ## 1. Neon

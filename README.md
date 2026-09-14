@@ -69,6 +69,17 @@ You'll need Python and Visual Studio Build Tools installed; Node.js usually prom
 
 ---
 
+## The platform: website, school application, Superadmin console
+
+Edusoft is one SaaS platform with three interfaces on one backend and one
+database — a public website where a school registers and subscribes, the cloud
+application the school then uses, and a Superadmin console where Nickland
+manages schools, plans, subscriptions, discounts, exemptions, invoices and
+payments.
+
+How that fits together, and how the subscription and billing engine works:
+**[`docs/SAAS_PLATFORM.md`](docs/SAAS_PLATFORM.md)**.
+
 ## Setting it up
 
 Step by step, from an empty PC to a school running online:

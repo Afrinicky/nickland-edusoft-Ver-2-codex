@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nickland Edusoft — school management for Ghanaian schools</title>
+<meta name="description" content="Nickland Edusoft is a complete school management platform for Ghanaian pre-tertiary schools: pupils, academics, attendance, results, fees, payroll and a parent portal. Runs online and offline.">
+<meta name="theme-color" content="#0E1F4F">
+<!-- Assets are addressed under /welcome/ on purpose, and it works on BOTH
+     deployment shapes. The server matches an explicit /welcome or /console
+     prefix BEFORE it looks at the hostname (app/site.py), so this one path
+     resolves whether the site is being served at www.edusoft.<domain> or at
+     /welcome on a deployment with a single hostname. A bare /styles.css
+     would 404 on the second of those — and a relative one would break on
+     /welcome (no trailing slash) but not on /welcome/pricing, which is the
+     worst kind of bug to find later. -->
+<link rel="stylesheet" href="/welcome/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%231B3FA0'/%3E%3Ctext x='16' y='22' font-family='Segoe UI,Arial' font-size='17' font-weight='700' fill='white' text-anchor='middle'%3ENE%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <a class="brand" href="/" data-link>
+      <span class="mark" aria-hidden="true">NE</span>
+      <span class="name">Nickland <span>Edusoft</span></span>
+    </a>
+    <button class="menu-btn" id="menuBtn" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav class="nav" id="nav" aria-label="Main">
+      <a href="/" data-link data-route-link="home">Home</a>
+      <a href="/features" data-link data-route-link="features">Features</a>
+      <a href="/pricing" data-link data-route-link="pricing">Pricing</a>
+      <a href="/about" data-link data-route-link="about">About</a>
+      <a href="/support" data-link data-route-link="support">Support</a>
+      <span class="sep" aria-hidden="true"></span>
+      <a href="/login" data-link data-route-link="login">Sign in</a>
+      <a class="btn btn-primary" href="/register" data-link data-route-link="register">Register your school</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ══ HOME ═════════════════════════════════════════════════════════════ -->
+<div data-route="home">
+  <section class="hero">
+    <div class="wrap hero-inner">
+      <div>
+        <p class="eyebrow">School management, built in Ghana</p>
+        <h1>Run the whole school from one place.</h1>
+        <p class="lede">
+          Pupils, academics, attendance, examinations, results, fees, payroll and
+          a parent portal — in one system your staff can actually use, on the
+          school Wi-Fi or over the internet.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary btn-lg" href="/register" data-link>Register your school</a>
+          <a class="btn btn-onblue btn-lg" href="/pricing" data-link>See pricing</a>
+        </div>
+        <p class="hero-note" data-trial-note>Start with a free trial. No installation, nothing to buy first.</p>
+      </div>
+      <div class="hero-figure" aria-hidden="true">
+        <h4>This term, at a glance</h4>
+        <div class="hero-stat"><span class="k">Pupils on roll</span><span class="v num">412</span></div>
+        <div class="hero-stat"><span class="k">Register marked today</span><span class="v num">9 of 11 classes</span></div>
+        <div class="hero-stat"><span class="k">Fees collected</span><span class="v num">GHS 74,300</span></div>
+        <div class="hero-stat"><span class="k">Outstanding</span><span class="v num">GHS 18,150</span></div>
+        <div class="hero-stat"><span class="k">Report cards ready</span><span class="v num">Basic 1 – JHS 3</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="split">
+        <div>
+          <p class="eyebrow">Why schools move to Edusoft</p>
+          <h2>One record of the school, kept straight.</h2>
+          <p>
+            Most schools keep the roll in one book, the fees in another, the
+            marks in a teacher's exercise book, and the answer to "how much is
+            this child owing" in somebody's head. Edusoft is the one place all of
+            it lives, so a bill, a report card and a debtor list all agree.
+          </p>
+          <p>
+            It was written for Ghanaian pre-tertiary schools — Nursery through
+            JHS — and it bills the way those schools actually bill: one school
+            fees bill per pupil per term, extras added to the same bill, books
+            once a year, arrears carried forward automatically.
+          </p>
+          <p><a class="btn btn-outline" href="/features" data-link>What is in it</a></p>
+        </div>
+        <div class="grid g2">
+          <div class="feature">
+            <h3>Works without internet</h3>
+            <p>The office system runs on the school's own computer. The internet
+               is how it reaches parents and phones — not how it works.</p>
+          </div>
+          <div class="feature">
+            <h3>Every teacher, their own view</h3>
+            <p>A class teacher sees their class. A bursar sees the money. The
+               head sees everything. Nobody sees what is not theirs.</p>
+          </div>
+          <div class="feature">
+            <h3>Parents kept informed</h3>
+            <p>Results, bills, receipts and notices, on a parent's phone, without
+               a queue at the bursar's window.</p>
+          </div>
+          <div class="feature">
+            <h3>Priced per pupil</h3>
+            <p>A school of sixty pays for sixty. No licence to buy, no minimum,
+               and the price is on the pricing page.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <p class="eyebrow">What it covers</p>
+      <h2 class="tight">The whole of the school year, module by module.</h2>
+      <div class="grid g4" style="margin-top:36px" data-feature-grid>
+        <div class="card flat"><span class="skeleton" style="height:1.1em;width:60%">&nbsp;</span>
+          <span class="skeleton" style="height:2.6em;margin-top:10px">&nbsp;</span></div>
+        <div class="card flat"><span class="skeleton" style="height:1.1em;width:70%">&nbsp;</span>
+          <span class="skeleton" style="height:2.6em;margin-top:10px">&nbsp;</span></div>
+        <div class="card flat"><span class="skeleton" style="height:1.1em;width:55%">&nbsp;</span>
+          <span class="skeleton" style="height:2.6em;margin-top:10px">&nbsp;</span></div>
+        <div class="card flat"><span class="skeleton" style="height:1.1em;width:65%">&nbsp;</span>
+          <span class="skeleton" style="height:2.6em;margin-top:10px">&nbsp;</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap narrow" style="text-align:center">
+      <h2>Set your school up this afternoon.</h2>
+      <p class="lede" style="margin:0 auto 26px">
+        Register, add your classes, import your roll, and start marking the
+        register. There is nothing to install and nothing to configure first.
+      </p>
+      <a class="btn btn-primary btn-lg" href="/register" data-link>Register your school</a>
+    </div>
+  </section>
+</div>
+
+<!-- ══ FEATURES ═════════════════════════════════════════════════════════ -->
+<div data-route="features" hidden>
+  <section class="tightpad alt">
+    <div class="wrap">
+      <p class="eyebrow">Features</p>
+      <h1>Everything a school does, in one system.</h1>
+      <p class="lede">Each module below is switched on by your plan. Your
+        administrator decides who on the staff may open which of them.</p>
+    </div>
+  </section>
+  <section>
+    <div class="wrap" data-features-full>
+      <div class="grid g3">
+        <div class="card flat"><span class="skeleton" style="height:5em">&nbsp;</span></div>
+        <div class="card flat"><span class="skeleton" style="height:5em">&nbsp;</span></div>
+        <div class="card flat"><span class="skeleton" style="height:5em">&nbsp;</span></div>
+      </div>
+    </div>
+  </section>
+  <section class="alt">
+    <div class="wrap split">
+      <div>
+        <p class="eyebrow">How access works</p>
+        <h2>Nobody sees what is not theirs.</h2>
+        <p>Every member of staff is given a level on each module — no access,
+           view, contribute, manage or full. A subject teacher entering marks
+           for their own class cannot open the payroll, and cannot reach another
+           class's marks by typing its address.</p>
+        <p>That is enforced by the system, not by hiding the button. Refusals are
+           written to the school's own audit trail, which the head teacher can
+           read.</p>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Who sees what</h3></div>
+        <div class="panel-body" style="padding:0">
+          <table>
+            <thead><tr><th>Role</th><th>Sees</th></tr></thead>
+            <tbody>
+              <tr><td>Proprietor</td><td>The whole school, including money</td></tr>
+              <tr><td>Head Teacher</td><td>Academics, staff, pupils, reports</td></tr>
+              <tr><td>Class Teacher</td><td>Their class — register, marks, canteen</td></tr>
+              <tr><td>Subject Teacher</td><td>Their subjects, wherever they teach them</td></tr>
+              <tr><td>Accountant</td><td>Fees, finance and payroll</td></tr>
+              <tr><td>Parent</td><td>Their own children, and nothing else</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ══ PRICING ══════════════════════════════════════════════════════════ -->
+<div data-route="pricing" hidden>
+  <section class="tightpad alt">
+    <div class="wrap">
+      <p class="eyebrow">Pricing</p>
+      <h1>Priced per pupil. No licence, no minimum.</h1>
+      <p class="lede">You are billed for the pupils actually on your roll —
+        withdrawn and graduated pupils are not counted. Prices below are live
+        from our system.</p>
+    </div>
+  </section>
+
+  <section class="tightpad">
+    <div class="wrap">
+      <div class="panel">
+        <div class="panel-body estimator">
+          <div class="field" style="margin:0">
+            <label for="rollInput">How many pupils does your school have?</label>
+            <input type="number" id="rollInput" min="0" max="20000" step="10" value="200"
+                   inputmode="numeric">
+          </div>
+          <p class="small muted" style="margin:0 0 4px" data-estimate-note>
+            Move the number to see what each plan would cost your school each month.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding-top:12px">
+    <div class="wrap">
+      <div class="plans" data-plans>
+        <div class="plan"><span class="skeleton" style="height:1.6em;width:45%">&nbsp;</span>
+          <span class="skeleton" style="height:3em;margin-top:16px">&nbsp;</span>
+          <span class="skeleton" style="height:10em;margin-top:20px">&nbsp;</span></div>
+        <div class="plan"><span class="skeleton" style="height:1.6em;width:45%">&nbsp;</span>
+          <span class="skeleton" style="height:3em;margin-top:16px">&nbsp;</span>
+          <span class="skeleton" style="height:10em;margin-top:20px">&nbsp;</span></div>
+        <div class="plan"><span class="skeleton" style="height:1.6em;width:45%">&nbsp;</span>
+          <span class="skeleton" style="height:3em;margin-top:16px">&nbsp;</span>
+          <span class="skeleton" style="height:10em;margin-top:20px">&nbsp;</span></div>
+      </div>
+      <p class="small muted" style="margin-top:18px" data-tax-note></p>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap narrow">
+      <h2>Questions schools ask</h2>
+      <div class="rows" style="margin-top:20px">
+        <details style="border-bottom:1px solid var(--line);padding:14px 0">
+          <summary style="font-weight:600;cursor:pointer">Which pupils am I billed for?</summary>
+          <p class="small muted" style="margin:10px 0 0">Pupils whose record is active.
+            A pupil who has been withdrawn, has graduated, or whose record is archived
+            is still in your database and is not counted.</p>
+        </details>
+        <details style="border-bottom:1px solid var(--line);padding:14px 0">
+          <summary style="font-weight:600;cursor:pointer">What happens when the trial ends?</summary>
+          <p class="small muted" style="margin:10px 0 0">You are told before it ends. On the
+            day it ends your subscription starts on the plan you chose, and the first
+            invoice is raised for the pupils on your roll at that moment.</p>
+        </details>
+        <details style="border-bottom:1px solid var(--line);padding:14px 0">
+          <summary style="font-weight:600;cursor:pointer">What happens if a payment fails?</summary>
+          <p class="small muted" style="margin:10px 0 0">Nothing, at first — you are simply
+            told, and nothing changes. After that there is a grace period. Only then is
+            access limited, and even then nothing of yours is ever deleted; it all comes
+            back the moment the bill is settled.</p>
+        </details>
+        <details style="padding:14px 0">
+          <summary style="font-weight:600;cursor:pointer">Can we pay by mobile money or bank transfer?</summary>
+          <p class="small muted" style="margin:10px 0 0">Yes. Card and mobile money are
+            handled at checkout. For a bank transfer or a termly invoice, write to us and
+            we will set it up on your account.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ══ ABOUT ════════════════════════════════════════════════════════════ -->
+<div data-route="about" hidden>
+  <section class="tightpad alt">
+    <div class="wrap">
+      <p class="eyebrow">About</p>
+      <h1>Built for the schools that use it.</h1>
+    </div>
+  </section>
+  <section>
+    <div class="wrap split">
+      <div>
+        <p class="lede">Nickland Edusoft is made by Nickland Sales for Ghanaian
+          pre-tertiary schools — Nursery, Primary and JHS.</p>
+        <p>It began as an office system that runs on one computer, with no
+          internet, because that is the situation most schools are actually in.
+          That has not changed: the school's own system still holds the school's
+          records, and still works when the network does not.</p>
+        <p>What the platform adds is reach. A teacher can mark a register from a
+          phone. A parent can see a receipt without coming to the office. A head
+          teacher can look at the term's collections from home. And a school can
+          start using all of it by registering on this page, with nothing to
+          install.</p>
+        <p>We bill per pupil because a school of sixty pupils and a school of six
+          hundred are not the same customer, and asking both for the same licence
+          fee prices the smaller one out of a system it needs more.</p>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>The platform, in short</h3></div>
+        <div class="panel-body">
+          <div class="rows">
+            <div class="row"><span class="k">Made by</span><span class="v" data-company>Nickland Sales</span></div>
+            <div class="row"><span class="k">For</span><span class="v">Nursery — JHS</span></div>
+            <div class="row"><span class="k">Runs</span><span class="v">Offline & online</span></div>
+            <div class="row"><span class="k">Billing</span><span class="v">Per pupil, monthly</span></div>
+            <div class="row"><span class="k">Currency</span><span class="v" data-currency>GHS</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="alt">
+    <div class="wrap narrow">
+      <h2>How your school's data is kept</h2>
+      <p>Every school on this platform has its own database. Not a shared table
+         with a column saying which school a row belongs to — its own database,
+         so one school's query cannot reach another school's pupils even if
+         somebody writes it wrongly.</p>
+      <p>Card details are never stored by us. They are held by the payment
+         provider, and what we keep is a reference that can be charged and
+         nothing that can be read.</p>
+      <p>Administrative actions on the platform — a plan changed, a discount
+         granted, a school suspended — are written to an audit trail with who did
+         it and when.</p>
+    </div>
+  </section>
+</div>
+
+<!-- ══ SUPPORT ══════════════════════════════════════════════════════════ -->
+<div data-route="support" hidden>
+  <section class="tightpad alt">
+    <div class="wrap">
+      <p class="eyebrow">Support</p>
+      <h1>Talk to somebody who knows the system.</h1>
+      <p class="lede">Setting up, importing a roll, a bill that does not look
+        right, a member of staff who cannot sign in — write or call.</p>
+    </div>
+  </section>
+  <section>
+    <div class="wrap">
+      <div class="grid g3">
+        <div class="card">
+          <h3>Email</h3>
+          <p class="muted small">The fastest way to reach us, and the one that
+             lets us look at your school's account while we answer.</p>
+          <p><a data-support-email href="mailto:support@nicklandedusoft.com">support@nicklandedusoft.com</a></p>
+        </div>
+        <div class="card">
+          <h3>Telephone</h3>
+          <p class="muted small">During school hours, for anything urgent — a
+             sign-in that will not work on a report card day.</p>
+          <p data-support-phone class="muted">Ask us by email for the support line.</p>
+        </div>
+        <div class="card">
+          <h3>Setting up</h3>
+          <p class="muted small">We will help you import your roll, set up your
+             classes and your fee schedule, and train your staff.</p>
+          <p><a href="/register" data-link>Register your school</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="alt">
+    <div class="wrap narrow">
+      <h2>Before you write</h2>
+      <p>Two things make an answer much faster: your school's name as it appears
+         when you sign in, and what you were doing when it went wrong — the
+         screen, and what you expected to happen.</p>
+      <p>If it is about a bill, the invoice number is enough; every invoice we
+         raise has one, at the top of the page.</p>
+    </div>
+  </section>
+</div>
+
+<!-- ══ REGISTER ═════════════════════════════════════════════════════════ -->
+<div data-route="register" hidden>
+  <section class="tightpad alt">
+    <div class="wrap narrow">
+      <p class="eyebrow">Register</p>
+      <h1>Set your school up.</h1>
+      <p class="lede">Five minutes. Your school is ready to use at the end of it.</p>
+    </div>
+  </section>
+  <section>
+    <div class="wrap narrow">
+      <div class="steps" id="regSteps">
+        <div class="step" data-step="1"><span class="n">1</span> <span class="label">School</span></div>
+        <div class="step" data-step="2"><span class="n">2</span> <span class="label">Administrator</span></div>
+        <div class="step" data-step="3"><span class="n">3</span> <span class="label">Plan</span></div>
+        <div class="step" data-step="4"><span class="n">4</span> <span class="label">Review</span></div>
+        <div class="step" data-step="5"><span class="n">5</span> <span class="label">Done</span></div>
+      </div>
+
+      <div id="regError" class="note bad" hidden role="alert"></div>
+
+      <form id="regForm" novalidate>
+        <!-- Step 1 -->
+        <div data-pane="1">
+          <h2>Your school</h2>
+          <div class="field">
+            <label for="schoolName">School name</label>
+            <input type="text" id="schoolName" name="school_name" autocomplete="organization" required>
+            <p class="hint">As it should appear on report cards and receipts.</p>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="schoolPhone">Telephone</label>
+              <input type="tel" id="schoolPhone" name="phone" autocomplete="tel">
+            </div>
+            <div class="field">
+              <label for="schoolRegion">Region or town</label>
+              <input type="text" id="schoolRegion" name="region" autocomplete="address-level1">
+            </div>
+          </div>
+          <div class="field">
+            <label for="schoolRoll">Pupils on roll (approximately)</label>
+            <input type="number" id="schoolRoll" name="students" min="0" max="20000" value="150" inputmode="numeric">
+            <p class="hint">Only used to show you what each plan would cost. You are
+               billed on your actual roll once your pupils are entered.</p>
+          </div>
+          <p><button type="button" class="btn btn-primary" data-next="2">Continue</button></p>
+        </div>
+
+        <!-- Step 2 -->
+        <div data-pane="2" hidden>
+          <h2>Your administrator account</h2>
+          <p class="muted small">This is the account that runs the school in
+             Edusoft. It is the same account you will sign in with — there is no
+             second one to create.</p>
+          <div class="field">
+            <label for="adminName">Your full name</label>
+            <input type="text" id="adminName" name="full_name" autocomplete="name" required>
+          </div>
+          <div class="field">
+            <label for="adminEmail">Email address</label>
+            <input type="email" id="adminEmail" name="email" autocomplete="email" required>
+            <p class="hint">You sign in with this. Invoices and trial reminders go here too.</p>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="adminPassword">Password</label>
+              <input type="password" id="adminPassword" name="password" autocomplete="new-password"
+                     minlength="8" required>
+              <p class="hint">At least 8 characters.</p>
+            </div>
+            <div class="field">
+              <label for="adminPassword2">Repeat password</label>
+              <input type="password" id="adminPassword2" autocomplete="new-password" required>
+            </div>
+          </div>
+          <div class="field">
+            <label for="adminUsername">Username <span class="muted">(optional)</span></label>
+            <input type="text" id="adminUsername" name="username" autocomplete="username">
+            <p class="hint">What your staff will see. Left blank, we take it from your email.</p>
+          </div>
+          <p>
+            <button type="button" class="btn btn-outline" data-back="1">Back</button>
+            <button type="button" class="btn btn-primary" data-next="3">Continue</button>
+          </p>
+        </div>
+
+        <!-- Step 3 -->
+        <div data-pane="3" hidden>
+          <h2>Choose a plan</h2>
+          <p class="muted small">Priced for the roll you entered. You can change
+             plan at any time from your billing page.</p>
+          <div class="grid g3" style="margin:22px 0" data-plan-choices>
+            <div class="card flat"><span class="skeleton" style="height:7em">&nbsp;</span></div>
+            <div class="card flat"><span class="skeleton" style="height:7em">&nbsp;</span></div>
+            <div class="card flat"><span class="skeleton" style="height:7em">&nbsp;</span></div>
+          </div>
+          <p>
+            <button type="button" class="btn btn-outline" data-back="2">Back</button>
+            <button type="button" class="btn btn-primary" data-next="4">Continue</button>
+          </p>
+        </div>
+
+        <!-- Step 4 -->
+        <div data-pane="4" hidden>
+          <h2>Review</h2>
+          <div class="panel">
+            <div class="panel-body">
+              <div class="rows" data-review></div>
+            </div>
+          </div>
+          <div class="note" style="margin-top:20px" data-payment-note></div>
+          <p style="margin-top:22px">
+            <button type="button" class="btn btn-outline" data-back="3">Back</button>
+            <button type="submit" class="btn btn-primary btn-lg" id="regSubmit">Create my school</button>
+          </p>
+          <p class="small muted">By registering you agree that Nickland Sales may
+             hold your school's records in order to provide this service.</p>
+        </div>
+      </form>
+
+      <!-- Step 5 -->
+      <div data-pane="5" hidden>
+        <div class="note good">
+          <h2 style="margin-top:0">Your school is ready.</h2>
+          <p data-done-message></p>
+        </div>
+        <div class="panel" style="margin-top:24px">
+          <div class="panel-head"><h3>Keep these</h3></div>
+          <div class="panel-body">
+            <div class="rows" data-done-details></div>
+            <p class="small muted" style="margin-top:16px">
+              The sync key is only shown here. You will need it if you install the
+              office system on the school's own computer. We keep only a hash of
+              it, so it is reissued rather than recovered.
+            </p>
+          </div>
+        </div>
+        <p style="margin-top:26px">
+          <a class="btn btn-primary btn-lg" data-app-link href="#">Open my school</a>
+        </p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ══ LOGIN ════════════════════════════════════════════════════════════ -->
+<div data-route="login" hidden>
+  <section>
+    <div class="wrap" style="max-width:460px">
+      <h1 style="font-size:2rem">Sign in</h1>
+      <p class="muted">Use the email address you registered your school with.</p>
+
+      <div id="loginError" class="note bad" hidden role="alert"></div>
+      <div id="loginChoose" class="note" hidden>
+        <p><strong>You administer more than one school.</strong> Which one?</p>
+        <div class="field" style="margin-bottom:0">
+          <label for="loginSchool" class="sr-only">School</label>
+          <select id="loginSchool"></select>
+        </div>
+      </div>
+
+      <form id="loginForm" novalidate style="margin-top:22px">
+        <div class="field">
+          <label for="loginEmail">Email address</label>
+          <input type="email" id="loginEmail" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary btn-block btn-lg" id="loginSubmit" type="submit">Sign in</button>
+      </form>
+
+      <p class="small muted" style="margin-top:22px">
+        No account yet? <a href="/register" data-link>Register your school</a>.<br>
+        Are you a parent or a teacher? Your school will have given you its own
+        address to sign in at.
+      </p>
+    </div>
+  </section>
+</div>
+
+<!-- ══ NOT FOUND ════════════════════════════════════════════════════════ -->
+<div data-route="404" hidden>
+  <section>
+    <div class="wrap narrow">
+      <h1>That page is not here.</h1>
+      <p class="lede">It may have moved, or the address may be mistyped.</p>
+      <p><a class="btn btn-primary" href="/" data-link>Back to the home page</a></p>
+    </div>
+  </section>
+</div>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="grid g4">
+      <div>
+        <h4>Nickland Edusoft</h4>
+        <p style="color:#8FA3C6;font-size:.9rem;max-width:34ch">
+          School management for Ghanaian pre-tertiary schools. Offline in the
+          office, online everywhere else.
+        </p>
+      </div>
+      <div>
+        <h4>Platform</h4>
+        <a href="/features" data-link>Features</a>
+        <a href="/pricing" data-link>Pricing</a>
+        <a href="/register" data-link>Register your school</a>
+        <a href="/login" data-link>Sign in</a>
+      </div>
+      <div>
+        <h4>Company</h4>
+        <a href="/about" data-link>About</a>
+        <a href="/support" data-link>Support</a>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <a data-support-email href="mailto:support@nicklandedusoft.com">support@nicklandedusoft.com</a>
+        <a data-support-phone-link hidden href="#"></a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span data-copyright>© Nickland Sales. All rights reserved.</span>
+      <span>Made in Ghana.</span>
+    </div>
+  </div>
+</footer>
+
+<noscript>
+  <style>[data-route] { display: block !important; }</style>
+</noscript>
+
+<script src="/welcome/app.js"></script>
+</body>
+</html>

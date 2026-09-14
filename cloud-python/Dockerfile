@@ -53,8 +53,18 @@ COPY cloud-python/app ./app
 COPY cloud-python/public ./public
 COPY cloud-python/scripts ./scripts
 
-# The platform's own tables, applied on first boot.
+# The public website and the Superadmin console — plain HTML, CSS and JS, with
+# no build step, served by app/site.py. Hostname decides which one a request
+# gets; see that module.
+COPY cloud-python/site ./site
+COPY cloud-python/console ./console
+
+# The platform's own tables, applied on first boot. Two files: the sync and
+# registry tables, and the subscription/billing tables beside them. A service
+# that shipped only the first would start, serve, and fail at the first
+# checkout — so both are copied here rather than one being remembered.
 COPY cloud-python/schema.sql ./schema.sql
+COPY cloud-python/schema-saas.sql ./schema-saas.sql
 
 # A SCHOOL's tables, and the designations, classes, grading bands and settings
 # every school opens with — read by app/school/db.py when a school is enrolled.

@@ -14,6 +14,9 @@ from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import admin_api
+from . import billing
+from . import billing_api
 from . import office
 from . import payments as cloud_payments
 from . import parent_api
@@ -22,7 +25,9 @@ from . import desk_api
 from . import portal_auth as pauth
 from . import portals as portal_model
 from . import platform_api
+from . import public_api
 from . import ratelimit
+from . import site as site_files
 from . import staff as staff_api
 from . import webapp
 from .store import create_store
@@ -73,6 +78,23 @@ def boot_report(store):
             lines.append(f"database: not reachable at boot ({err.__class__.__name__}); "
                          "will be set up on the first request that needs it")
 
+    seeded = getattr(store, "_billing_seeded", None)
+    if seeded is None:
+        lines.append("subscriptions: NOT READY — the billing tables could not be "
+                     "prepared; schools are not billed and keep full access")
+    elif any(seeded.values()):
+        lines.append("subscriptions: ready (seeded "
+                     + ", ".join(f"{n} {k.replace('_', ' ')}"
+                                 for k, n in seeded.items() if n) + ")")
+    else:
+        lines.append("subscriptions: ready")
+
+    from .billing import provider as billing_provider
+    lines.append("subscription payments: " + (
+        "on" if billing_provider.configured() else
+        f"off ({billing_provider.ENV_SECRET} is not set) — schools can register "
+        "and start a trial, but no card is taken"))
+
     key = os.environ.get(platform_api.ENV_KEY, "")
     if platform_api.platform_enabled():
         lines.append("platform administration: on")
@@ -90,6 +112,14 @@ def boot_report(store):
 
     lines.append("parents' app: " + ("served from this service" if webapp.is_available()
                                      else "not in this build — / serves the placeholder page"))
+
+    faces = [name for name, kind in (("website", "site"), ("superadmin console", "console"))
+             if site_files.available(kind)]
+    lines.append("interfaces: " + (", ".join(faces) if faces else "none built") +
+                 (f" — on {domains[0]}: www → website, admin → console, "
+                  "every other name → the school application" if domains else
+                  f" — no domain configured, so they are at {site_files.SITE_PREFIX} "
+                  f"and {site_files.CONSOLE_PREFIX} and / stays the school application"))
 
     # A school's own tables are read from files when it is enrolled. They were
     # once left out of the image, which nothing noticed until the first school
@@ -113,9 +143,27 @@ def create_app(store=None) -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     app.state.store = store or create_store()
 
+    # The subscription engine's own defaults: the plans, the features, the grid
+    # between them and the platform's settings. Done HERE rather than in
+    # `boot_report`, which runs once per process and can be switched off — a
+    # platform with no plans cannot sell anything, and the second service built
+    # in a test process needs its own seeded store as much as the first does.
+    app.state.store._billing_seeded = billing.bootstrap(app.state.store)
+
+    # Every API router, mounted BEFORE the catch-all that serves static files,
+    # so none of them can be shadowed by it.
+    #
+    # Order matters once more, between two of these: `/api/v1/school/billing`
+    # has to be matched before `/api/v1/school`'s own routes. A school's billing
+    # section is deliberately NOT gated on its subscription — a suspended school
+    # must be able to reach the page that says so and the button that fixes it —
+    # and that is exactly why it is a separate router rather than more handlers
+    # in school_api.
+    app.include_router(public_api.router)
+    app.include_router(admin_api.router)
+    app.include_router(billing_api.router)
     # The online school itself: every module the offline system has, against
-    # that school's own Postgres schema. Mounted FIRST so it can never be
-    # shadowed by the catch-all that serves the web app's static files.
+    # that school's own Postgres schema.
     app.include_router(school_api.router)
     # The office application's own contract — the same browser build a school's
     # computer serves at /desk, pointed here instead. See app/desk_api.py.
@@ -172,10 +220,42 @@ def create_app(store=None) -> FastAPI:
     def legacy_site():
         return HTMLResponse(SITE)
 
+    def _interface(request):
+        """Which of the platform's three faces this request is for.
+
+        The hostname decides — www and the bare domain get the website, `admin.`
+        gets the console, everything else gets the school application. A
+        deployment that has configured no domain is unchanged: every address
+        gets the application, exactly as before, and the website and console are
+        reached at /welcome and /console instead.
+        """
+        try:
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+        except Exception:
+            return None
+        return site_files.interface_for(host)
+
+    def _serve(kind, url_path="/"):
+        """One of the hand-written interfaces, or None when it is not built."""
+        found = site_files.resolve(kind, url_path)
+        if not found and not os.path.splitext(url_path)[1]:
+            found = site_files.shell(kind)          # a client-side route
+        if not found:
+            return None
+        return FileResponse(found, media_type=site_files.content_type(found), headers={
+            "Cache-Control": site_files.cache_header(url_path),
+            "X-Content-Type-Options": "nosniff",
+        })
+
     @app.get("/", response_class=HTMLResponse)
     @app.get("/portal", response_class=HTMLResponse)
     @app.get("/app", response_class=HTMLResponse)
-    def site():
+    def site(request: Request):
+        wanted = _interface(request) if request.url.path == "/" else None
+        if wanted:
+            served = _serve(wanted, "/")
+            if served:
+                return served
         shell = webapp.shell()
         if shell:
             return FileResponse(shell, media_type="text/html; charset=utf-8",
@@ -1001,6 +1081,24 @@ def create_app(store=None) -> FastAPI:
                 pass
         return {"ok": True}
 
+    # ── The platform's OWN gateway webhook ──────────────────────────────
+    # Not the route above. That one is a SCHOOL taking fees from a parent, with
+    # the school's own key; this is NICKLAND taking a subscription from a
+    # school, with Nickland's. They share no key, no reference and no table,
+    # and keeping them apart is what stops a school's gateway secret from ever
+    # being able to say a subscription was paid.
+    @app.post("/api/v1/billing/webhook")
+    async def billing_webhook(request: Request):
+        from .billing import provider as billing_provider
+        from .billing.repo import repo_for
+        raw = (await request.body()).decode("utf-8", "replace")
+        signature = (request.headers.get("x-paystack-signature")
+                     or request.headers.get("x-signature") or "")
+        result = billing_provider.handle_webhook(S(), repo_for(S()), raw, signature)
+        if not result.get("ok"):
+            return _err(result.get("status", 401), result.get("error", "Unauthorized"))
+        return result
+
     # ── School-key: admin (portal backend / read model) ──
     # ── Nickland's own admin ────────────────────────────────────────────
     # Every other admin route is authenticated with a SCHOOL's key and can only
@@ -1110,13 +1208,33 @@ def create_app(store=None) -> FastAPI:
         cid = S().enqueue_change(school["school_id"], {"type": body["type"], "payload": body.get("payload", {})})
         return {"ok": True, "id": cid}
 
-    # ── Web app static files (registered last, so it can never shadow the API) ──
+    # ── Static files (registered last, so this can never shadow the API) ──
+    # Three interfaces come through here. Which one is decided by the hostname
+    # first — that is the deployment shape the brief describes — and by an
+    # explicit /welcome or /console prefix second, which is what makes a
+    # single-hostname deployment and a laptop work at all.
     @app.get("/{full_path:path}")
-    def web_app(full_path: str):
-        if not webapp.is_available():
-            raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
+    def web_app(full_path: str, request: Request):
         url_path = "/" + full_path
         if url_path.startswith("/api/"):
+            raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
+
+        by_prefix, inner = site_files.interface_for_path(url_path)
+        if by_prefix:
+            served = _serve(by_prefix, inner)
+            if served:
+                return served
+            raise HTTPException(status_code=404, detail={
+                "ok": False,
+                "error": f"The {by_prefix} is not part of this build."})
+
+        wanted = _interface(request)
+        if wanted:
+            served = _serve(wanted, url_path)
+            if served:
+                return served
+
+        if not webapp.is_available():
             raise HTTPException(status_code=404, detail={"ok": False, "error": "not found"})
 
         found = webapp.resolve(url_path)

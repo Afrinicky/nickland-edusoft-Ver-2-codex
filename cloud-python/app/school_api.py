@@ -29,6 +29,7 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
 from . import portals, ratelimit
+from .billing import entitlements
 from .school import (academics, admin, calendar as school_calendar, canteen,
                      communications, dashboards, db as sdb, exams, fees,
                      office,
@@ -72,7 +73,7 @@ class Denied(Exception):
         self.response = response
 
 
-def require(authorization, portal=None, module=None, action="view"):
+def require(authorization, portal=None, module=None, action="view", store=None):
     """Resolve the caller, and refuse them if this is not theirs.
 
     The gate is the MODULE, and the module is the same one the desktop
@@ -105,6 +106,34 @@ def require(authorization, portal=None, module=None, action="view"):
         security.deny(db, actor, f"{module}:{action}",
                       f"You do not have permission to {action} {module}.")
         raise Denied(_err(403, f"Access denied. You do not have permission to {action} {module}."))
+
+    # ── and then: is the SCHOOL entitled to this at all ──────────────────
+    # Two different questions, asked in this order on purpose. Permission is
+    # "may this person"; entitlement is "may this school". A head teacher with
+    # every permission in the building still cannot open Payroll if the school
+    # is on a plan that does not include it, and nobody at all can write to a
+    # school whose subscription is suspended.
+    #
+    # It is checked HERE, in the one place every guarded route already passes
+    # through, rather than at each route. A rule enforced in ninety places is a
+    # rule that is missing from one of them.
+    #
+    # Without a store — the desktop host, and any caller that has not wired one
+    # in — this does nothing at all, which is right: the offline system is not
+    # a subscription and never was.
+    if store is not None:
+        entitlement = entitlements.for_school(store, school_id)
+        refusal = entitlements.check(entitlement, module, action)
+        if refusal:
+            security.deny(db, actor, f"subscription:{module or portal or 'access'}",
+                          refusal["message"])
+            raise Denied(_err(
+                402 if refusal["reason"] == "subscription" else 403,
+                refusal["message"],
+                subscription_required=refusal["reason"] == "subscription",
+                upgrade_required=refusal["reason"] == "feature",
+                subscription_status=entitlement.get("status"),
+                read_only=bool(refusal.get("read_only"))))
     return db, actor
 
 
@@ -126,11 +155,28 @@ def guarded(portal=None, module=None, action="view"):
             "authorization", inspect.Parameter.KEYWORD_ONLY,
             default=Header(None), annotation=str))
 
+        # The subscription check needs the platform's store, and the store
+        # belongs to the APP rather than to this module — the test suites build
+        # several services in one process and a module-level one would hand the
+        # second app the first app's schools. So the request is asked for it.
+        #
+        # Most handlers already declare `request` because they read a body;
+        # only the ones that do not get an extra parameter, and only those have
+        # it removed again before the handler is called. Adding a second
+        # `request` to a handler that has one would be a duplicate-parameter
+        # error at import time, which is at least loud, but this is simpler.
+        borrows_request = "request" not in original.parameters
+        if borrows_request:
+            outer_params.append(inspect.Parameter(
+                "request", inspect.Parameter.KEYWORD_ONLY, annotation=Request))
+
         @functools.wraps(fn)
         async def inner(*args, **kwargs):
             authorization = kwargs.pop("authorization", None)
+            request = kwargs.pop("request") if borrows_request else kwargs.get("request")
             try:
-                db, actor = require(authorization, portal, module, action)
+                db, actor = require(authorization, portal, module, action,
+                                    store=_store_of(request))
             except Denied as d:
                 return d.response
             return _send(await fn(db, actor, *args, **kwargs))
@@ -149,6 +195,20 @@ async def _json(request: Request):
         return await request.json()
     except Exception:
         return {}
+
+
+def _store_of(request):
+    """The platform store this request's app is holding, or None.
+
+    None is a real answer and not a failure: a deployment that has not been
+    given a store — or a caller that reached a route some other way — is simply
+    not billed, and the subscription gate does nothing. It must never be the
+    reason a school cannot open its register.
+    """
+    try:
+        return request.app.state.store
+    except Exception:
+        return None
 
 
 # ══ sign in ═════════════════════════════════════════════════════════════════
@@ -253,15 +313,25 @@ async def signin(request: Request):
         "permissions": actor["permissions"],
         "is_admin": actor["is_admin"], "is_super": actor["is_super"],
         "school": {"id": school_id, "name": db.get_setting("school_name", "School")},
+        # Carried on the sign-in reply as well as on /me, so the first screen
+        # after signing in already knows whether to show a trial countdown or a
+        # "your subscription is suspended" banner.
+        "entitlement": (entitlements.summary(entitlements.for_school(store, school_id))
+                        if (store := _store_of(request)) else None),
     }
 
 
 @router.get("/me")
-async def me(authorization: str = Header(None)):
+async def me(request: Request, authorization: str = Header(None)):
     try:
         db, actor = require(authorization)
     except Denied as d:
         return d.response
+    # Deliberately NOT gated on the subscription — `require` is called without a
+    # store above. A school whose subscription has lapsed still has to be able
+    # to sign in and see why, and an app that cannot read /me cannot draw the
+    # screen that says so or the button that fixes it.
+    store = _store_of(request)
     return {
         "ok": True, "role": "staff", "mode": "online",
         "user": {"id": actor["user_id"], "username": actor["username"],
@@ -278,6 +348,12 @@ async def me(authorization: str = Header(None)):
         # showing an empty module; the app reads the same switches from here so
         # the two draw the same school.
         "features": _features(db),
+        # What this school's plan entitles it to, and what its subscription
+        # currently allows. The app draws its banner and hides its unentitled
+        # modules from this — and the backend refuses them anyway, which is
+        # what makes hiding them a courtesy rather than the security.
+        "entitlement": entitlements.summary(
+            entitlements.for_school(store, db.school_id)) if store else None,
     }
 
 
