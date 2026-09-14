@@ -27,7 +27,7 @@
     "host:provision": "node host/provision.js",
     "dev:desk": "vite --config vite.desk.config.js",
     "desk:coverage": "node scripts/desk-coverage.mjs",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "electron-builder install-app-deps",
     "test": "node scripts/contrast.mjs && node test/regressions.js && node test/school_fees.js && node test/onboarding_workbook.js && node test/sync_conflicts.js && node test/payment_desk.js && node test/gateways.js && node test/licence.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/app_shell.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js && node test/headless_host.js && node test/host_dialect.js && node test/host_postgres.js && node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
     "test:regressions": "node test/regressions.js && node test/school_fees.js && node test/onboarding_workbook.js && node test/sync_conflicts.js && node test/payment_desk.js && node test/gateways.js && node test/licence.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/app_shell.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js && node test/headless_host.js && node test/host_dialect.js && node test/host_postgres.js",
     "test:contrast": "node scripts/contrast.mjs",
@@ -60,7 +60,6 @@
     "electron-builder": "^25.0.0",
     "@electron/fuses": "^1.8.0",
     "bytenode": "^1.5.7",
-    "electron-rebuild": "^3.2.9",
     "vite": "^5.4.0",
     "wait-on": "^8.0.0"
   },

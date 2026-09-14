@@ -91,7 +91,7 @@ If any step turns red ❌, click on it to see the error message. The most common
 | Error message contains | What to do |
 |---|---|
 | `Cannot find module` | A file didn't upload. Re-upload from Step 3. |
-| `electron-rebuild failed` | Re-run the workflow (Actions tab → Run workflow). Native modules sometimes fail once, succeed second try. |
+| `Could not find any Visual Studio installation` | Should no longer happen. The build used to force a SOURCE compile of `better-sqlite3`, which needs Visual Studio that the runner image does not have in a form the pinned node-gyp can see. It now uses the prebuilt binary (`electron-builder install-app-deps`) and never compiles. If you see this again, something has reintroduced a forced rebuild. |
 | `EACCES` or `permission denied` | Re-run the workflow. Transient GitHub Actions issue. |
 | `if-no-files-found: error` | Earlier step failed. Read the logs for the real error above this one. |
 
@@ -173,9 +173,9 @@ For the curious — here's what happens when you push code:
 1. GitHub spins up a fresh Windows Server VM (no cost to you).
 2. Checks out your code.
 3. Installs Node.js 20.
-4. Installs Python 3.11 (needed by `better-sqlite3` to compile its native bindings).
+4. Installs Python 3.11 (a fallback only — the native binding is fetched prebuilt, not compiled).
 5. Runs `npm install` — downloads all dependencies (electron, react, etc.) — about 3 minutes.
-6. Runs `electron-rebuild` to compile native modules against Electron's Node version.
+6. Runs `electron-builder install-app-deps` to fetch `better-sqlite3`'s **prebuilt** binary for Electron's Node version. It deliberately does not compile from source: compiling needs Visual Studio, and a single failed download used to turn into a failed release build.
 7. Runs `vite build` to bundle the React UI.
 8. Runs `electron-builder --win` to package everything into an NSIS installer.
 9. Uploads the `.exe` as a downloadable artifact.
