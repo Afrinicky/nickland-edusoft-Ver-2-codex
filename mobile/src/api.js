@@ -1365,6 +1365,25 @@ export const api = {
   integrationsTestSms: (token, to) =>
     MODE === 'online' ? school.testIntegrationSms(token, to) : hostOnly('Testing SMS')(),
 
+  // ── Subscription and renewal ──────────────────────────────────────
+  //
+  // Online only, and that is not an oversight. A school's subscription is the
+  // PLATFORM's record, not the school's — a desktop on the school's own LAN
+  // has no more business holding it than it has holding another school's. The
+  // desktop shows its licence state instead (electron/licence), which is the
+  // same fact arriving by a different road.
+  billing: (token) => MODE === 'online' ? school.billing(token) : hostOnly('Billing')(),
+  billingPlans: (token) =>
+    MODE === 'online' ? school.billingPlans(token) : hostOnly('Plans')(),
+  billingRenew: (token, body) =>
+    MODE === 'online' ? school.billingRenew(token, body) : hostOnly('Renewing')(),
+  billingChangePlan: (token, planId) =>
+    MODE === 'online' ? school.billingChangePlan(token, planId) : hostOnly('Changing plan')(),
+  billingPay: (token, body) =>
+    MODE === 'online' ? school.billingPay(token, body) : hostOnly('Paying')(),
+  billingRemindersRead: (token, id) =>
+    MODE === 'online' ? school.billingRemindersRead(token, id) : Promise.resolve({ ok: true }),
+
   // ── Photographs and documents ─────────────────────────────────────
   //
   // The installed application attaches a file by opening a dialog and copying
@@ -1820,6 +1839,22 @@ export const school = {
     schoolRequest('/integrations/sms/test', { method: 'POST', token, body: { to } }),
   saveSettings: (token, settings) =>
     schoolRequest('/system/settings', { method: 'POST', token, body: { settings } }),
+
+  // ── the school's own subscription ──
+  // Never gated by the entitlement check, deliberately: a suspended school has
+  // to be able to reach the page that says why and the button that fixes it.
+  // See cloud-python/app/billing_api.py, which is a separate router for
+  // exactly this reason.
+  billing: (token) => schoolRequest('/billing', { token }),
+  billingPlans: (token) => schoolRequest('/billing/plans', { token }),
+  billingRenew: (token, body) =>
+    schoolRequest('/billing/renew', { method: 'POST', token, body: body || {} }),
+  billingChangePlan: (token, planId) =>
+    schoolRequest('/billing/plan', { method: 'POST', token, body: { plan_id: planId } }),
+  billingPay: (token, body) =>
+    schoolRequest('/billing/pay', { method: 'POST', token, body: body || {} }),
+  billingRemindersRead: (token, id) =>
+    schoolRequest('/billing/reminders/read', { method: 'POST', token, body: { id } }),
 
   staffRegister: (token, date) => schoolRequest('/staff-register', { token, query: { date } }),
   saveLessonNote: (token, body) => schoolRequest('/my/lesson-notes', { method: 'POST', token, body }),

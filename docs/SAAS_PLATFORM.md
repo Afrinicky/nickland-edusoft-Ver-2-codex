@@ -424,6 +424,135 @@ failing test.
 
 ---
 
+## 10c. No subscription, no usage — including offline
+
+The cloud portal and the parents' app were always gated at
+`school_api.require()`. **The desktop was not gated at all** — and the desktop
+is the source of truth and runs without the internet. A school that stopped
+paying could pull out the network cable and keep running it forever.
+
+It cannot be closed by asking the desktop nicely: anything it decides for
+itself, somebody can change, and a flag in its SQLite file is a flag a bursar
+can edit. So the decision is made in the cloud and travels as a **short-lived
+signed lease**.
+
+```
+  cloud                                     desktop
+  ─────                                     ───────
+  billing/licence.py                        electron/licence/
+    Ed25519 PRIVATE key                       Ed25519 PUBLIC key
+    signs {school, access, features,          verifies, and can refuse
+           device, not_after}                 — it can never forge
+           │                                        ▲
+           └──── POST /api/v1/licence ──────────────┘
+                 (every sync, and daily)
+```
+
+| Setting | Default | What it answers |
+|---|---|---|
+| `licence_lease_days` | 14 | how long a school that stopped **paying** keeps working |
+| `licence_lease_grace_days` | 7 | how long a school with no **internet** keeps working |
+
+Two different questions, deliberately given two different answers. Adobe does
+the same thing and for the same reason — its offline grace is 30 days on
+monthly plans and 99 on annual.
+
+**What it actually stops.** Not a determined person with a debugger; nothing
+shipped to somebody else's computer stops that, and pretending otherwise means
+months on obfuscation that buys an afternoon. It stops every realistic thing:
+
+| | how |
+|---|---|
+| going offline and staying there | the lease expires and will not renew |
+| winding the clock back | a high-water mark of the latest moment ever seen |
+| copying the folder to another PC | the lease names the machine it is for |
+| reinstalling to get a new trial | the cloud remembers the school, not the install |
+| editing the licence row by hand | the signature stops matching |
+| an administrator overriding it | the gate is checked before the elevated shortcut |
+
+**It never destroys anything.** Every expiry path ends in **read-only**: every
+record readable, every report printable, every export available, and not one
+new mark, payment or pupil. §11 says suspension must never delete a school's
+data, and an expired lease is a kind of suspension. Backups and sign-in stay
+open in every state, because a school must always be able to get its data out.
+
+Enforced at the two chokepoints the desktop already had — `ipc/_guard.js` for
+the office window and the dispatcher in `server/api.js` for a browser on the
+school Wi-Fi — so a phone on the same network meets the same rule the desktop
+does.
+
+**A fresh install gets 30 days** (`ACTIVATION_DAYS`) before it must have
+collected a licence. Without that, the first run of the first install would be
+read-only and every existing school would arrive on Monday to a system that had
+locked itself overnight. It is not a second free trial: the trial is the
+cloud's, counted per school, and reinstalling to get another month gets you a
+database with none of your pupils in it.
+
+---
+
+## 10d. Downloading is opting in
+
+The model is Adobe's, which is what the installers of every paid desktop
+product have converged on:
+
+1. **Website** — choose a plan, register, give payment details. A free trial
+   still takes them and charges GHS 0 (§7).
+2. **Download** — `/download` hands over the installer, and only to an account
+   with a live subscription. The build is the **same file for everybody**:
+   there are no per-customer installers, because a build that has to be kept
+   secret is a build that leaks once and is then worthless forever.
+3. **Activate** — the installed app asks for the same email and password, and
+   `POST /api/v1/activate` gives that machine its own credential and a lease.
+
+So the download is free and inert, and the account is what is worth something.
+That is the whole of the protection and the whole of what has ever worked.
+
+**Seats.** `school_devices`, capped by the plan's `limits.devices`
+(`default_device_seats`, 5, when a plan says nothing). Sign in on a machine and
+it takes a seat; run out and you are told *which machines are using them*,
+because "device limit reached" with no list is the most annoying error message
+in consumer software. A school frees one itself from Billing — an operator
+should never be the person handling a stolen laptop.
+
+Each activated machine gets **its own credential**, not the school's shared
+key. That is what makes Deactivate mean something: it cuts off that computer at
+its very next request and leaves the office PC working. A machine that is wiped
+and reactivated reclaims its existing row rather than eating a second seat.
+
+---
+
+## 10e. Renewal reminders
+
+`billing/reminders.py`, modelled on how a consumer subscription does it,
+because that is what schools are used to and it works: told early, told again
+nearer, told on the day, told once when it has lapsed. Never nagged daily.
+
+```
+14 days · 7 days · 3 days · 1 day · the day · expired · grace · suspended
+```
+
+Configured as `reminder_days_before` (default `14,7,3,1`; zero is always added).
+Three channels — the application itself, email and SMS — carrying **the same
+words**, because the fastest way to lose a customer's trust is to tell them two
+different things. Every one carries the Renew button.
+
+**Sent once.** `billing_reminders` is UNIQUE over (school, stage, channel,
+period, recipient) and the row is written *before* the message is attempted, so
+a retried run or two racing workers produce one message. An SMS sent twice is
+charged twice and read as a broken system.
+
+**Our SMS key, not the school's.** A school being told it has lapsed must not
+pay for the message, and a suspended school may have no credit left to send it
+with (`platform_sms_key`).
+
+**Renewal takes mobile money.** The card-only rule (§10a) is for putting an
+instrument on file for a subscription that renews *itself*. A bursar renewing
+by hand needs no such thing, and in Ghana that bursar pays by MoMo — refusing
+it would mean a reminder whose button does not work. `POST /school/billing/renew`
+is deliberately unrestricted.
+
+---
+
 ## 11. Entitlement enforcement
 
 `app/billing/entitlements.py`, enforced in `app/school_api.py` at `require()` —
@@ -533,6 +662,7 @@ Daily is right. Running it twice in a minute does nothing the second time.
 | `PLATFORM_PAYSTACK_SECRET` | fallback | Nickland's gateway key — **not** a school's. Superseded by a gateway configured in the console |
 | `PLATFORM_PAYSTACK_PUBLIC` | fallback | the publishable key the browser needs |
 | `BILLING_CRON_SECRET` | for scheduling | ≥ 16 characters, or the cron routes are not there |
+| `LICENCE_SIGNING_KEY` | for offline licensing | Ed25519 private key, base64. Generated and stored in `platform_settings` if unset — which works, and is weaker, and the boot report says which |
 
 Everything else — currency, tax, trial rules, grace periods, what a suspended
 school may do, which pupils are billable — is a **row** in `platform_settings`,
@@ -578,9 +708,21 @@ give it one.
    `PLATFORM_PAYSTACK_SECRET` and `PLATFORM_PAYSTACK_PUBLIC` instead; the
    console's gateway wins where both exist.) Until one of the two is there,
    schools register, start trials and use everything, and no card is taken.
-6. Schedule the billing run — and, alongside it, `/api/v1/admin/cron/notifications`
-   every ten minutes or so to push the text messages schools have queued. Both
-   use `BILLING_CRON_SECRET`, so a cron service holds one credential.
+6. Schedule three crons, all on `BILLING_CRON_SECRET` so a cron service holds
+   one credential:
+   - `/api/v1/admin/cron/billing-run` — daily. Raises invoices, moves the
+     lifecycle along, and sends the day's reminders.
+   - `/api/v1/admin/cron/reminders` — daily, for a deployment that wants
+     reminders on a different schedule from invoicing. Safe to call as often as
+     you like; a reminder already sent is not sent again.
+   - `/api/v1/admin/cron/notifications` — every ten minutes, to push the text
+     messages schools have queued to parents.
+7. Fill in the mail server and the platform SMS key under **System settings**,
+   or renewal reminders reach nobody. Everything else works without them.
+8. Put the installers somewhere and set `download_desktop_windows`,
+   `download_desktop_mac` and `download_android` to their addresses. Until then
+   the download page says the build is not published yet rather than offering a
+   link that 404s.
 
 Existing schools need no migration and keep working (§11, grandfathering).
 Subscribe them from the console when you are ready, or let each school choose a
@@ -595,7 +737,9 @@ export DATABASE_URL="postgres://…" ALLOW_DEV_SECRET=1
 python3 cloud-python/tests/test_billing.py    # the engine, on the in-memory store
 python3 cloud-python/tests/test_saas.py       # registration, routing and enforcement, on Postgres
 python3 cloud-python/tests/test_gateways.py   # the adapters, against a stand-in provider
+python3 cloud-python/tests/test_licensing.py  # leases, seats, activation, reminders
 node    test/gateways.js                      # the desktop's adapters, and parity with the cloud's
+node    test/licence.js                       # the four ways people try to run an unpaid copy
 ```
 
 The Python suites are in `npm run test:online`; `test/gateways.js` is in

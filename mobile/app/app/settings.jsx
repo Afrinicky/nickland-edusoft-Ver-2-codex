@@ -9,6 +9,7 @@ import {
   Users, AccessControl, Features, AuditTrail,
 } from '../../src/screens/mod/settings';
 import Integrations from '../../src/screens/system/integrations';
+import Billing from '../../src/screens/system/billing';
 
 export default function Settings() {
   return (
@@ -25,6 +26,7 @@ export default function Settings() {
             case 'canteen':  return <CanteenSettings />;
             case 'payroll':  return <PayrollSettings />;
             case 'integrations': return <Integrations />;
+            case 'billing':  return <Billing />;
             case 'payments': return <PaymentSettings />;
             case 'notify':   return <NotificationSettings />;
             case 'users':    return <Users />;

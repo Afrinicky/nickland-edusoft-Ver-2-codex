@@ -204,7 +204,27 @@ def create_app(store=None) -> FastAPI:
         return app.state.store
 
     def require_school(x_school_key, request=None):
+        """The school behind a credential — either the school's own sync key,
+        or one activated device's own token.
+
+        Both, because activation (see /api/v1/activate) gives each machine its
+        own credential rather than handing out the shared key. A device token
+        that has been deactivated resolves to nothing, so pressing Deactivate
+        cuts that machine off at its very next request.
+        """
         school = S().get_school_by_key(x_school_key) if x_school_key else None
+        if not school and x_school_key:
+            from .billing.devices import by_token
+            from .billing.repo import repo_for
+            try:
+                device = by_token(repo_for(S()), x_school_key)
+            except Exception:
+                device = None
+            if device:
+                school = S().get_school(device["school_id"])
+                if school:
+                    school = {**school, "device_id": device["device_id"],
+                              "device_row": device["id"]}
         if not school:
             # A key that belongs to no school. Written to the PLATFORM's log and
             # never to a school's: the school an attacker was aiming at must not
@@ -1057,6 +1077,133 @@ def create_app(store=None) -> FastAPI:
     def ping(x_school_key: str = Header(None)):
         school = require_school(x_school_key)
         return {"ok": True, "school": {"id": school["school_id"], "name": school["name"]}}
+
+    @app.post("/api/v1/activate")
+    async def activate_install(request: Request):
+        """Activate an installation by signing in — the Adobe and Filmora model.
+
+        The whole funnel this belongs to:
+
+            1. website: choose a plan, register, give payment details
+               (a trial charges GHS 0 and still takes the details — §7)
+            2. website: download the installer, which is the SAME file for
+               everybody. There are no per-customer builds and nothing to
+               keep secret in one.
+            3. this: the installed app asks for the email and password from
+               step 1, and receives this machine's own credential and a
+               signed licence lease.
+
+        So the download is free and useless, and the account is what is worth
+        anything — which is the arrangement every paid desktop product has
+        settled on, because a build that has to be kept secret is a build that
+        leaks once and is then worthless forever.
+
+        The machine takes a seat (`billing/devices.py`). A school that has run
+        out is told which machines are using them rather than merely refused.
+        """
+        from . import identity
+        from .billing import devices as device_lib
+        from .billing import licence as licence_lib
+        from .billing.repo import repo_for
+
+        body = await _json(request)
+        if ratelimit.limited(request, "activate", body.get("email")):
+            return JSONResponse(status_code=429, content={
+                "ok": False, "error": "Too many attempts. Try again shortly."})
+
+        signed_in = identity.sign_in(S(), email=body.get("email"),
+                                     password=body.get("password"),
+                                     school_id=body.get("school_id"),
+                                     source=_client_addr(request))
+        if not signed_in.get("ok"):
+            if signed_in.get("choose"):
+                return JSONResponse(status_code=300, content={
+                    "ok": False, "choose": True, "error": signed_in["error"],
+                    "schools": signed_in["schools"]})
+            return JSONResponse(status_code=signed_in.get("status", 401),
+                                content={"ok": False,
+                                         "error": signed_in.get("error", "Sign-in failed.")})
+
+        school_id = signed_in["school_id"]
+        repo = repo_for(S())
+        claimed = device_lib.claim(
+            S(), repo, school_id, body.get("device"),
+            label=body.get("label") or "", platform=body.get("platform") or "",
+            app=body.get("app") or "desktop", app_version=body.get("app_version") or "",
+            actor=(signed_in.get("user") or {}).get("username") or signed_in.get("school_id"),
+            remote_addr=_client_addr(request))
+        if not claimed.get("ok"):
+            return JSONResponse(status_code=claimed.get("status", 409),
+                                content={k: v for k, v in claimed.items() if k != "status"})
+
+        lease = licence_lib.issue(S(), repo, school_id, device=str(body.get("device") or ""))
+        platform_api.audit(S(), "install_activated", actor="desktop", school_id=school_id,
+                           detail=f'{claimed["device"].get("label") or "a computer"} activated.',
+                           remote_addr=_client_addr(request))
+        return {
+            "ok": True,
+            "school": signed_in["school"],
+            "school_id": school_id,
+            # THIS MACHINE's credential, not the school's shared key. It is
+            # shown exactly once, here, and is what the installation stores.
+            "device_token": claimed["token"],
+            "device": claimed["device"],
+            "returning": bool(claimed.get("returning")),
+            "licence": lease.get("licence"),
+            "token": lease.get("token"),
+            "entitlement": signed_in.get("entitlement"),
+            "seats": device_lib.summary(repo, school_id),
+        }
+
+    @app.post("/api/v1/licence")
+    async def licence_lease(request: Request, x_school_key: str = Header(None)):
+        """A fresh signed lease for the desktop that asked (see billing/licence.py).
+
+        The same school key the desktop already syncs with — no second
+        credential to configure, and a school that can sync can renew its
+        licence, which is exactly the set of schools that should be able to.
+
+        Deliberately a POST despite reading nothing: it mints a new signed
+        token each time, and a GET that changes what the caller holds is a GET
+        that ends up cached by something.
+        """
+        from .billing import devices as device_lib
+        from .billing import licence as licence_lib
+        from .billing.repo import repo_for
+        school = require_school(x_school_key, request)
+        body = await _json(request)
+        repo = repo_for(S())
+        device = str(body.get("device") or "")
+
+        # A machine somebody deactivated from Billing gets no more leases. Its
+        # stored one runs out on its own schedule and it drops to read-only —
+        # the same door every other lapse goes through, rather than a second
+        # mechanism that would need its own explaining.
+        if device and not device_lib.is_active(repo, school["school_id"], device):
+            return JSONResponse(status_code=403, content={
+                "ok": False, "reason": "deactivated",
+                "error": "This computer has been deactivated from the school's "
+                         "Billing page. Sign in again to activate it."})
+
+        device_lib.touch(repo, school["school_id"], device, _client_addr(request))
+        lease = licence_lib.issue(S(), repo, school["school_id"], device=device)
+        platform_api.audit(S(), "licence_issued", actor="desktop",
+                           school_id=school["school_id"],
+                           detail=f'Lease to {lease["licence"]["not_after"][:10]} '
+                                  f'({lease["licence"]["access"]}).',
+                           remote_addr=_client_addr(request))
+        return lease
+
+    @app.get("/api/v1/licence/key")
+    def licence_public_key():
+        """The verifying key, so a desktop build can be pointed at a private
+        deployment. Public by nature — it checks signatures and cannot make
+        them — and answered without a key so that a fresh install can fetch it
+        before it has anything else."""
+        from .billing import licence as licence_lib
+        from .billing.repo import repo_for
+        return {"ok": True, "public_key": licence_lib.public_key(repo_for(S())),
+                "algorithm": "ed25519"}
 
     @app.post("/api/v1/sync/push")
     async def push(request: Request, x_school_key: str = Header(None)):

@@ -37,6 +37,7 @@ from .billing import adjustments, engine, entitlements, invoices as invoice_lib
 from .billing import audit as billing_audit
 from .billing import plans as plan_lib
 from .billing import provider as billing_provider
+from .billing import reminders
 from .billing import settings as platform_settings
 from .billing import subscriptions as subs
 from .billing import usage as usage_lib
@@ -838,7 +839,29 @@ async def admin_billing_run(request: Request, authorization: str = Header(None),
                                f'{len(report["advanced"])} moved, '
                                f'{len(report["errors"])} failed.')
     entitlements.invalidate()
-    return {"ok": True, "report": report}
+
+    # Reminders ride the same run. Deliberately after the invoicing and the
+    # lifecycle: a school whose payment landed this morning must be told about
+    # the period it is now IN, not the one it was in when the run started.
+    try:
+        reminded = reminders.run(store, repo_for(store))
+    except Exception as exc:
+        # A mail server that is down must not fail the billing run — the
+        # invoices are already raised, and a reminder is not worth undoing them.
+        reminded = {"ok": False, "error": f"{exc.__class__.__name__}"}
+    return {"ok": True, "report": report, "reminders": reminded}
+
+
+@router.post("/cron/reminders")
+async def cron_reminders(request: Request, x_cron_key: str = Header(None)):
+    """The reminders on their own, for a deployment that wants them daily while
+    the billing run is monthly. Safe to call as often as you like: a reminder
+    already sent is not sent again (`billing_reminders`, UNIQUE)."""
+    problem = _cron_guard(request, x_cron_key)
+    if problem:
+        return problem
+    store = request.app.state.store
+    return {"ok": True, **reminders.run(store, repo_for(store))}
 
 
 # ── Usage and reporting ─────────────────────────────────────────────────────

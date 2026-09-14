@@ -20,6 +20,47 @@
 const security = require('./_security');
 const scopes = require('./_scope');
 const { POLICY, ALWAYS_ALLOWED, fallbackRule } = require('./_policy');
+const licence = require('../licence');
+
+// ── The licence gate ────────────────────────────────────────────────────────
+// Checked BEFORE the elevated shortcut below, deliberately: an administrator
+// is unrestricted within their school and is not thereby entitled to run an
+// unpaid copy. It is the one rule in this file that an administrator does not
+// outrank, because it is not a rule about them.
+//
+// These channel prefixes are exempt in every state, and each for a reason that
+// would otherwise leave a school stuck:
+//
+//   auth, session   somebody has to be able to sign in to READ the notice
+//   settings, cloud the cloud address and the school key live here, and they
+//   licence         are what a school fixes to make the problem go away
+//   backup          a school must always be able to get its own data OUT —
+//                   holding it hostage would be wrong, and would be a reason
+//                   never to buy this in the first place
+//   dashboard       the screen that displays the notice
+const LICENCE_EXEMPT = /^(auth|session|licence|cloud|cloud-sync|backup|dashboard|app):/;
+
+function licenceRefusal(db, channel) {
+  if (LICENCE_EXEMPT.test(channel)) return null;
+
+  const rule = POLICY[channel] || fallbackRule(channel);
+  const action = rule ? rule[1] : 'edit';
+  const verdict = licence.allows(db, action);
+  if (verdict.ok) return null;
+
+  // Never logged as a permission denial: the person tried nothing wrong, and
+  // filling a school's security log with them would bury the entries that do
+  // mean something.
+  return {
+    ok: false,
+    denied: true,
+    licence: true,
+    reason: verdict.state.reason,
+    access: verdict.state.access,
+    renew_url: verdict.state.renew_url || '',
+    error: verdict.state.message || licence.MESSAGES.read_only,
+  };
+}
 
 const ACTION_LABEL = {
   view: 'view', create: 'add to', edit: 'change', delete: 'delete from',
@@ -73,6 +114,10 @@ function guardedIpcMain(ipcMain, db) {
             : deny(db, channel, 'Please sign in.');
         }
 
+        // The licence, before anything about who is asking. See above.
+        const unlicensed = licenceRefusal(db, channel);
+        if (unlicensed) return unlicensed;
+
         if (ALWAYS_ALLOWED.has(channel)) return handler(event, ...args);
 
         // An administrator or proprietor runs the school and is held back
@@ -114,4 +159,4 @@ function guardedIpcMain(ipcMain, db) {
   };
 }
 
-module.exports = { guardedIpcMain };
+module.exports = { guardedIpcMain, licenceRefusal, LICENCE_EXEMPT };

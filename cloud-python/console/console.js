@@ -1202,7 +1202,42 @@
     support_email: 'Support email, shown on the website',
     support_phone: 'Support telephone, shown on the website',
     company_name: 'Company name',
-    product_name: 'Product name'
+    product_name: 'Product name',
+
+    // The offline licence. These two are the answers to two different
+    // questions and are worth reading as such: the lease is how long a school
+    // that stopped PAYING keeps working, and the grace is how long a school
+    // with no INTERNET keeps working.
+    licence_lease_days: 'Offline licence: days a desktop runs on one lease',
+    licence_lease_grace_days: 'Offline licence: extra days while it cannot reach us',
+    licence_expired_access: 'When both run out (read_only or blocked)',
+    licence_signing_key: 'Licence signing key — leave alone unless you know why',
+    default_device_seats: 'Computers a school may activate, when its plan says nothing',
+
+    // Reminders.
+    reminders_enabled: 'Renewal reminders switched on (1 or 0)',
+    reminder_days_before: 'Remind this many days before the end (comma separated)',
+    reminder_channels: 'Reminder channels (inapp, email, sms)',
+    portal_url: 'Where the Renew button points (blank = the school’s own address)',
+
+    // Sending the email and the text.
+    smtp_host: 'Mail server address',
+    smtp_port: 'Mail server port (587 normally, 465 for implicit TLS)',
+    smtp_user: 'Mail server username',
+    smtp_password: 'Mail server password',
+    smtp_from: 'Send reminders from this address',
+    smtp_from_name: 'Send reminders as this name',
+    smtp_starttls: 'Upgrade the mail connection to TLS (1 or 0)',
+    platform_sms_provider: 'SMS provider for OUR reminders (not a school’s)',
+    platform_sms_key: 'Our own SMS key — schools are never charged for these',
+    platform_sms_sender: 'Sender ID our reminders come from',
+
+    // The installers the website hands out.
+    download_desktop_windows: 'Windows installer address',
+    download_desktop_mac: 'macOS installer address',
+    download_android: 'Android app address',
+    download_version: 'Version shown on the download page',
+    download_notes: 'Note shown under the downloads'
   };
 
   PAGES.settings = function (host) {

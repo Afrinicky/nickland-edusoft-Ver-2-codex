@@ -89,6 +89,25 @@ that school's own provider account; Nickland never holds them. The same four
 adapters run on the offline desktop, so a school keeps its provider whichever
 way it works.
 
+**Downloading is opting in.** The desktop installer and the phone app come from
+the public website, and the website hands them over only to an account with a
+live subscription — a free trial takes payment details and charges GHS 0. The
+build is the same file for everybody; what activates a copy is signing in with
+the school's own account, which also takes one of the plan's device seats. It is
+the arrangement Adobe and Wondershare both settled on, for the reason they did:
+a build that has to be kept secret leaks once and is then worthless.
+
+**No subscription, no usage — including offline.** The desktop runs without the
+internet, so it carries a short-lived lease signed in the cloud with a key the
+school does not have. Stay offline, wind the clock back, copy the folder to
+another computer or edit the licence by hand, and it drops to **read-only** —
+every record readable, every report printable, nothing deleted, ever, and
+everything back the moment the bill is settled.
+
+**Schools renew themselves.** Reminders go out at 14, 7, 3 and 1 days, on the
+day, and once after — in the app, by email and by SMS, each carrying the same
+Renew button. Renewal takes mobile money as well as cards.
+
 How that fits together, and how the subscription and billing engine works:
 **[`docs/SAAS_PLATFORM.md`](docs/SAAS_PLATFORM.md)**.
 

@@ -33,6 +33,7 @@
       <a href="/pricing" data-link data-route-link="pricing">Pricing</a>
       <a href="/about" data-link data-route-link="about">About</a>
       <a href="/support" data-link data-route-link="support">Support</a>
+      <a href="/download" data-link data-route-link="download">Download</a>
       <span class="sep" aria-hidden="true"></span>
       <a href="/login" data-link data-route-link="login">Sign in</a>
       <a class="btn btn-primary" href="/register" data-link data-route-link="register">Register your school</a>
@@ -277,6 +278,63 @@
             For a bank transfer or a termly invoice, write to us and we will set it up on
             your account.</p>
         </details>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ══ DOWNLOAD ═════════════════════════════════════════════════════════ -->
+<div data-route="download" hidden>
+  <section class="tightpad alt">
+    <div class="wrap">
+      <p class="eyebrow">Download</p>
+      <h1>Get Nickland Edusoft</h1>
+      <p class="lead">The office installer runs the school whether or not the
+        internet is up. The phone app is for teachers and parents. Both sign in
+        with the same school account.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap narrow">
+      <!-- Not signed in: what to do first. -->
+      <div data-download-gate hidden>
+        <div class="note">
+          <p data-download-gate-text></p>
+        </div>
+        <ol class="howto" style="margin-top:22px">
+          <li><b>Create your school.</b> A minute, and it does not charge you —
+              a free trial takes your payment details and bills GHS 0.</li>
+          <li><b>Come back here</b> and the installer is on this page.</li>
+          <li><b>Install it and sign in</b> with the same email and password.
+              That activates the copy.</li>
+        </ol>
+        <p style="margin-top:26px">
+          <a class="btn btn-primary btn-lg" href="/register" data-link>Create my school</a>
+          <a class="btn btn-outline" href="/login" data-link style="margin-left:10px">I already have one</a>
+        </p>
+      </div>
+
+      <!-- Signed in with a live subscription: the actual files. -->
+      <div data-download-ready hidden>
+        <div class="note good"><p data-download-status></p></div>
+        <div class="downloads" data-download-list style="margin-top:24px"></div>
+        <p class="small muted" data-download-version style="margin-top:14px"></p>
+
+        <h2 style="margin-top:42px">After it installs</h2>
+        <ol class="howto">
+          <li><b>Open it</b> and it asks you to sign in.</li>
+          <li><b>Use the same email and password</b> you use here. Nothing else
+              to copy, no key to type.</li>
+          <li>That computer is now activated and keeps working offline. It
+              checks in with us from time to time to renew its licence.</li>
+        </ol>
+        <p class="small muted" data-download-seats style="margin-top:18px"></p>
+      </div>
+
+      <div data-download-empty hidden>
+        <div class="note"><p>The installers are not published yet. Write to us
+          and we will send you the current build.</p></div>
       </div>
     </div>
   </section>

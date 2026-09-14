@@ -101,5 +101,21 @@ services:
       - key: BILLING_CRON_SECRET
         generateValue: true
 
+      # ── Signing the offline licences ──
+      # Ed25519, base64. The PRIVATE half signs leases here and never leaves
+      # this service; the desktop carries only the public half, which can check
+      # a lease and never make one. Generate with:
+      #   python3 -c "import sys;sys.path.insert(0,'cloud-python');\
+      #     from app.billing.licence import generate_key;print(generate_key())"
+      #
+      # Left unset the platform generates one on first use and keeps it in
+      # platform_settings — which works, and means anyone with the database
+      # could sign licences. The boot report says which of the two is in use.
+      # CHANGING IT INVALIDATES EVERY LICENCE ALREADY ISSUED: each desktop
+      # drops to read-only until it collects a fresh one, which it does on its
+      # next check-in. Do not rotate it casually.
+      - key: LICENCE_SIGNING_KEY
+        sync: false
+
       - key: WEB_CONCURRENCY
         value: "2"

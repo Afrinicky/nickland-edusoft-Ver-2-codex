@@ -165,6 +165,17 @@ TABLES = {t.name: t for t in [
         "event_id", "provider", "event", "received_at",
     ], auto_pk=False),
 
+    Table("school_devices", "id", [
+        "id", "school_id", "device_id", "label", "platform", "app", "app_version",
+        "status", "activated_by", "token_hash", "last_seen_at", "last_ip",
+        "deactivated_at", "created_at",
+    ]),
+
+    Table("billing_reminders", "id", [
+        "id", "school_id", "subscription_id", "stage", "channel", "period_end",
+        "recipient", "status", "detail", "read_at", "sent_at", "created_at",
+    ]),
+
     Table("usage_snapshots", "id", [
         "id", "school_id", "captured_at", "plan_id", "billable_students",
         "total_students", "staff_count", "detail",

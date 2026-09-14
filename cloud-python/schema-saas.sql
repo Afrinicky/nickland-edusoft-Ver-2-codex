@@ -288,6 +288,82 @@ CREATE TABLE IF NOT EXISTS billing_webhook_events (
   received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── Activated devices (seats) ───────────────────────────────────────────────
+-- Which computers and phones a school has activated, and when each last spoke
+-- to us. The model is Adobe's and Filmora's, because it is the one customers
+-- already understand: you sign in on a machine, that machine takes a seat, and
+-- when you run out of seats you deactivate one you are not using.
+--
+-- Without this, one school's credentials run an unlimited number of installs —
+-- which is how a single Pro subscription ends up serving a district.
+--
+-- `device_id` is a hash the desktop computes from the machine it is on (see
+-- electron/licence/index.js). Hashed there rather than sent raw, so what is
+-- stored here is not a MAC address and is no use to anybody who reads it.
+CREATE TABLE IF NOT EXISTS school_devices (
+  id             BIGSERIAL PRIMARY KEY,
+  school_id      TEXT NOT NULL,
+  device_id      TEXT NOT NULL,
+  label          TEXT NOT NULL DEFAULT '',
+  platform       TEXT NOT NULL DEFAULT '',
+  app            TEXT NOT NULL DEFAULT 'desktop',
+  app_version    TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'active',
+  activated_by   TEXT NOT NULL DEFAULT '',
+  -- This device's OWN credential, hashed. Each activated machine gets its own
+  -- rather than sharing the school's single sync key, for one decisive reason:
+  -- a shared key cannot be revoked for one computer. With this, Deactivate cuts
+  -- off the stolen laptop at the next request and leaves the office PC working,
+  -- which is what a person pressing that button expects it to mean.
+  token_hash     TEXT NOT NULL DEFAULT '',
+  last_seen_at   TIMESTAMPTZ,
+  last_ip        TEXT NOT NULL DEFAULT '',
+  deactivated_at TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One row per machine per school. A machine that is deactivated and later
+-- signed back in RE-USES its row rather than taking a second seat, which is
+-- what makes "reinstall Windows and activate again" not eat a school's seats.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_school_device_once
+  ON school_devices (school_id, device_id);
+CREATE INDEX IF NOT EXISTS idx_school_device_active
+  ON school_devices (school_id, status);
+
+-- ── Renewal reminders ───────────────────────────────────────────────────────
+-- One row per reminder actually sent, and the UNIQUE is the whole point: a
+-- billing run that is retried, or two workers running it at once, must not
+-- send a school the same "your subscription ends in 7 days" twice. A school
+-- told twice in one morning reads it as a system that is broken, and a school
+-- told daily stops reading any of them.
+--
+-- `stage` is what the reminder was about — `before_7`, `expired`, `grace_3` —
+-- so the row is the answer to "have we told them about THIS yet", per channel.
+CREATE TABLE IF NOT EXISTS billing_reminders (
+  id              BIGSERIAL PRIMARY KEY,
+  school_id       TEXT NOT NULL,
+  subscription_id BIGINT,
+  stage           TEXT NOT NULL,
+  channel         TEXT NOT NULL,
+  period_end      TEXT NOT NULL DEFAULT '',
+  recipient       TEXT NOT NULL DEFAULT '',
+  status          TEXT NOT NULL DEFAULT 'sent',
+  detail          TEXT NOT NULL DEFAULT '',
+  read_at         TIMESTAMPTZ,
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The same school, the same stage, the same channel, the same person, for the
+-- same period — once. `period_end` is in the key so that next term's "7 days
+-- left" is a different reminder from this term's without anything having to be
+-- cleared, and `recipient` is in it because the head teacher who registered
+-- and the bursar who pays are usually two people and both have to be told.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_reminder_once
+  ON billing_reminders (school_id, stage, channel, period_end, recipient);
+CREATE INDEX IF NOT EXISTS idx_billing_reminder_school
+  ON billing_reminders (school_id, sent_at DESC);
+
 -- ── Usage ───────────────────────────────────────────────────────────────────
 -- What a school's roll was, on a date. Kept as a series rather than read live,
 -- because "how many pupils did this school have when we billed it" is a

@@ -337,6 +337,21 @@ input[aria-invalid="true"] { border-color: var(--bad); }
 .step .n { display: inline-block; min-width: 1.4em; font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) { .step { font-size: .78rem; padding: 10px 8px; } .step .label { display: none; } }
 
+/* ── A numbered list of instructions ───────────────────────────────────── */
+/* Not `.steps`, which is the horizontal wizard stepper on the registration
+   form. This is prose a person reads once and then goes and does. */
+.howto { margin: 0; padding-left: 1.3em; }
+.howto li { margin-bottom: 12px; color: var(--muted); line-height: 1.55; }
+.howto li b { color: var(--ink); font-weight: 600; }
+
+/* ── Downloads ─────────────────────────────────────────────────────────── */
+.downloads { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.download { display: flex; align-items: center; justify-content: space-between; gap: 14px;
+            border: 1px solid var(--line); border-radius: var(--radius);
+            padding: 16px 18px; background: var(--paper); }
+.download .what { font-weight: 600; color: var(--ink); }
+.download .note { font-size: .82rem; color: var(--muted); margin-top: 2px; }
+
 /* ── Summary rows ──────────────────────────────────────────────────────── */
 .rows { border-top: 1px solid var(--line); }
 .row { display: flex; justify-content: space-between; gap: 16px; padding: 11px 0;
