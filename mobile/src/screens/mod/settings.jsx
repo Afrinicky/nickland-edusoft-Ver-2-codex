@@ -499,17 +499,13 @@ export function PayrollSettings() {
 export function PaymentSettings() {
   return (
     <SettingsForm
-      title="Online payments"
-      subtitle="Whether parents can pay through the app, and through whom."
-      note="The gateway's secret key is written on the school's own system and is never read back — a secret a screen can display is a secret a screenshot can carry out of the building."
+      title="Payment limits"
+      subtitle="The smallest and largest a parent may pay in one go, and the currency."
+      note="Which provider takes the money, and its keys, are set under Payments & SMS setup — where you can also test the connection before parents rely on it."
       fields={[
-        { key: 'online_payments_enabled', label: 'Take payments online',
-          options: [{ label: 'Yes', value: 'true' }, { label: 'No', value: 'false' }] },
-        { key: 'payment_gateway', label: 'Gateway',
-          options: [{ label: 'Paystack', value: 'paystack' }, { label: 'None', value: '' }] },
-        { key: 'paystack_public_key', label: 'Paystack public key', wide: true },
         { key: 'online_payment_min', label: 'Smallest payment allowed' },
-        { key: 'online_payment_max', label: 'Largest payment allowed' },
+        { key: 'online_payment_max', label: 'Largest payment allowed',
+          hint: 'A mistyped extra zero is refused before it reaches the provider.' },
         { key: 'payment_currency', label: 'Currency', hint: 'GHS' },
       ]} />
   );
@@ -524,7 +520,7 @@ export function NotificationSettings() {
         { key: 'feature_notifications_enabled', label: 'Send notices and messages',
           options: [{ label: 'Yes', value: 'true' }, { label: 'No — hide the module', value: 'false' }] },
       ]}
-      note="The SMS gateway's credentials are set on the school's own system, alongside the payment gateway's, and for the same reason." />
+      note="The SMS provider's key and sender ID are set under Payments & SMS setup, where you can test them without spending a credit." />
   );
 }
 

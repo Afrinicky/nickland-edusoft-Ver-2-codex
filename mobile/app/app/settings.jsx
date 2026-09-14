@@ -8,6 +8,7 @@ import {
   CanteenSettings, PayrollSettings, PaymentSettings, NotificationSettings,
   Users, AccessControl, Features, AuditTrail,
 } from '../../src/screens/mod/settings';
+import Integrations from '../../src/screens/system/integrations';
 
 export default function Settings() {
   return (
@@ -23,6 +24,7 @@ export default function Settings() {
             case 'grading':  return <Grading />;
             case 'canteen':  return <CanteenSettings />;
             case 'payroll':  return <PayrollSettings />;
+            case 'integrations': return <Integrations />;
             case 'payments': return <PaymentSettings />;
             case 'notify':   return <NotificationSettings />;
             case 'users':    return <Users />;

@@ -33,6 +33,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 os.environ.setdefault("ALLOW_DEV_SECRET", "1")
 os.environ["PLATFORM_ADMIN_KEY"] = "pk_test_" + ("x" * 32)
 os.environ.setdefault("PORTAL_BASE_DOMAIN", "edusoft.gh")
+# Three domains, each named on its own. The portal's is the schools' entire —
+# its bare name included — and the other two take nothing from it.
+os.environ.setdefault("PUBLIC_SITE_DOMAIN", "edusoft.com")
+os.environ.setdefault("CONSOLE_DOMAIN", "admin.edusoft.com")
 os.environ["EDUSOFT_QUIET_BOOT"] = "1"
 
 from fastapi.testclient import TestClient                       # noqa: E402
@@ -351,21 +355,38 @@ def run(client, store, repo):
        all(k in run_report["report"] for k in ("invoiced", "exempt", "advanced", "aged", "errors")))
 
     print("\nWhere the three interfaces are served from")
-    ck("the console answers on admin.<domain>",
-       b"Superadmin" in client.get("/", headers={"host": "admin.edusoft.gh"}).content)
-    ck("the website answers on www.<domain>",
-       b"Register your school" in client.get("/", headers={"host": "www.edusoft.gh"}).content)
-    ck("...and on the bare domain",
-       b"Register your school" in client.get("/", headers={"host": "edusoft.gh"}).content)
-    ck("a school's own address gets the application, not the marketing site",
-       b"Register your school" not in client.get(
-           "/", headers={"host": f"{school_id}.edusoft.gh"}).content)
-    ck("the console is also reachable by path, for a one-hostname deployment",
-       b"Superadmin" in client.get("/console").content)
-    ck("...as is the website", b"Register your school" in client.get("/welcome").content)
+    site = b"Register your school"
+    console = b"Superadmin"
+
+    def body(host, path="/"):
+        return client.get(path, headers={"host": host}).content
+
+    ck("the website answers on its own domain", site in body("edusoft.com"))
+    ck("...and on www of it", site in body("www.edusoft.com"))
+    ck("the console answers on its own domain", console in body("admin.edusoft.com"))
+
+    # The whole point of the change: the portal domain is the schools', and
+    # nothing else moves into it. A parent typing the bare domain gets the
+    # application they were told to expect, not a pricing page.
+    ck("the portal's BARE domain is still the school application",
+       site not in body("edusoft.gh") and console not in body("edusoft.gh"))
+    ck("...as is www of it",
+       site not in body("www.edusoft.gh") and console not in body("www.edusoft.gh"))
+    ck("...as is a school's own address",
+       site not in body(f"{school_id}.edusoft.gh"))
+    ck("...and admin. of the portal domain, which is now nobody's but the schools'",
+       console not in body("admin.edusoft.gh"))
+
+    # Exact matching, not "ends with": a subdomain of the website's domain is
+    # not the website unless somebody named it.
+    ck("a subdomain of the website's domain is not the website",
+       site not in body("shop.edusoft.com"))
+
+    ck("both are also reachable by path, for a one-hostname deployment",
+       site in body("localhost", "/welcome") and console in body("localhost", "/console"))
     ck("the API answers the same on every one of them",
-       client.get("/api/v1/public/plans", headers={"host": "admin.edusoft.gh"}).json()["ok"]
-       and client.get("/api/v1/public/plans", headers={"host": "www.edusoft.gh"}).json()["ok"])
+       all(client.get("/api/v1/public/plans", headers={"host": h}).json()["ok"]
+           for h in ("edusoft.com", "admin.edusoft.com", "edusoft.gh", "localhost")))
 
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0

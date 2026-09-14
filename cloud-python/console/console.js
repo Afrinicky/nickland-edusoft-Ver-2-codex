@@ -467,7 +467,7 @@
 
   function drawSchool(body, data, reload, close) {
     var school = data.school, sub = data.subscription, quote = data.quote;
-    var tabs = ['Overview', 'Billing', 'Adjustments', 'Invoices', 'History'];
+    var tabs = ['Overview', 'Billing', 'Adjustments', 'Invoices', 'Integrations', 'History'];
     var current = 'Overview';
     var panes = el('div', {});
 
@@ -490,6 +490,7 @@
       if (current === 'Billing') panes.appendChild(billingPane());
       if (current === 'Adjustments') panes.appendChild(adjustmentsPane());
       if (current === 'Invoices') panes.appendChild(invoicesPane());
+      if (current === 'Integrations') panes.appendChild(integrationsPane());
       if (current === 'History') panes.appendChild(historyPane());
     }
 
@@ -733,6 +734,42 @@
             } }, ['Refund']);
           } }
         ], data.payments || [], { empty: 'No payment has been taken from this school.' })))
+      ]);
+    }
+
+    function integrationsPane() {
+      // Read-only, and redacted by the server. An operator helping a bursar on
+      // the telephone needs to see whether a gateway is set up and whether its
+      // last test passed. Reading the key, or changing it, is the school's own
+      // business — support is not the same permission as control.
+      var own = data.school_gateway;
+      if (!own) {
+        return el('div', { class: 'note' }, [el('p', {
+          text: 'This school has no hosted database, so its own payment setup lives on ' +
+                'its desktop and is not visible from here.' })]);
+      }
+      var pay = own.payments, sms = own.sms;
+      return el('div', {}, [
+        el('div', { class: 'note' }, [el('p', {
+          text: 'Fees a school takes from its parents go to the SCHOOL’s own provider ' +
+                'account, not Nickland’s. Shown here so support can help; the keys ' +
+                'themselves are not readable by anybody, including you.' })]),
+        panel('Taking fees online', el('div', { class: 'rows' }, [
+          detail('State', pay.state ? pay.state.label : '—'),
+          detail('Provider', pay.gateway_name || 'none'),
+          detail('Switched on', pay.enabled ? 'yes' : 'no'),
+          detail('Last test', pay.verified_at ? when(pay.verified_at) : 'never'),
+          detail('Set up on this screen', pay.legacy ? 'no — configured on the desktop' : 'yes'),
+          detail('Still needed', (pay.missing || []).join(', ') || '—'),
+          detail('Limits', money(pay.min) + ' – ' + money(pay.max))
+        ])),
+        pay.state ? el('p', { class: 'muted small', text: pay.state.detail }) : null,
+        panel('Text messages', el('div', { class: 'rows' }, [
+          detail('Provider', sms.provider_name || '—'),
+          detail('Key on file', sms.configured ? 'yes' : 'no'),
+          detail('Last test', sms.verified_at ? when(sms.verified_at) : 'never'),
+          detail('Still needed', (sms.missing || []).join(', ') || '—')
+        ]))
       ]);
     }
 
@@ -1201,6 +1238,109 @@
       ]);
     });
   };
+
+  // ── Nickland's own payment gateway ───────────────────────────────────────
+  PAGES.gateways = function (host) {
+    api('/gateways').then(function (data) {
+      if (!data.ok) return show(host, el('div', { class: 'note bad', text: data.error }));
+      var stored = {};
+      (data.configured || []).forEach(function (row) { stored[row.gateway] = row; });
+
+      var panels = (data.catalogue || []).map(function (spec) {
+        return gatewayPanel(spec, stored[spec.id]);
+      });
+
+      show(host, [
+        head('Payment gateway',
+             'How Nickland charges schools their subscription. This is not a school’s ' +
+             'own gateway — a school sets that up itself, and the two never mix.'),
+        data.active && data.active.available
+          ? el('div', { class: 'note good' }, [el('p', {
+              text: 'Subscriptions are charged through ' + data.active.provider_name +
+                    (data.active.from_environment
+                      ? '. Set in the environment, which wins over anything set here.'
+                      : '.') +
+                    (data.active.supports_renewal ? ''
+                      : ' It cannot charge a saved card, so renewals have to be paid ' +
+                        'from the invoice each time.') })])
+          : el('div', { class: 'note warn' }, [el('p', {
+              text: 'No gateway is live. Schools can register and start a trial, and ' +
+                    'no card is taken from anybody.' })])
+      ].concat(panels));
+    });
+  };
+
+  function gatewayPanel(spec, row) {
+    var inputs = {};
+    var body = el('div', {});
+
+    body.appendChild(el('p', { class: 'muted small', text: spec.tagline }));
+    if (!spec.verified) {
+      body.appendChild(el('div', { class: 'note warn' }, [el('p', {
+        text: 'This adapter was written from ' + spec.name + '’s published documentation ' +
+              'and has not been run against a live ' + spec.name + ' account from inside ' +
+              'this codebase. Test it here before pointing anything at it.' })]));
+    }
+    if (!spec.supports_stored_charge) {
+      body.appendChild(el('p', { class: 'muted small',
+        text: spec.name + ' cannot charge a saved card, so a subscription on it is paid ' +
+              'from each invoice rather than renewing itself.' }));
+    }
+
+    (spec.fields || []).forEach(function (f) {
+      var value = (row && row.credentials && row.credentials[f.key]) || '';
+      if (f.kind === 'select') {
+        inputs[f.key] = select({ id: 'g_' + spec.id + '_' + f.key },
+          (f.options || []).map(function (o) { return { value: o.value, label: o.label }; }),
+          value || f.default);
+      } else {
+        inputs[f.key] = input({
+          type: f.secret ? 'text' : 'text', id: 'g_' + spec.id + '_' + f.key,
+          value: value, placeholder: f.placeholder || f.default || '',
+          autocomplete: 'off', spellcheck: 'false'
+        });
+      }
+      body.appendChild(field(f.label + (f.required ? '' : '  (optional)'), inputs[f.key], f.hint));
+    });
+
+    var actions = el('div', { class: 'inline' }, [
+      el('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: function (e) {
+        var credentials = {};
+        Object.keys(inputs).forEach(function (k) { credentials[k] = inputs[k].value; });
+        busy(e.target, true);
+        api('/gateways', { method: 'POST', body: { gateway: spec.id, credentials: credentials } })
+          .then(function (r) { busy(e.target, false, 'Save'); if (ok(r, 'Saved.')) route(); });
+      } }, ['Save']),
+      el('button', { class: 'btn btn-outline btn-sm', type: 'button',
+                     'aria-disabled': row ? null : 'true', onclick: function (e) {
+        busy(e.target, true, 'Asking…');
+        api('/gateways/' + spec.id + '/test', { method: 'POST' })
+          .then(function (r) { busy(e.target, false, 'Test connection');
+                               if (ok(r, r.detail || 'It works.')) route(); });
+      } }, ['Test connection']),
+      el('button', { class: 'btn btn-primary btn-sm', type: 'button',
+                     'aria-disabled': (row && row.verified && !row.is_active) ? null : 'true',
+                     onclick: function () {
+        if (!confirm('Charge every school’s subscription through ' + spec.name + ' from now on?\n\n' +
+                     'Payments already taken keep the provider that took them.')) return;
+        api('/gateways/' + spec.id + '/activate', { method: 'POST' })
+          .then(function (r) { if (ok(r, spec.name + ' is now the live gateway.')) route(); });
+      } }, [row && row.is_active ? 'Live' : 'Make this the live one'])
+    ]);
+    body.appendChild(actions);
+    if (row && row.verified_detail) {
+      body.appendChild(el('p', { class: 'muted small', style: 'margin-top:10px',
+                                 text: row.verified_detail }));
+    }
+
+    var tags = [];
+    if (row && row.is_active) tags.push(el('span', { class: 'tag good', text: 'live' }));
+    else if (row && row.verified) tags.push(el('span', { class: 'tag info', text: 'tested' }));
+    else if (row) tags.push(el('span', { class: 'tag warn', text: 'not tested' }));
+    if (!spec.verified) tags.push(el('span', { class: 'tag warn', text: 'untested adapter' }));
+
+    return panel(spec.name, body, tags);
+  }
 
   PAGES.operators = function (host) {
     api('/operators').then(function (data) {

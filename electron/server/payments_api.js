@@ -31,7 +31,7 @@
 // same audit and the same parent snapshot.
 
 const { getSetting } = require('../utils/idgen');
-const { getGateway, gatewayEnabled } = require('./gateways');
+const { getGateway, gatewayEnabled, signsCallbacks } = require('./gateways');
 const payments = require('./payments_service');
 
 // Is this school taking money through the app at all? Two conditions, both
@@ -194,12 +194,18 @@ function registerPaymentRoutes({ add, db, json, API, getSetting: gs, audit, rate
   //     an attacker who can post here cannot forge.
   //   • Settling twice is not a second payment: verifyAndSettle returns the
   //     existing one, because a gateway retrying a delivery is normal.
+  //   • Hubtel and ExpressPay do not sign at all. Their deliveries are not
+  //     refused — that would mean never settling from a callback — but they
+  //     are never believed either: all such a body is allowed to do is name a
+  //     reference, and the route then asks the gateway over the school's own
+  //     connection. Since the amount was never read from any body, a signed
+  //     and an unsigned gateway settle through exactly the same check.
   add('POST', `${API}/payments/webhook/:gateway`, async (ctx, req, res, params, body, ip, tokenId, query, rawBody) => {
     const g = getGateway(db);
     if (!g || g.id !== params.gateway) return json(res, 404, { ok: false, error: 'Not found' });
 
-    const signature = req.headers['x-paystack-signature'] || req.headers['x-signature'] || '';
-    if (!g.verifyWebhook(db, signature, rawBody == null ? '' : rawBody)) {
+    const signature = req.headers['x-paystack-signature'] || req.headers['verif-hash'] || req.headers['x-signature'] || '';
+    if (signsCallbacks(g) && !g.verifyWebhook(db, signature, rawBody == null ? '' : rawBody)) {
       // Logged as a security event: somebody posting unsigned bodies at a
       // school's payment endpoint is worth a school knowing about.
       audit(db, null, 'security', null, 'webhook_rejected',

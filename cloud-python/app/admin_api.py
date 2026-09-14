@@ -283,7 +283,7 @@ def admin_dashboard(request: Request, authorization: str = Header(None),
         "trials_ending": subs.trial_ending_soon(repo, within_days=7),
         "overdue": [i for i in invoice_lib.list_invoices(repo, status=invoice_lib.PAST_DUE,
                                                          limit=25)],
-        "payments_available": billing_provider.configured(),
+        "payments_available": billing_provider.configured(repo),
         "recent": billing_audit.read(store, limit=25),
     }
 
@@ -387,6 +387,10 @@ def admin_school(school_id: str, request: Request, authorization: str = Header(N
         "payments": repo.find("platform_payments", {"school_id": school_id},
                               order_by="id", desc=True, limit=50),
         "payment_methods": billing_provider.methods_for(repo, school_id),
+        # How the SCHOOL takes fees from ITS parents — which is not Nickland's
+        # business to change, and very much Nickland's business to see when a
+        # school rings to say parents cannot pay.
+        "school_gateway": _school_gateway(school_id),
         "administrators": identity.directory_entry(store, school_id),
         "events": subs.events(repo, school_id, limit=60),
         "history": subs.history(repo, school_id),
@@ -394,6 +398,25 @@ def admin_school(school_id: str, request: Request, authorization: str = Header(N
         "entitlement": entitlements.summary(entitlements.for_school(store, school_id, fresh=True)),
         "portal_hosts": platform_api.portal_hosts(school_id),
     }
+
+
+def _school_gateway(school_id):
+    """A school's own payment setup, as the console may see it.
+
+    Read-only and redacted. An operator helping a bursar over the telephone
+    needs to know whether a gateway is configured, which one, and whether its
+    last test passed — and has no business being able to read the key or change
+    it. Support is not the same permission as control.
+    """
+    try:
+        from .school import db as sdb, integrations as school_integrations
+        db = sdb.SchoolDb(school_id)
+        if not db.exists():
+            return None
+        view = school_integrations.overview(db)
+        return {"payments": view["payments"], "sms": view["sms"]}
+    except Exception:
+        return None
 
 
 @router.post("/schools/{school_id}/lifecycle")
@@ -894,7 +917,7 @@ def admin_settings(request: Request, authorization: str = Header(None),
     values = platform_settings.all_settings(operator["repo"])
     return {"ok": True, "settings": values,
             "known": sorted(defaults.SETTINGS),
-            "payments": billing_provider.public_config()}
+            "payments": billing_provider.public_config(operator["repo"])}
 
 
 @router.post("/settings")
@@ -917,6 +940,151 @@ async def admin_set_settings(request: Request, authorization: str = Header(None)
     return _send(result)
 
 
+# ── Nickland's own gateway ──────────────────────────────────────────────────
+@router.get("/gateways")
+def admin_gateways(request: Request, authorization: str = Header(None),
+                   x_platform_key: str = Header(None)):
+    """The providers available, and which one the platform is charging through.
+
+    Credentials come back redacted — `••••` and the last four characters. There
+    is no route here that returns a secret, and there must never be one, for the
+    same reason a school's own screen does not get one: an operator account is
+    a credential, not a vault.
+    """
+    try:
+        operator = _guard(request, authorization, x_platform_key)
+    except Denied as denied:
+        return denied.response
+    from . import gateways as gateway_lib
+    repo = operator["repo"]
+    rows = repo.find("platform_gateways", order_by="gateway")
+    return {
+        "ok": True,
+        "catalogue": gateway_lib.catalogue(),
+        "configured": [
+            {"gateway": row["gateway"],
+             "credentials": gateway_lib.redact(row["gateway"], row.get("credentials")),
+             "currency": row.get("currency"), "is_active": row.get("is_active"),
+             "verified": bool(row.get("verified_at")), "verified_at": row.get("verified_at"),
+             "verified_detail": row.get("verified_detail")}
+            for row in rows],
+        "active": billing_provider.public_config(repo),
+    }
+
+
+@router.post("/gateways")
+async def admin_save_gateway(request: Request, authorization: str = Header(None),
+                             x_platform_key: str = Header(None)):
+    """Store Nickland's credentials for one provider. Never makes it active."""
+    try:
+        operator = _guard(request, authorization, x_platform_key)
+    except Denied as denied:
+        return denied.response
+    from . import gateways as gateway_lib
+    body = await _json(request)
+    repo = operator["repo"]
+    chosen = str(body.get("gateway") or "").strip().lower()
+    adapter = gateway_lib.get(chosen)
+    if not adapter:
+        return _err(400, "That is not a payment provider we support.")
+
+    existing = repo.get("platform_gateways", chosen) or {}
+    credentials, problems = gateway_lib.clean(chosen, body.get("credentials"),
+                                              existing.get("credentials"))
+    if problems:
+        return _err(400, " ".join(problems))
+    currency = str(body.get("currency") or existing.get("currency") or "GHS").upper()
+    if currency not in adapter.currencies:
+        return _err(400, f"{adapter.name} does not take {currency}.")
+
+    changed = credentials != (existing.get("credentials") or {})
+    patch = {"credentials": credentials, "currency": currency,
+             "callback_url": str(body.get("callback_url") or existing.get("callback_url") or ""),
+             "updated_at": now_iso()}
+    if changed:
+        # Untested credentials cannot be the live ones, here as for a school.
+        patch.update({"verified_at": None, "verified_detail": "", "is_active": False})
+    if existing:
+        repo.update("platform_gateways", chosen, patch)
+    else:
+        repo.insert("platform_gateways", {"gateway": chosen, "is_active": False, **patch})
+    billing_audit.write(operator["store"], "platform_gateway_saved", actor=operator["label"],
+                        detail=f"{adapter.name} credentials stored"
+                               + (" (changed)" if changed else "") + ".")
+    return {"ok": True, "gateway": chosen, "verified": not changed and bool(existing.get("verified_at"))}
+
+
+@router.post("/gateways/{gateway_id}/test")
+def admin_test_gateway(gateway_id: str, request: Request, authorization: str = Header(None),
+                       x_platform_key: str = Header(None)):
+    """Ask the provider whether Nickland's credentials are real.
+
+    The same rule the schools are held to: a gateway that has not answered a
+    test cannot be made the live one.
+    """
+    try:
+        operator = _guard(request, authorization, x_platform_key)
+    except Denied as denied:
+        return denied.response
+    from . import gateways as gateway_lib
+    repo = operator["repo"]
+    row = repo.get("platform_gateways", gateway_id)
+    adapter = gateway_lib.get(gateway_id)
+    if not row or not adapter:
+        return _err(404, "That gateway has not been set up.")
+    settings = gateway_lib.config_for(gateway_id, row.get("credentials") or {},
+                                      currency=row.get("currency") or "GHS")
+    missing = adapter.missing(settings)
+    if missing:
+        return _err(400, "Still needed: " + ", ".join(missing) + ".")
+    try:
+        result = adapter.ping(settings)
+    except Exception as exc:
+        result = {"ok": False,
+                  "error": f"{adapter.name} could not be reached ({exc.__class__.__name__})."}
+    if result.get("ok"):
+        repo.update("platform_gateways", gateway_id,
+                    {"verified_at": now_iso(),
+                     "verified_detail": str(result.get("detail") or "")[:300]})
+        billing_audit.write(operator["store"], "platform_gateway_tested",
+                            actor=operator["label"], detail=f"{adapter.name}: passed")
+        return {"ok": True, "detail": result.get("detail")}
+    repo.update("platform_gateways", gateway_id,
+                {"verified_at": None, "verified_detail": "", "is_active": False})
+    billing_audit.write(operator["store"], "platform_gateway_tested", actor=operator["label"],
+                        outcome="failed", detail=f'{adapter.name}: failed — {result.get("error")}')
+    return _err(400, result.get("error") or f"{adapter.name} refused the credentials.")
+
+
+@router.post("/gateways/{gateway_id}/activate")
+def admin_activate_gateway(gateway_id: str, request: Request,
+                           authorization: str = Header(None),
+                           x_platform_key: str = Header(None)):
+    """Make one provider the live one. Exactly one at a time."""
+    try:
+        operator = _guard(request, authorization, x_platform_key)
+    except Denied as denied:
+        return denied.response
+    from . import gateways as gateway_lib
+    repo = operator["repo"]
+    row = repo.get("platform_gateways", gateway_id)
+    adapter = gateway_lib.get(gateway_id)
+    if not row or not adapter:
+        return _err(404, "That gateway has not been set up.")
+    if not row.get("verified_at"):
+        return _err(400, "Test the connection first. A provider that has not "
+                         "answered cannot be made the live one.")
+    # Stood down first, then the new one raised. The database enforces one
+    # active row; doing it in this order means the constraint is never the
+    # thing that fails.
+    repo.update_where("platform_gateways", {"is_active": True}, {"is_active": False})
+    repo.update("platform_gateways", gateway_id, {"is_active": True})
+    billing_audit.write(operator["store"], "platform_gateway_activated",
+                        actor=operator["label"],
+                        detail=f"Subscriptions are now charged through {adapter.name}.")
+    return {"ok": True, "active": billing_provider.public_config(repo)}
+
+
 @router.get("/audit")
 def admin_audit(request: Request, limit: int = 200, school_id: str = "", refused: bool = False,
                 authorization: str = Header(None), x_platform_key: str = Header(None)):
@@ -936,18 +1104,57 @@ def admin_audit(request: Request, limit: int = 200, school_id: str = "", refused
 ENV_CRON_SECRET = "BILLING_CRON_SECRET"
 
 
-@router.post("/cron/billing-run")
-async def cron_billing_run(request: Request, x_cron_key: str = Header(None)):
+def _cron_guard(request, presented):
+    """The scheduler's own credential, checked in constant time.
+
+    Its own secret rather than the console's, so a cron service holds a key
+    that can start a run and nothing else. Under 16 characters there is no
+    scheduled anything on this service and the routes answer 404 — a half-set
+    variable should not leave a door ajar.
+    """
     secret = os.environ.get(ENV_CRON_SECRET, "").strip()
     if len(secret) < 16:
-        return _err(404, "No scheduled billing is configured on this service.")
-    if not x_cron_key or not hmac.compare_digest(
-            hashlib.sha256(str(x_cron_key).encode()).hexdigest(),
+        return _err(404, "Nothing scheduled is configured on this service.")
+    if not presented or not hmac.compare_digest(
+            hashlib.sha256(str(presented).encode()).hexdigest(),
             hashlib.sha256(secret.encode()).hexdigest()):
-        billing_audit.write(request.app.state.store, "billing_cron_refused",
+        billing_audit.write(request.app.state.store, "cron_refused",
                             actor="anonymous", outcome="refused",
-                            detail="A scheduled billing run was refused.")
+                            detail="A scheduled run was refused.")
         return _err(401, "Unauthorized")
+    return None
+
+
+@router.post("/cron/notifications")
+async def cron_notifications(request: Request, x_cron_key: str = Header(None)):
+    """Deliver the messages hosted schools have queued.
+
+    A school running the desktop drains its own queue; a school that is only
+    hosted has nothing to drain it, and its messages sat in the table forever.
+    This is that missing half, on the same schedule secret as the billing run —
+    a cron service should hold one credential, not two.
+
+    Every message goes out through the SCHOOL's own Arkesel key and is charged
+    to the school's own Arkesel account, which is why a school with no key
+    configured is skipped rather than failed.
+    """
+    problem = _cron_guard(request, x_cron_key)
+    if problem:
+        return problem
+    from .school import notify
+    report = notify.drain_all()
+    if report["sent"] or report["failed"] or report["errors"]:
+        billing_audit.write(request.app.state.store, "notifications_run", actor="scheduler",
+                            detail=f'{report["sent"]} sent, {report["failed"]} failed, '
+                                   f'across {report["schools"]} school(s).')
+    return {"ok": True, "report": report}
+
+
+@router.post("/cron/billing-run")
+async def cron_billing_run(request: Request, x_cron_key: str = Header(None)):
+    problem = _cron_guard(request, x_cron_key)
+    if problem:
+        return problem
     store = request.app.state.store
     report = invoice_lib.run_billing(store, repo_for(store))
     billing_audit.write(store, "billing_run", actor="scheduler",

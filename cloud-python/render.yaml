@@ -55,6 +55,21 @@ services:
       - key: PORTAL_BASE_DOMAIN
         sync: false
 
+      # ── The website's and the console's own addresses ──
+      # Each is named on its own and borrows nothing from PORTAL_BASE_DOMAIN,
+      # whose bare name, www and subdomains all stay with the school
+      # application. Matching is exact — the domain and its `www.` — so the
+      # console can sit on a subdomain of the website's domain and still be the
+      # console, because it was named.
+      #
+      # Leave either unset and that interface simply has no domain: it is still
+      # reached at /welcome and /console on every address, which is also how
+      # local development works.
+      - key: PUBLIC_SITE_DOMAIN
+        sync: false
+      - key: CONSOLE_DOMAIN
+        sync: false
+
       # ── Taking the platform's own money ──
       # NICKLAND's gateway key, for charging SCHOOLS their subscription. It is
       # NOT a school's gateway key — a school's own key, for taking fees from
@@ -76,6 +91,13 @@ services:
       # Render: New → Cron Job, daily, running
       #   curl -fsS -X POST -H "x-cron-key: $BILLING_CRON_SECRET" \
       #        https://<this service>/api/v1/admin/cron/billing-run
+      #
+      # A SECOND cron wants the same key, more often — every ten minutes is
+      # sensible — to push the text messages a school has queued:
+      #   curl -fsS -X POST -H "x-cron-key: $BILLING_CRON_SECRET" \
+      #        https://<this service>/api/v1/admin/cron/notifications
+      # It does nothing at all for a school that has not set up Arkesel, so it
+      # is safe to schedule before anybody has.
       - key: BILLING_CRON_SECRET
         generateValue: true
 

@@ -1584,12 +1584,36 @@ function runMigrations(db) {
   });
   safe(() => {
     const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'payments')");
-    ins.run('payment_gateway', 'none');          // none | paystack | (future: flutterwave, hubtel…)
+    ins.run('payment_gateway', 'none');          // none | paystack | flutterwave | hubtel | expresspay
     ins.run('payment_currency', 'GHS');
     ins.run('paystack_secret_key', '');
     ins.run('paystack_public_key', '');
     ins.run('paystack_base_url', 'https://api.paystack.co');
     ins.run('paystack_callback_url', '');        // optional; app uses a deep link by default
+  });
+
+  // The other three providers, seeded the same way. A school picks one in
+  // Settings → Payments; the keys it does not use stay empty and cost nothing.
+  // The same four are offered by the cloud (cloud-python/app/gateways/), so a
+  // school that set up online payments here and later moves to the portal — or
+  // the other way round — keeps its provider.
+  safe(() => {
+    const ins = db.prepare("INSERT OR IGNORE INTO settings (key, value, category) VALUES (?, ?, 'payments')");
+    ins.run('flutterwave_secret_key', '');
+    ins.run('flutterwave_public_key', '');
+    ins.run('flutterwave_secret_hash', '');      // the dashboard's 'Secret hash'; webhooks are refused without it
+    ins.run('flutterwave_base_url', 'https://api.flutterwave.com/v3');
+    ins.run('flutterwave_callback_url', '');
+    ins.run('hubtel_client_id', '');
+    ins.run('hubtel_client_secret', '');
+    ins.run('hubtel_merchant_account', '');      // the account the money is paid into
+    ins.run('hubtel_base_url', 'https://payproxyapi.hubtel.com');
+    ins.run('hubtel_status_url', 'https://api-txnstatus.hubtel.com');
+    ins.run('hubtel_callback_url', '');
+    ins.run('expresspay_merchant_id', '');
+    ins.run('expresspay_api_key', '');
+    ins.run('expresspay_base_url', 'https://expresspaygh.com/api');
+    ins.run('expresspay_callback_url', '');
   });
 
   // 19. Announcements — school → parents notices surfaced on the web portal.

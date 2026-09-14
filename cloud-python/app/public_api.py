@@ -76,7 +76,7 @@ def public_config(request: Request):
     return {
         "ok": True,
         **platform_settings.public_view(repo),
-        "payments": billing_provider.public_config(),
+        "payments": billing_provider.public_config(repo),
         "base_domain": (platform_api.portal_base_domains() or [None])[0],
     }
 
@@ -159,7 +159,7 @@ async def public_checkout(request: Request):
     school_id = _school_from_token(request, body)
     if not school_id:
         return _err(401, "Please sign in.")
-    if not billing_provider.configured():
+    if not billing_provider.configured(repo):
         return _err(503, "Card payments are not switched on for this deployment.")
 
     subscription = subs.current(repo, school_id)
@@ -194,7 +194,7 @@ def public_checkout_status(reference: str, request: Request):
     if not payment or (school_id and str(payment["school_id"]) != str(school_id)):
         return _err(404, "No such payment.")
 
-    verified = billing_provider.verify(reference)
+    verified = billing_provider.verify(reference, repo)
     if verified.get("ok") and verified.get("paid"):
         billing_provider.settle(store, repo, payment["school_id"], reference,
                                 invoice_id=payment.get("invoice_id"),

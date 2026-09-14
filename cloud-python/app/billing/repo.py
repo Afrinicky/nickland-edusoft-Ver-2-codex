@@ -170,6 +170,14 @@ TABLES = {t.name: t for t in [
         "total_students", "staff_count", "detail",
     ], json_columns=["detail"]),
 
+    # Nickland's OWN gateway credentials. A school's live in the school's own
+    # schema; these are the other direction of money and are kept apart from
+    # them on purpose — see `schema-saas.sql`.
+    Table("platform_gateways", "gateway", [
+        "gateway", "credentials", "currency", "callback_url", "is_active",
+        "verified_at", "verified_detail", "updated_at",
+    ], auto_pk=False, json_columns=["credentials"]),
+
     Table("platform_settings", "key", [
         "key", "value", "updated_at",
     ], auto_pk=False),

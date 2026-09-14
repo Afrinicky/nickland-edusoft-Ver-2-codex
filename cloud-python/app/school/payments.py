@@ -31,15 +31,9 @@ Where this improves on the offline system rather than copying it:
   • Every gateway conversation is written to the school's own audit log, so a
     dispute is answerable from the school's records and not only the gateway's.
 """
-import datetime
-import hashlib
-import hmac
-import json
 import secrets
-import urllib.error
-import urllib.request
 
-from . import fees, security
+from . import fees, integrations, security
 from .billing import round2
 
 MIN_DEFAULT = 1.0
@@ -51,23 +45,27 @@ MAX_DEFAULT = 10000.0
 def config(db):
     """The school's gateway, or None.
 
-    Two conditions, both required: a key, and the school having switched
-    internet payments on. A school that has pasted a test key while trying it
-    out is not live.
+    Everything about WHICH provider and WHETHER it is usable now lives in
+    `school/integrations.py` — the same answer the setup screen shows, so a
+    bursar looking at "Live" and a parent opening the payment screen cannot
+    disagree. What comes back here is that answer plus the adapter to call.
+
+    None means there is no online payment at this school today, for any of the
+    reasons there can be: no provider chosen, required fields missing, never
+    tested, or switched off.
     """
-    if db.get_setting("online_payments_enabled", "false") != "true":
-        return None
-    gateway = db.get_setting("payment_gateway", "none")
-    secret = db.get_setting("paystack_secret_key", "")
-    if gateway == "none" or not secret:
+    adapter, settings = integrations.active_adapter(db)
+    if not adapter:
         return None
     return {
-        "gateway": gateway, "secret": secret,
-        "public_key": db.get_setting("paystack_public_key", ""),
-        "base_url": db.get_setting("paystack_base_url", "https://api.paystack.co")
-                    or "https://api.paystack.co",
-        "currency": db.get_setting("payment_currency", "GHS") or "GHS",
-        "callback_url": db.get_setting("paystack_callback_url", ""),
+        "gateway": adapter.id,
+        "name": adapter.name,
+        "adapter": adapter,
+        "settings": settings,
+        "public_key": settings.cred("public_key"),
+        "currency": settings.currency,
+        "channels": list(adapter.channels),
+        "signed_callbacks": adapter.signed_callbacks,
     }
 
 
@@ -88,71 +86,52 @@ def availability(db):
         return {"available": False, "gateway": None, "min": lo, "max": hi,
                 "currency": db.get_setting("payment_currency", "GHS")}
     return {"available": True, "gateway": cfg["gateway"],
+            "gateway_name": cfg["name"],
             "public_key": cfg["public_key"] or None,
+            # What the payer can actually choose at the provider's page. A
+            # school on Hubtel should not be offering a parent "pay by card"
+            # in its own wording when Hubtel is going to show mobile money.
+            "channels": cfg["channels"],
             "currency": cfg["currency"], "min": lo, "max": hi}
 
 
 # ── the gateway ─────────────────────────────────────────────────────────────
 
-def _http_json(url, method="GET", headers=None, body=None, timeout=20):
-    data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(url, data=data, method=method)
-    request.add_header("Content-Type", "application/json")
-    for k, v in (headers or {}).items():
-        request.add_header(k, v)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as res:
-            return {"status": res.status, "json": json.loads(res.read().decode() or "{}")}
-    except urllib.error.HTTPError as e:
-        try:
-            return {"status": e.code, "json": json.loads(e.read().decode() or "{}")}
-        except Exception:
-            return {"status": e.code, "json": None}
-    except Exception as e:
-        return {"status": 0, "error": str(e)}
-
-
 def _initialize(cfg, amount, email, reference, metadata):
-    body = {
-        "amount": int(round(float(amount) * 100)),     # minor units, as Paystack requires
-        "email": email or "payments@nicklandedusoft.app",
-        "reference": reference, "currency": cfg["currency"], "metadata": metadata or {},
-    }
-    if cfg["callback_url"]:
-        body["callback_url"] = cfg["callback_url"]
-    res = _http_json(f'{cfg["base_url"].rstrip("/")}/transaction/initialize', "POST",
-                     {"Authorization": f'Bearer {cfg["secret"]}'}, body)
-    j = res.get("json") or {}
-    if 200 <= res.get("status", 0) < 300 and j.get("status") and j.get("data"):
-        return {"ok": True, "authorization_url": j["data"].get("authorization_url"),
-                "reference": j["data"].get("reference") or reference}
-    return {"ok": False, "error": j.get("message") or res.get("error")
-                                  or f'init_failed_{res.get("status")}'}
+    """Start a payment at whichever provider this school uses."""
+    return cfg["adapter"].checkout(cfg["settings"], amount, reference,
+                                   email=email, metadata=metadata)
 
 
-def _verify(cfg, reference):
-    res = _http_json(f'{cfg["base_url"].rstrip("/")}/transaction/verify/{reference}', "GET",
-                     {"Authorization": f'Bearer {cfg["secret"]}'})
-    j = res.get("json") or {}
-    if 200 <= res.get("status", 0) < 300 and j.get("data"):
-        d = j["data"]
-        return {"ok": True, "paid": d.get("status") == "success",
-                "amount": float(d.get("amount") or 0) / 100,
-                "currency": d.get("currency"), "gateway_status": d.get("status")}
-    return {"ok": False, "error": j.get("message") or res.get("error")
-                                  or f'verify_failed_{res.get("status")}'}
+def _verify(cfg, reference, token=""):
+    """Ask the provider what actually happened.
+
+    The only thing in this module allowed to say a payment succeeded, whichever
+    provider it is — and the reason an unsigned callback from Hubtel or
+    ExpressPay is no weaker than a signed one from Paystack.
+    """
+    return cfg["adapter"].verify(cfg["settings"], reference, token=token)
 
 
-def verify_webhook(secret, signature, raw_body):
-    """HMAC-SHA512 over the raw bytes, compared in constant time."""
-    if not secret or not signature:
+def verify_webhook(cfg, raw_body, headers=None):
+    """Is this delivery genuine?
+
+    Now the adapter's question, because the answer differs by provider: an
+    HMAC for Paystack, a shared hash for Flutterwave, and — honestly — False
+    for Hubtel and ExpressPay, which do not sign at all. A False here does not
+    mean the payment is ignored; it means the callback cannot settle anything
+    by itself and the settlement path goes and asks. See `webhook`.
+    """
+    if not cfg:
         return False
-    try:
-        expected = hmac.new(secret.encode(), (raw_body or "").encode(),
-                            hashlib.sha512).hexdigest()
-        return hmac.compare_digest(expected, str(signature))
-    except Exception:
-        return False
+    return bool(cfg["adapter"].verify_webhook(cfg["settings"], raw_body, headers or {}))
+
+
+def read_webhook(cfg, raw_body, headers=None):
+    """A delivery, in our words rather than the provider's."""
+    if not cfg:
+        return {"event": "", "reference": "", "event_id": "", "status": ""}
+    return cfg["adapter"].read_webhook(cfg["settings"], raw_body, headers or {})
 
 
 # ── what a parent may pay ───────────────────────────────────────────────────
@@ -242,6 +221,9 @@ def start_checkout(db, parent_actor, student_id, amount, email=None):
         "uuid": reference, "student_id": student_id, "parent_id": parent_actor["parent_id"],
         "term_id": term["id"] if term else None, "amount": amount,
         "channel": cfg["gateway"], "gateway": cfg["gateway"],
+        # `authorization_url` carries the provider's own token for the
+        # providers that mint one (ExpressPay puts it in the query string), so
+        # settlement can recover it without a column nobody else would use.
         "gateway_reference": init["reference"], "authorization_url": init["authorization_url"],
         "gateway_status": "initialised", "currency": cfg["currency"],
         "email": email or parent_actor.get("email"), "status": "pending",
@@ -251,6 +233,19 @@ def start_checkout(db, parent_actor, student_id, amount, email=None):
                    f'Parent {parent_actor["parent_id"]} started {amount} for pupil {student_id}')
     return {"ok": True, "intent_id": intent_id, "reference": init["reference"],
             "authorization_url": init["authorization_url"]}
+
+
+def _token_for(cfg, intent):
+    """The provider's own handle for a payment, where it has one.
+
+    ExpressPay identifies a transaction by a token rather than by the reference
+    we gave it, and that token is already in the checkout address we sent the
+    payer to. Nothing else needs it, and nothing else pays for it.
+    """
+    if cfg["gateway"] != "expresspay":
+        return ""
+    from ..gateways.expresspay import token_from_url
+    return token_from_url(intent.get("authorization_url"))
 
 
 def settle(db, reference, actor=None):
@@ -273,7 +268,8 @@ def settle(db, reference, actor=None):
     if not cfg:
         return {"ok": False, "status": 400, "error": "Payments are not configured."}
 
-    v = _verify(cfg, intent["gateway_reference"] or reference)
+    v = _verify(cfg, intent["gateway_reference"] or reference,
+                token=_token_for(cfg, intent))
     if not v.get("ok"):
         return {"ok": False, "status": 502, "error": "Could not confirm the payment with the gateway."}
     if not v.get("paid"):
@@ -285,9 +281,13 @@ def settle(db, reference, actor=None):
     settled = round2(v.get("amount") or 0)
     result = fees.record_payment(db, actor or {"user_id": None}, {
         "student_id": intent["student_id"], "amount": settled,
-        "payment_method": "Paystack" if cfg["gateway"] == "paystack" else "Mobile Money",
+        # The provider's own name on the receipt. It used to say "Paystack"
+        # or, for anything else, "Mobile Money" — which would print the wrong
+        # thing on a Hubtel school's receipt and tell a parent querying a
+        # payment to ring the wrong company.
+        "payment_method": cfg["name"],
         "reference": intent["gateway_reference"],
-        "notes": f'Paid online through {cfg["gateway"]}',
+        "notes": f'Paid online through {cfg["name"]}',
         "source": "online_payment", "term_id": intent["term_id"],
     })
     if not result.get("ok"):

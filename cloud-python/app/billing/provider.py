@@ -6,7 +6,7 @@ payment paths and confusing them would be expensive:
   * ``app/payments.py`` is a SCHOOL taking fees from a PARENT, with the
     school's own gateway key, which the school supplies.
   * this module is NICKLAND taking a subscription from a SCHOOL, with
-    Nickland's gateway key, which comes from the environment.
+    Nickland's own gateway credentials.
 
 They never share a key, a reference, a webhook or a table.
 
@@ -15,10 +15,17 @@ reference. Never a card number, never a CVV, never anything that could be
 replayed as an instrument — the provider holds the card and Edusoft holds the
 handle (§21).
 
+Both use the same adapter layer (`app/gateways/`), so Nickland can take
+subscriptions through whichever provider suits it without that being a property
+of the code — and a school on Hubtel and a platform on Paystack are not two
+payment implementations.
+
 Three properties the webhook path has to have, and does:
 
-  * **Verified.** The signature is checked over the RAW bytes against
-    Nickland's secret before a single field of the body is believed.
+  * **Verified.** The delivery is checked against the provider's own rule —
+    an HMAC for Paystack, a shared hash for Flutterwave — before a single field
+    of the body is believed. A provider that does not sign at all cannot settle
+    anything by itself; its delivery is a reason to go and ask.
   * **Idempotent.** Every event id is written to `billing_webhook_events`
     before it is acted on; a redelivery finds it there and stops. The
     signature proves a message is genuine — only this proves it is new.
@@ -31,62 +38,96 @@ platform works exactly as it does with one. That is the right default for a
 deployment that is not taking money yet, and it is not a silent one — the boot
 report says so.
 """
-import hashlib
-import hmac
-import json
 import os
 import secrets
-import urllib.error
-import urllib.request
 
+from .. import gateways
 from . import audit as billing_audit
 from . import invoices as invoice_lib
 from . import subscriptions as subs
 from .repo import money, now_iso
 
+# Nickland's own gateway, chosen in the console's System settings and stored in
+# `platform_gateways` — the same adapter layer a school uses for its own fees,
+# pointed at the other direction of money.
+#
+# The environment variables still work and still win. They are how this was
+# configured before the console could do it, how a deployment that prefers
+# secrets-in-the-environment keeps working, and the escape hatch when somebody
+# has locked themselves out of the console.
 ENV_SECRET = "PLATFORM_PAYSTACK_SECRET"
 ENV_PUBLIC = "PLATFORM_PAYSTACK_PUBLIC"
 ENV_BASE = "PLATFORM_PAYSTACK_BASE_URL"
 DEFAULT_BASE = "https://api.paystack.co"
 
 
-def configured():
-    return bool(os.environ.get(ENV_SECRET, "").strip())
+def _from_environment():
+    """Paystack, from the variables. `(adapter, Config)` or `(None, None)`."""
+    secret = os.environ.get(ENV_SECRET, "").strip()
+    if not secret:
+        return None, None
+    adapter = gateways.get("paystack")
+    credentials = {"secret_key": secret,
+                   "public_key": os.environ.get(ENV_PUBLIC, "").strip(),
+                   "base_url": (os.environ.get(ENV_BASE) or DEFAULT_BASE).strip()}
+    return adapter, gateways.config_for("paystack", credentials, currency="GHS")
 
 
-def public_config():
-    """What a browser may know: the public key, and whether there is a gateway
-    at all. The secret is never in this dict and must never be."""
-    return {
-        "available": configured(),
-        "provider": "paystack" if configured() else None,
-        "public_key": os.environ.get(ENV_PUBLIC, "").strip() or None,
-    }
-
-
-def _secret():
-    return os.environ.get(ENV_SECRET, "").strip()
-
-
-def _base():
-    return (os.environ.get(ENV_BASE) or DEFAULT_BASE).rstrip("/")
-
-
-def _http_json(url, method="GET", body=None, timeout=20):
-    data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(url, data=data, method=method)
-    request.add_header("Content-Type", "application/json")
-    request.add_header("Authorization", f"Bearer {_secret()}")
+def _from_console(repo):
+    """The gateway an operator set up in the console, if any is active."""
+    if repo is None:
+        return None, None
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return {"status": response.status, "json": json.loads(response.read().decode() or "{}")}
-    except urllib.error.HTTPError as err:
-        try:
-            return {"status": err.code, "json": json.loads(err.read().decode() or "{}")}
-        except Exception:
-            return {"status": err.code, "json": None}
-    except Exception as err:
-        return {"status": 0, "error": str(err)}
+        row = repo.find_one("platform_gateways", {"is_active": True})
+    except Exception:
+        return None, None
+    if not row:
+        return None, None
+    adapter = gateways.get(row.get("gateway"))
+    if not adapter:
+        return None, None
+    settings = gateways.config_for(adapter.id, row.get("credentials") or {},
+                                   currency=row.get("currency") or "GHS",
+                                   callback_url=row.get("callback_url") or "")
+    if adapter.missing(settings):
+        return None, None
+    return adapter, settings
+
+
+def active(repo=None):
+    """Nickland's gateway: `(adapter, Config)`, or `(None, None)`.
+
+    The environment first, deliberately. A secret set on the service is a
+    decision made by whoever can deploy it, and it should not be silently
+    overridden by whoever can sign in to the console.
+    """
+    adapter, settings = _from_environment()
+    if adapter:
+        return adapter, settings
+    return _from_console(repo)
+
+
+def configured(repo=None):
+    return active(repo)[0] is not None
+
+
+def public_config(repo=None):
+    """What a browser may know: which provider, and its publishable key.
+
+    The secret is never in this dict and must never be.
+    """
+    adapter, settings = active(repo)
+    if not adapter:
+        return {"available": False, "provider": None, "public_key": None}
+    return {
+        "available": True,
+        "provider": adapter.id,
+        "provider_name": adapter.name,
+        "public_key": settings.cred("public_key") or None,
+        "channels": list(adapter.channels),
+        "supports_renewal": adapter.supports_stored_charge,
+        "from_environment": bool(_from_environment()[0]),
+    }
 
 
 def new_reference(school_id, kind="sub"):
@@ -107,90 +148,67 @@ def start_checkout(store, repo, school_id, email, amount, kind="subscription",
     what §7 means by "provides valid payment details" while "amount charged =
     GHS 0" — the card is verified, not billed.
     """
-    if not configured():
+    adapter, settings = active(repo)
+    if not adapter:
         return {"ok": False, "status": 503,
                 "error": "Card payments are not switched on for this deployment."}
     amount = money(amount)
     reference = new_reference(school_id, "sub" if kind == "subscription" else "card")
-    charge = amount if amount > 0 else 1.0        # a card check, refunded by the provider's void
+    # A trial charges nothing, and a zero-amount checkout is not a checkout, so
+    # the card is authorised for a minimal amount instead.
+    charge = amount if amount > 0 else 1.0
 
-    body = {
-        "amount": int(round(charge * 100)),
-        "email": email or f"billing+{school_id}@nicklandedusoft.app",
-        "reference": reference,
-        "currency": "GHS",
-        "channels": ["card", "mobile_money", "bank"],
-        "metadata": {"school_id": school_id, "kind": kind,
-                     "invoice_id": invoice_id, **(metadata or {})},
-    }
-    if callback_url:
-        body["callback_url"] = callback_url
-
-    result = _http_json(f"{_base()}/transaction/initialize", "POST", body)
-    payload = result.get("json") or {}
-    if not (200 <= result.get("status", 0) < 300 and payload.get("status") and payload.get("data")):
+    started = adapter.checkout(
+        settings, charge, reference,
+        email=email or f"billing+{school_id}@nicklandedusoft.app",
+        metadata={"school_id": school_id, "kind": kind, "invoice_id": invoice_id,
+                  "description": "Edusoft subscription", **(metadata or {})},
+        callback_url=callback_url or "")
+    if not started.get("ok"):
         return {"ok": False, "status": 502,
-                "error": payload.get("message") or result.get("error")
-                         or "The payment provider could not be reached."}
+                "error": started.get("error") or "The payment provider could not be reached."}
 
     repo.insert("platform_payments", {
         "school_id": school_id, "invoice_id": invoice_id,
         "subscription_id": (subs.current(repo, school_id) or {}).get("id"),
-        "provider": "paystack", "provider_reference": reference,
-        "amount": amount, "currency": "GHS", "status": "pending", "kind": kind,
+        "provider": adapter.id, "provider_reference": reference,
+        "amount": amount, "currency": settings.currency, "status": "pending", "kind": kind,
         "attempted_at": now_iso(), "created_at": now_iso(),
     })
     return {"ok": True, "reference": reference,
-            "authorization_url": payload["data"].get("authorization_url"),
-            "access_code": payload["data"].get("access_code"),
+            "authorization_url": started.get("authorization_url"),
+            "access_code": started.get("access_code"),
+            "provider": adapter.id,
             "amount": amount, "verifying_card_only": amount <= 0}
 
 
-def verify(reference):
-    """Ask the provider what actually happened. The only source of truth about
-    money — never the webhook body, never the browser's callback."""
-    if not configured():
+def verify(reference, repo=None, token=""):
+    """Ask the provider what actually happened.
+
+    The only source of truth about money — never the webhook body, never the
+    browser's callback.
+    """
+    adapter, settings = active(repo)
+    if not adapter:
         return {"ok": False, "error": "not_configured"}
-    result = _http_json(f"{_base()}/transaction/verify/{reference}")
-    payload = (result.get("json") or {}).get("data") or {}
-    if not (200 <= result.get("status", 0) < 300 and payload):
-        return {"ok": False, "error": (result.get("json") or {}).get("message")
-                                      or result.get("error") or "verify_failed"}
-    authorization = payload.get("authorization") or {}
-    customer = payload.get("customer") or {}
-    return {
-        "ok": True,
-        "paid": payload.get("status") == "success",
-        "amount": money((payload.get("amount") or 0) / 100.0),
-        "currency": payload.get("currency") or "GHS",
-        "gateway_status": payload.get("status") or "",
-        "customer_id": str(customer.get("customer_code") or customer.get("id") or ""),
-        "email": customer.get("email") or "",
-        "method": {
-            "reference": authorization.get("authorization_code") or "",
-            "brand": authorization.get("brand") or authorization.get("card_type") or "",
-            "last4": authorization.get("last4") or "",
-            "exp_month": _as_int(authorization.get("exp_month")),
-            "exp_year": _as_int(authorization.get("exp_year")),
-            "kind": "mobile_money" if authorization.get("channel") == "mobile_money" else "card",
-            "reusable": bool(authorization.get("reusable")),
-        },
-        "metadata": payload.get("metadata") or {},
-    }
-
-
-def _as_int(value):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    result = adapter.verify(settings, reference, token=token)
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("error") or "verify_failed"}
+    return {**result, "provider": adapter.id}
 
 
 def charge_stored_method(store, repo, school_id, amount, invoice_id=None):
     """Bill a card the school has already authorised — what happens when a
     trial ends, and on every renewal after that (§7, §11)."""
-    if not configured():
+    adapter, settings = active(repo)
+    if not adapter:
         return {"ok": False, "status": 503, "error": "Card payments are not switched on."}
+    if not adapter.supports_stored_charge:
+        # Hubtel and ExpressPay cannot charge a saved authorisation. Said here,
+        # once, rather than discovered as a failed renewal at month end.
+        return {"ok": False, "status": 400,
+                "error": f"{adapter.name} cannot charge a saved payment method, so a "
+                         f"subscription on it has to be paid from the invoice each time."}
     method = repo.find_one("payment_methods",
                            {"school_id": school_id, "status": "active", "is_default": True})
     method = method or repo.find_one("payment_methods", {"school_id": school_id, "status": "active"})
@@ -199,40 +217,33 @@ def charge_stored_method(store, repo, school_id, amount, invoice_id=None):
                 "error": "This school has no payment method on file."}
 
     reference = new_reference(school_id, "renew")
-    result = _http_json(f"{_base()}/transaction/charge_authorization", "POST", {
-        "authorization_code": method["provider_method_ref"],
-        "email": method.get("email") or f"billing+{school_id}@nicklandedusoft.app",
-        "amount": int(round(money(amount) * 100)),
-        "reference": reference,
-        "currency": "GHS",
-        "metadata": {"school_id": school_id, "invoice_id": invoice_id, "kind": "renewal"},
-    })
-    payload = (result.get("json") or {}).get("data") or {}
-    succeeded = 200 <= result.get("status", 0) < 300 and payload.get("status") == "success"
+    charged = adapter.charge_stored(
+        settings, method["provider_method_ref"], money(amount), reference,
+        email=method.get("email") or f"billing+{school_id}@nicklandedusoft.app",
+        metadata={"school_id": school_id, "invoice_id": invoice_id, "kind": "renewal"})
 
     repo.insert("platform_payments", {
         "school_id": school_id, "invoice_id": invoice_id,
         "subscription_id": (subs.current(repo, school_id) or {}).get("id"),
-        "provider": "paystack", "provider_reference": reference,
-        "amount": money(amount), "currency": "GHS",
-        "status": "succeeded" if succeeded else "failed", "kind": "subscription",
-        "gateway_status": str(payload.get("status") or ""),
-        "failure_reason": "" if succeeded else str(
-            payload.get("gateway_response") or (result.get("json") or {}).get("message")
-            or result.get("error") or "The card was declined."),
-        "attempted_at": now_iso(), "settled_at": now_iso() if succeeded else None,
+        "provider": adapter.id, "provider_reference": reference,
+        "amount": money(amount), "currency": settings.currency,
+        "status": "succeeded" if charged.get("ok") else "failed", "kind": "subscription",
+        "gateway_status": "success" if charged.get("ok") else "failed",
+        "failure_reason": "" if charged.get("ok") else str(charged.get("error") or "")[:400],
+        "attempted_at": now_iso(), "settled_at": now_iso() if charged.get("ok") else None,
         "created_at": now_iso(),
     })
 
-    if succeeded:
+    if charged.get("ok"):
         settle(store, repo, school_id, reference, invoice_id=invoice_id, amount=money(amount))
         return {"ok": True, "reference": reference}
 
     subscription = subs.current(repo, school_id)
     if subscription:
         subs.mark_past_due(store, repo, subscription, actor="system",
-                           reason="The card on file was declined.")
-    return {"ok": False, "status": 402, "error": "The card on file was declined.",
+                           reason=str(charged.get("error") or "The card was declined."))
+    return {"ok": False, "status": 402,
+            "error": str(charged.get("error") or "The card was declined."),
             "reference": reference}
 
 
@@ -317,24 +328,40 @@ def record_failure(store, repo, school_id, reference, reason="", amount=0):
 
 
 def refund(store, repo, payment_id, actor="platform", reason=""):
+    """Give a school its money back.
+
+    Only Paystack among the four supports a refund over the API. For the others
+    the refund is made in the provider's own dashboard and recorded here, which
+    is honest about what happened rather than pretending an API call was made.
+    """
     payment = repo.get("platform_payments", payment_id)
     if not payment:
         return {"ok": False, "status": 404, "error": "No such payment."}
     if payment["status"] != "succeeded":
         return {"ok": False, "status": 400, "error": "Only a successful payment can be refunded."}
-    if configured():
-        result = _http_json(f"{_base()}/refund", "POST",
-                            {"transaction": payment["provider_reference"]})
-        if not 200 <= result.get("status", 0) < 300:
+
+    adapter, settings = active(repo)
+    at_provider = False
+    if adapter and adapter.id == "paystack":
+        from ..gateways.base import http_json, ok as http_ok
+        result = http_json(f'{settings.base("https://api.paystack.co")}/refund', "POST",
+                           {"Authorization": f'Bearer {settings.cred("secret_key")}'},
+                           {"transaction": payment["provider_reference"]})
+        if not http_ok(result):
             return {"ok": False, "status": 502,
                     "error": (result.get("json") or {}).get("message")
                              or "The provider refused the refund."}
+        at_provider = True
+
     updated = repo.update("platform_payments", payment_id,
                           {"status": "refunded", "refunded_at": now_iso()})
     billing_audit.write(store, "payment_refunded", school_id=payment["school_id"], actor=actor,
                         detail=f'{payment["provider_reference"]}: refunded '
-                               f'{payment["currency"]} {money(payment["amount"]):,.2f}. {reason}'.strip())
-    return {"ok": True, "payment": updated}
+                               f'{payment["currency"]} {money(payment["amount"]):,.2f}'
+                               + ("." if at_provider else
+                                  " — recorded here; make the refund in the provider's "
+                                  "own dashboard.") + f" {reason}".rstrip())
+    return {"ok": True, "payment": updated, "at_provider": at_provider}
 
 
 def remember_method(repo, school_id, method, customer_id=None):
@@ -379,14 +406,13 @@ def forget_method(repo, school_id, method_id):
 
 
 # ── The webhook ─────────────────────────────────────────────────────────────
-def verify_signature(raw, signature):
-    """HMAC-SHA512 over the raw bytes, as Paystack sends it."""
-    secret = _secret()
-    if not secret or not signature:
+def verify_signature(raw, signature, repo=None):
+    """Whether a delivery is genuine, by the active provider's own rule."""
+    adapter, settings = active(repo)
+    if not adapter:
         return False
-    expected = hmac.new(secret.encode(), raw.encode() if isinstance(raw, str) else raw,
-                        hashlib.sha512).hexdigest()
-    return hmac.compare_digest(expected, str(signature))
+    return bool(adapter.verify_webhook(settings, raw, {"x-paystack-signature": signature,
+                                                       "verif-hash": signature}))
 
 
 def seen_event(repo, event_id, event=""):
@@ -414,35 +440,39 @@ def handle_webhook(store, repo, raw, signature):
     does not care about — a provider that gets a 4xx retries, and retrying an
     event nobody wanted forever is a self-inflicted outage.
     """
-    if not verify_signature(raw, signature):
+    from . import entitlements
+
+    adapter, settings = active(repo)
+    if not adapter:
+        # 401 rather than 503. A deployment with no gateway configured should
+        # not answer a stranger's POST by confirming that, and a provider that
+        # gets a 5xx retries the same delivery for hours.
+        return {"ok": False, "status": 401, "error": "Unauthorized"}
+
+    headers = {"x-paystack-signature": signature, "verif-hash": signature}
+    if adapter.signed_callbacks and not adapter.verify_webhook(settings, raw, headers):
         billing_audit.write(store, "billing_webhook_refused", actor="anonymous",
                             outcome="refused",
                             detail="A billing webhook arrived with a bad signature.")
         return {"ok": False, "status": 401, "error": "Unauthorized"}
-    try:
-        body = json.loads(raw) if raw else {}
-    except ValueError:
-        return {"ok": True, "ignored": "unreadable"}
 
-    event = str(body.get("event") or "")
-    data = body.get("data") or {}
-    reference = str(data.get("reference") or "")
-    event_id = str(data.get("id") or "") + ":" + event + ":" + reference
-    if seen_event(repo, event_id, event):
+    delivery = adapter.read_webhook(settings, raw, headers)
+    reference = delivery.get("reference") or ""
+    if seen_event(repo, delivery.get("event_id"), delivery.get("event")):
         return {"ok": True, "duplicate": True}
 
-    school_id = str((data.get("metadata") or {}).get("school_id") or "")
+    school_id = str((delivery.get("metadata") or {}).get("school_id") or "")
     if not school_id and reference:
         known = repo.find_one("platform_payments", {"provider_reference": reference})
         school_id = (known or {}).get("school_id") or ""
     if not school_id:
         return {"ok": True, "ignored": "no school"}
+    invoice_id = (delivery.get("metadata") or {}).get("invoice_id")
 
-    invoice_id = (data.get("metadata") or {}).get("invoice_id")
-
-    if event == "charge.success" and reference:
-        # The body is not believed about money. Ask the provider.
-        verified = verify(reference)
+    # `succeeded` from a provider that signs, `check` from one that does not.
+    # Both mean the same thing here: go and ask the provider.
+    if delivery.get("status") in ("succeeded", "check") and reference:
+        verified = verify(reference, repo, token=delivery.get("token", ""))
         if not verified.get("ok") or not verified.get("paid"):
             return {"ok": True, "ignored": "not confirmed by the provider"}
         settle(store, repo, school_id, reference, invoice_id=invoice_id,
@@ -450,16 +480,17 @@ def handle_webhook(store, repo, raw, signature):
                customer_id=verified.get("customer_id"), actor="webhook")
         return {"ok": True, "settled": reference}
 
-    if event in ("charge.failed", "invoice.payment_failed") and reference:
+    if delivery.get("status") == "failed" and reference:
         record_failure(store, repo, school_id, reference,
-                       reason=str(data.get("gateway_response") or "The payment failed."))
+                       reason=delivery.get("reason") or "The payment failed.")
         return {"ok": True, "failed": reference}
 
-    if event == "refund.processed" and reference:
+    if delivery.get("status") == "refunded" and reference:
         payment = repo.find_one("platform_payments", {"provider_reference": reference})
         if payment and payment["status"] == "succeeded":
             repo.update("platform_payments", payment["id"],
                         {"status": "refunded", "refunded_at": now_iso()})
         return {"ok": True, "refunded": reference}
 
-    return {"ok": True, "ignored": event or "unknown"}
+    entitlements.invalidate(school_id)
+    return {"ok": True, "ignored": delivery.get("event") or "unknown"}

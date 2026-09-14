@@ -15,23 +15,23 @@ that sits under all of them.
 ## 1. The shape of it
 
 ```
-                        ┌───────────────────────────────┐
- www.edusoft.<domain>   │   Public website              │  cloud-python/site
+ PUBLIC_SITE_DOMAIN     ┌───────────────────────────────┐
+ nicklandedusoft.com    │   Public website              │  cloud-python/site
                         │   home · features · pricing   │
                         │   about · support · register  │
                         └───────────────┬───────────────┘
                                         │
- app.edusoft.<domain>   ┌───────────────▼───────────────┐
- <school>.edusoft.<..>  │   School cloud application    │  mobile/ (Expo web)
-                        │   pupils · academics · fees   │
-                        └───────────────┬───────────────┘
+ PORTAL_BASE_DOMAIN     ┌───────────────▼───────────────┐
+ edusoft.gh             │   School cloud application    │  mobile/ (Expo web)
+ <school>.edusoft.gh    │   pupils · academics · fees   │
+ app.edusoft.gh         └───────────────┬───────────────┘
                                         │
- admin.edusoft.<domain> ┌───────────────▼───────────────┐
-                        │   Superadmin console          │  cloud-python/console
+ CONSOLE_DOMAIN         ┌───────────────▼───────────────┐
+ admin.nicklandedu…com  │   Superadmin console          │  cloud-python/console
                         │   schools · plans · billing   │
                         └───────────────┬───────────────┘
                                         │
- api.edusoft.<domain>   ┌───────────────▼───────────────┐
+ …and on all three      ┌───────────────▼───────────────┐
                         │   One FastAPI service         │  cloud-python/app
                         │   auth · tenants · billing    │
                         └───────────────┬───────────────┘
@@ -43,10 +43,28 @@ that sits under all of them.
                         └───────────────────────────────┘
 ```
 
-`/api/v1/*` answers identically on every hostname. The hostname decides only
-which HTML is served — see `app/site.py`. A deployment that has configured no
-`PORTAL_BASE_DOMAIN` keeps the behaviour it always had: the school application
-at `/`, the website at `/welcome`, the console at `/console`.
+**Three domains, each named on its own and none borrowing from another.**
+`/api/v1/*` answers identically on every hostname; the hostname decides only
+which HTML is served — see `app/site.py`.
+
+The portal domain is the schools', whole and undivided: its bare name, its
+`www` and every subdomain of it reach the school application, exactly as they
+always have. That is not a detail — parents and teachers have already been
+given addresses under it, and a marketing page appearing at one of them is a
+support call. The website and the console get domains of their own, or they get
+nothing.
+
+Matching is **exact**: a configured domain and its `www.`, never "ends with". A
+suffix rule would make every subdomain of the website's domain the website, and
+this has no reason to guess when it can be told — which is what lets the console
+sit at `admin.nicklandedusoft.com` while the website is `nicklandedusoft.com`.
+The console list is consulted first, so an explicitly named host always wins.
+
+A deployment that configures none of this keeps the behaviour it always had:
+the school application at `/`, the website at `/welcome`, the console at
+`/console`. Those two paths work on a fully configured deployment too, which is
+what makes local development possible — on `localhost` every hostname is the
+same hostname.
 
 ---
 
@@ -63,6 +81,11 @@ at `/`, the website at `/welcome`, the console at `/console`.
 | `cloud-python/app/billing_api.py` | A school's own billing section. |
 | `cloud-python/app/identity.py` | One account across the three interfaces. |
 | `cloud-python/app/site.py` | Which hostname gets which interface. |
+| `cloud-python/app/gateways/` | The payment gateway adapters, and Arkesel SMS. |
+| `cloud-python/app/school/integrations.py` | A school's own gateway and SMS setup. |
+| `cloud-python/app/integrations_api.py` | The API behind that setup screen. |
+| `mobile/src/screens/system/integrations.jsx` | The four-step setup screen itself. |
+| `electron/server/gateways/` | The same four adapters, for the offline desktop. |
 | `cloud-python/schema-saas.sql` | The platform's subscription and billing tables. |
 | `cloud-python/schema/school.sql` | A school's own 81 tables — **unchanged**. |
 
@@ -258,9 +281,13 @@ table:
 | | A school taking fees from a parent | Nickland taking a subscription from a school |
 |---|---|---|
 | Code | `app/payments.py` | `app/billing/provider.py` |
-| Key | the school's own, pushed up by its desktop | `PLATFORM_PAYSTACK_SECRET` |
+| Key | the school's own — set by the school, in its own portal | the console's live gateway, or `PLATFORM_PAYSTACK_SECRET` |
+| Whose account the money lands in | **the school's** | Nickland's |
 | Webhook | `/api/v1/payments/webhook/{school_id}` | `/api/v1/billing/webhook` |
 | Table | `school_payments` | `platform_payments` |
+
+Both sides go through the **same adapter layer** (§10a), so adding a provider
+adds it to both at once.
 
 No card number is ever stored. What Edusoft keeps is the provider's customer
 id, an authorisation reference, the brand and the last four digits.
@@ -279,6 +306,98 @@ duplicate-payment defence.
 **A trial takes a card without charging it.** A zero-amount checkout is not a
 checkout, so the provider is asked to authorise the card for a minimal amount
 instead; the school has a payment method on file for when the trial ends.
+
+---
+
+## 10a. The gateway adapters
+
+`app/gateways/`. One file per provider, and one contract:
+
+```python
+checkout(cfg, amount, reference, email, metadata, callback_url)
+verify(cfg, reference, token="")
+verify_webhook(cfg, raw, headers)      # is this delivery genuine?
+read_webhook(cfg, raw, headers)        # what does it say?
+charge_stored(cfg, authorization, …)   # a renewal, with nobody present
+ping(cfg)                              # are these credentials real?
+```
+
+Each adapter also **declares its own fields** — label, hint, whether it is a
+secret, whether it is required — and the setup screen and the console are drawn
+from those declarations. Adding a fifth provider is one file and no screen work.
+
+| | Signs callbacks | Can charge a saved card | Verified against a live account |
+|---|---|---|---|
+| Paystack | yes — HMAC-SHA512 over the raw body | yes | **yes** |
+| Flutterwave | a shared `verif-hash`, not a signature | yes | no |
+| Hubtel | **no** | no | no |
+| ExpressPay | **no** | no | no |
+
+Two honest notes, because they change how much you should trust each one:
+
+* **Flutterwave, Hubtel and ExpressPay are written from the providers'
+  published contracts and have not been exercised against live accounts from
+  inside this repository.** Each carries `verified = False`, which the setup
+  screen and the console both display. That is the reason the Test rule below
+  exists, and why it is a rule rather than a suggestion.
+* **Arkesel payments is deliberately absent.** Arkesel publishes SMS, OTP, USSD
+  and Voice APIs; its collections API is not publicly documented. Writing an
+  adapter from guesswork and shipping it behind a Test button that could not
+  meaningfully test it would be worse than not shipping it. Arkesel **SMS** is
+  implemented and verified — `app/gateways/sms.py`, the same API the desktop has
+  called for two releases.
+
+**Unsigned callbacks are handled, not pretended about.** Hubtel and ExpressPay
+do not sign. Their `verify_webhook` returns `False` — always — and the delivery
+is treated as what it actually is: a nudge saying *go and look*. The looking is
+`verify()`, over the school's own authenticated connection. Nothing is weaker
+here than for Paystack, because settlement has never believed a webhook about an
+amount; the only difference is that such a callback cannot by itself settle
+anything, and the code says so.
+
+**The Test rule.** A gateway cannot be switched on until `ping()` has passed,
+and changing any credential clears the pass. A wrong key is therefore found by
+the bursar who can fix it, and never by a parent at ten at night. `ping()` costs
+nothing and moves no money: it asks the provider a question only a real
+credential can get an answer to.
+
+---
+
+## 10b. A school's own setup
+
+`mobile/src/screens/system/integrations.jsx` → `/api/v1/school/integrations`.
+Four steps, in this order, because the person doing it is a bursar with the
+provider's dashboard open in another tab:
+
+1. **Choose your provider.**  2. **Paste what it gave you.**
+3. **Press Test.**  4. **Switch it on** — which does not work until 3 passed.
+
+Text messages to parents sit on the same screen, with the same shape. Leaving
+the test number blank checks the key only and uses no credit; putting a number
+in sends one real message, which is the only way to prove a sender ID has been
+approved.
+
+**Secrets are write-only.** A stored key comes back as `••••1234` and is never
+readable by anyone — not on the screen, not in the console, not to support.
+Re-posting the mask means "keep the one you have", so editing a sender ID does
+not mean retyping a key nobody can see. Owner-only: `is_admin`, or a Nickland
+super admin.
+
+**Two kinds of grandfathering, both deliberate:**
+
+* A school whose gateway was configured before this screen existed (its keys
+  pushed up by its desktop) keeps working, untested and unblocked. The Test rule
+  applies only where `gateway_credentials` exists, which only this screen
+  writes.
+* The console's **Payment gateway** page does the same job for Nickland's own
+  subscription billing, and `PLATFORM_PAYSTACK_SECRET` still works when nothing
+  is configured there.
+
+**The desktop offers the same four** (`electron/server/gateways/`), so a school
+that set up Hubtel on its own desktop and later moves to the portal — or the
+other way round — does not change provider to do it. `test/gateways.js` asserts
+the two lists are equal, so adding a provider to one side and not the other is a
+failing test.
 
 ---
 
@@ -321,7 +440,7 @@ Three rules worth knowing before changing anything here:
 
 ## 12. The Superadmin console
 
-`admin.edusoft.<domain>`, or `/console`.
+Whatever `CONSOLE_DOMAIN` names, or `/console` on any address.
 
 Two ways in. **A person signs in** with an account in `platform_users` — which
 is what makes the audit trail say *who* granted an exemption. **A machine
@@ -385,10 +504,12 @@ Daily is right. Running it twice in a minute does nothing the second time.
 | `DATABASE_URL` | yes | Postgres/Neon, pooled, `?sslmode=require` |
 | `PORTAL_SECRET` | yes | signs parent, staff and console sessions |
 | `PLATFORM_ADMIN_KEY` | for the console | ≥ 24 characters, or platform administration stays off |
-| `PORTAL_BASE_DOMAIN` | for subdomains | one or several, comma-separated; the first is canonical |
-| `PLATFORM_PAYSTACK_SECRET` | to take money | Nickland's gateway key — **not** a school's |
-| `PLATFORM_PAYSTACK_PUBLIC` | to take money | the publishable key the browser needs |
-| `BILLING_CRON_SECRET` | for scheduling | ≥ 16 characters, or the cron route is not there |
+| `PORTAL_BASE_DOMAIN` | for subdomains | the schools' domain; one or several, comma-separated, the first canonical |
+| `PUBLIC_SITE_DOMAIN` | for the website | the website's own domain; unset means `/welcome` only |
+| `CONSOLE_DOMAIN` | for the console | the console's own domain; unset means `/console` only |
+| `PLATFORM_PAYSTACK_SECRET` | fallback | Nickland's gateway key — **not** a school's. Superseded by a gateway configured in the console |
+| `PLATFORM_PAYSTACK_PUBLIC` | fallback | the publishable key the browser needs |
+| `BILLING_CRON_SECRET` | for scheduling | ≥ 16 characters, or the cron routes are not there |
 
 Everything else — currency, tax, trial rules, grace periods, what a suspended
 school may do, which pupils are billable — is a **row** in `platform_settings`,
@@ -404,9 +525,14 @@ The boot log says which of these a running service actually has, in words:
 [edusoft] platform administration: on
 [edusoft] school addresses: *.edusoft.gh
 [edusoft] parents' app: served from this service
-[edusoft] interfaces: website, superadmin console — on edusoft.gh: www → website,
-          admin → console, every other name → the school application
+[edusoft] public website: nicklandedusoft.com (also /welcome)
+[edusoft] superadmin console: admin.nicklandedusoft.com (also /console)
 ```
+
+Three separate lines because they are three separate decisions, and the
+commonest deployment mistake is assuming one of them follows from another. An
+interface with no domain configured says so and names the variable that would
+give it one.
 
 ---
 
@@ -415,15 +541,23 @@ The boot log says which of these a running service actually has, in words:
 1. Deploy the service with `DATABASE_URL`, `PORTAL_SECRET`,
    `PLATFORM_ADMIN_KEY` and `PORTAL_BASE_DOMAIN`. The tables are created on
    first boot and the plans, features and settings are seeded.
-2. Point a wildcard DNS record (`*.edusoft.gh`) plus `www` and `admin` at it.
-3. Open `admin.edusoft.<domain>`, choose **Create the first one**, and paste
-   `PLATFORM_ADMIN_KEY`. That bootstrap closes as soon as one operator exists.
+   Add `PUBLIC_SITE_DOMAIN` and `CONSOLE_DOMAIN` if the website and the console
+   are to have addresses of their own.
+2. Point a wildcard DNS record (`*.edusoft.gh`) at it, and the website's and
+   the console's domains too.
+3. Open the console's domain (or `/console` on any address), choose **Create the
+   first one**, and paste `PLATFORM_ADMIN_KEY`. That bootstrap closes as soon as
+   one operator exists.
 4. In the console: check **System settings**, set the prices under **Plans**,
    and set the plan/feature grid under **Features**.
-5. Set `PLATFORM_PAYSTACK_SECRET` and `PLATFORM_PAYSTACK_PUBLIC` when you are
-   ready to charge. Until then schools register, start trials and use
-   everything, and no card is taken.
-6. Schedule the billing run.
+5. Set up Nickland's own gateway under **Payment gateway** — paste the keys,
+   press **Test connection**, then **Make this the live one**. (Or set
+   `PLATFORM_PAYSTACK_SECRET` and `PLATFORM_PAYSTACK_PUBLIC` instead; the
+   console's gateway wins where both exist.) Until one of the two is there,
+   schools register, start trials and use everything, and no card is taken.
+6. Schedule the billing run — and, alongside it, `/api/v1/admin/cron/notifications`
+   every ten minutes or so to push the text messages schools have queued. Both
+   use `BILLING_CRON_SECRET`, so a cron service holds one credential.
 
 Existing schools need no migration and keep working (§11, grandfathering).
 Subscribe them from the console when you are ready, or let each school choose a
@@ -436,10 +570,13 @@ plan from its own billing page.
 ```bash
 export DATABASE_URL="postgres://…" ALLOW_DEV_SECRET=1
 python3 cloud-python/tests/test_billing.py    # the engine, on the in-memory store
-python3 cloud-python/tests/test_saas.py       # registration and enforcement, on Postgres
+python3 cloud-python/tests/test_saas.py       # registration, routing and enforcement, on Postgres
+python3 cloud-python/tests/test_gateways.py   # the adapters, against a stand-in provider
+node    test/gateways.js                      # the desktop's adapters, and parity with the cloud's
 ```
 
-Both are in `npm run test:online`.
+The Python suites are in `npm run test:online`; `test/gateways.js` is in
+`npm run test:regressions`.
 
 `test_billing.py` parses `schema-saas.sql` and asserts that every table's
 columns match its spec in `app/billing/repo.py`, so a column added to one and

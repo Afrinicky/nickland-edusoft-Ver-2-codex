@@ -85,12 +85,34 @@ class MemoryStore:
 
     def set_payment_config(self, sid, cfg):
         """Write-mostly. Set by the school's own desktop through the
-        school-key admin route; read only by the code that calls the gateway.
-        No endpoint returns ``secret``, and none should ever be added."""
+        school-key admin route, or by the school itself on the Integrations
+        screen; read only by the code that calls the gateway. No endpoint
+        returns ``secret`` or ``credentials``, and none should ever be added.
+
+        A write that changes the gateway or its credentials clears the
+        verification stamp: a key that has been replaced has not been tested,
+        whatever was true of the one before it.
+        """
         if not cfg or cfg.get("gateway") == "none":
             self._payments.pop(sid, None)
             return True
-        self._payments[sid] = {**cfg, "updated_at": _now_iso()}
+        previous = self._payments.get(sid) or {}
+        changed = (previous.get("gateway") != cfg.get("gateway")
+                   or previous.get("credentials") != cfg.get("credentials")
+                   or previous.get("secret") != cfg.get("secret"))
+        keep = {} if changed else {k: previous.get(k)
+                                   for k in ("verified_at", "verified_detail")}
+        self._payments[sid] = {"credentials": {}, **keep, **cfg, "updated_at": _now_iso()}
+        return True
+
+    def mark_payment_verified(self, sid, detail=""):
+        """The provider answered a test. Recorded, because a gateway that has
+        never been tested is not allowed to go live."""
+        cfg = self._payments.get(sid)
+        if not cfg:
+            return False
+        cfg["verified_at"] = _now_iso()
+        cfg["verified_detail"] = str(detail or "")[:300]
         return True
 
     def get_payment_config(self, sid):
@@ -323,34 +345,67 @@ class PgStore:
         return [{"entity_type": r[0], "entity_key": r[1], "uuid": r[2], "op": r[3], "version": r[4], "payload": r[5], "updated_at": str(r[6])} for r in (rows or [])]
 
     def set_payment_config(self, sid, cfg):
+        """See MemoryStore.set_payment_config. Changing the gateway or its
+        credentials clears the verification stamp, in SQL, so the two stores
+        cannot disagree about whether a configuration has been tested."""
+        import json
         if not cfg or cfg.get("gateway") == "none":
             self._q("DELETE FROM school_payments WHERE school_id=%s", (sid,))
             return True
         self._q(
             """INSERT INTO school_payments (school_id, gateway, secret, public_key, base_url,
-                     currency, callback_url, min_amount, max_amount, enabled, updated_at)
-                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                     currency, callback_url, min_amount, max_amount, enabled,
+                     credentials, updated_at)
+                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
                ON CONFLICT (school_id) DO UPDATE
                  SET gateway=EXCLUDED.gateway, secret=EXCLUDED.secret,
                      public_key=EXCLUDED.public_key, base_url=EXCLUDED.base_url,
                      currency=EXCLUDED.currency, callback_url=EXCLUDED.callback_url,
                      min_amount=EXCLUDED.min_amount, max_amount=EXCLUDED.max_amount,
-                     enabled=EXCLUDED.enabled, updated_at=now()""",
+                     enabled=EXCLUDED.enabled, credentials=EXCLUDED.credentials,
+                     updated_at=now(),
+                     verified_at = CASE
+                       WHEN school_payments.gateway IS DISTINCT FROM EXCLUDED.gateway
+                         OR school_payments.credentials IS DISTINCT FROM EXCLUDED.credentials
+                         OR school_payments.secret IS DISTINCT FROM EXCLUDED.secret
+                       THEN NULL ELSE school_payments.verified_at END,
+                     verified_detail = CASE
+                       WHEN school_payments.gateway IS DISTINCT FROM EXCLUDED.gateway
+                         OR school_payments.credentials IS DISTINCT FROM EXCLUDED.credentials
+                         OR school_payments.secret IS DISTINCT FROM EXCLUDED.secret
+                       THEN '' ELSE school_payments.verified_detail END""",
             (sid, cfg["gateway"], cfg.get("secret", ""), cfg.get("public_key", ""),
              cfg.get("base_url", ""), cfg.get("currency", "GHS"), cfg.get("callback_url", ""),
-             cfg.get("min_amount", 1), cfg.get("max_amount", 10000), cfg.get("enabled", True) is not False))
+             cfg.get("min_amount", 1), cfg.get("max_amount", 10000),
+             cfg.get("enabled", True) is not False,
+             json.dumps(cfg.get("credentials") or {})))
+        return True
+
+    def mark_payment_verified(self, sid, detail=""):
+        self._q("""UPDATE school_payments SET verified_at = now(), verified_detail = %s
+                    WHERE school_id = %s""", (str(detail or "")[:300], sid))
         return True
 
     def get_payment_config(self, sid):
         row = self._q(
             """SELECT gateway, secret, public_key, base_url, currency, callback_url,
-                      min_amount, max_amount, enabled
+                      min_amount, max_amount, enabled, credentials, verified_at,
+                      verified_detail
                  FROM school_payments WHERE school_id=%s""", (sid,), "one")
         if not row:
             return None
         keys = ["gateway", "secret", "public_key", "base_url", "currency",
-                "callback_url", "min_amount", "max_amount", "enabled"]
-        return dict(zip(keys, row))
+                "callback_url", "min_amount", "max_amount", "enabled", "credentials",
+                "verified_at", "verified_detail"]
+        cfg = dict(zip(keys, row))
+        cfg["credentials"] = cfg.get("credentials") or {}
+        # Money comes back as Decimal and a timestamp as datetime; every caller
+        # wants JSON. Normalised here so none of them has to remember.
+        for key in ("min_amount", "max_amount"):
+            cfg[key] = float(cfg[key] or 0)
+        if cfg.get("verified_at") is not None:
+            cfg["verified_at"] = str(cfg["verified_at"])
+        return cfg
 
     def enqueue_change(self, sid, ch):
         import json

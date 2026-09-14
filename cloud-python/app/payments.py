@@ -27,112 +27,103 @@ And the rules that hold whether or not the desktop is up:
     de-duplicates on it, so a retried delivery cannot become a second payment.
 """
 import datetime
-import hashlib
-import hmac
-import json
 import secrets
-import urllib.error
-import urllib.request
+
+from . import gateways
 
 MIN_DEFAULT = 1
 MAX_DEFAULT = 10000
 
 
 def config(store, sid):
+    """The school's gateway, as an adapter to call — or None.
+
+    The credentials are the school's own, pushed up by its desktop over the
+    school-key channel (`/api/v1/admin/payment-config`). What has changed is
+    that they are no longer assumed to be Paystack's: `credentials` carries
+    whatever the chosen provider needs, and a desktop that pushed the old
+    Paystack-shaped fields is read as Paystack, so nothing has to be re-entered.
+    """
     if not hasattr(store, "get_payment_config"):
         return None
     try:
-        c = store.get_payment_config(sid)
+        stored = store.get_payment_config(sid)
     except Exception:                                   # pragma: no cover
         return None
-    if not c or not c.get("secret") or c.get("enabled") is False:
+    if not stored or stored.get("enabled") is False:
         return None
-    return c
+
+    adapter = gateways.get(stored.get("gateway"))
+    if not adapter:
+        return None
+    credentials = dict(stored.get("credentials") or {})
+    if not credentials:
+        # A desktop that pushed the fields as they were before this platform
+        # had more than one provider. Paystack's, by definition, because that
+        # is the only one those fields could ever have described.
+        credentials = {k: v for k, v in (("secret_key", stored.get("secret")),
+                                         ("public_key", stored.get("public_key")),
+                                         ("base_url", stored.get("base_url"))) if v}
+    settings = gateways.config_for(adapter.id, credentials,
+                                   currency=stored.get("currency") or "GHS",
+                                   callback_url=stored.get("callback_url") or "")
+    if adapter.missing(settings):
+        return None
+    return {
+        "gateway": adapter.id, "name": adapter.name, "adapter": adapter,
+        "settings": settings, "stored": stored,
+        "public_key": settings.cred("public_key"),
+        "currency": settings.currency,
+        "channels": list(adapter.channels),
+        "signed_callbacks": adapter.signed_callbacks,
+        "min_amount": stored.get("min_amount") or MIN_DEFAULT,
+        "max_amount": stored.get("max_amount") or MAX_DEFAULT,
+    }
 
 
 def availability(store, sid):
-    """What a parent's app may be told: never the secret, only whether there is one."""
+    """What a parent's app may be told: never the secret, only that there is one."""
     c = config(store, sid)
     if not c:
         return {"available": False, "gateway": None, "min": MIN_DEFAULT,
                 "max": MAX_DEFAULT, "currency": "GHS"}
     return {
         "available": True,
-        "gateway": c.get("gateway"),
-        "public_key": c.get("public_key") or None,
-        "currency": c.get("currency") or "GHS",
-        "min": float(c.get("min_amount") or MIN_DEFAULT),
-        "max": float(c.get("max_amount") or MAX_DEFAULT),
+        "gateway": c["gateway"],
+        "gateway_name": c["name"],
+        "public_key": c["public_key"] or None,
+        "channels": c["channels"],
+        "currency": c["currency"],
+        "min": float(c["min_amount"]),
+        "max": float(c["max_amount"]),
     }
-
-
-def _http_json(url, method="GET", headers=None, body=None, timeout=20):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Content-Type", "application/json")
-    for k, v in (headers or {}).items():
-        req.add_header(k, v)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
-            return {"status": res.status, "json": json.loads(res.read().decode() or "{}")}
-    except urllib.error.HTTPError as e:                  # the gateway said no, and said why
-        try:
-            return {"status": e.code, "json": json.loads(e.read().decode() or "{}")}
-        except Exception:
-            return {"status": e.code, "json": None}
-    except Exception as e:
-        return {"status": 0, "error": str(e)}
-
-
-def _base(c):
-    return (c.get("base_url") or "https://api.paystack.co").rstrip("/")
 
 
 def gateway_initialize(c, amount, email, reference, metadata):
-    body = {
-        "amount": int(round(float(amount) * 100)),      # minor units, as Paystack requires
-        "email": email or "payments@nicklandedusoft.app",
-        "reference": reference,
-        "currency": c.get("currency") or "GHS",
-        "metadata": metadata or {},
-    }
-    if c.get("callback_url"):
-        body["callback_url"] = c["callback_url"]
-    res = _http_json(f"{_base(c)}/transaction/initialize", "POST",
-                     {"Authorization": f"Bearer {c['secret']}"}, body)
-    j = res.get("json") or {}
-    if 200 <= res.get("status", 0) < 300 and j.get("status") and j.get("data"):
-        return {"ok": True, "authorization_url": j["data"].get("authorization_url"),
-                "reference": j["data"].get("reference") or reference}
-    return {"ok": False, "error": j.get("message") or res.get("error") or f"init_failed_{res.get('status')}"}
+    return c["adapter"].checkout(c["settings"], amount, reference,
+                                 email=email, metadata=metadata)
 
 
-def gateway_verify(c, reference):
-    res = _http_json(f"{_base(c)}/transaction/verify/{reference}", "GET",
-                     {"Authorization": f"Bearer {c['secret']}"})
-    j = res.get("json") or {}
-    if 200 <= res.get("status", 0) < 300 and j.get("data"):
-        d = j["data"]
-        return {"ok": True, "paid": d.get("status") == "success",
-                "amount": (float(d.get("amount") or 0)) / 100,
-                "currency": d.get("currency"), "gateway_status": d.get("status")}
-    return {"ok": False, "error": j.get("message") or res.get("error") or f"verify_failed_{res.get('status')}"}
+def gateway_verify(c, reference, token=""):
+    return c["adapter"].verify(c["settings"], reference, token=token)
 
 
-def verify_webhook(secret, signature, raw_body):
-    """HMAC-SHA512 of the raw body, compared in constant time."""
-    if not secret or not signature:
+def verify_webhook(c, raw_body, headers=None):
+    """Whether a delivery is genuine, asked of the provider's own adapter.
+
+    False for a provider that does not sign at all, which is not the same as
+    "refuse it" — see the webhook route, which then goes and asks instead.
+    """
+    if not c:
         return False
-    try:
-        expected = hmac.new(secret.encode(), (raw_body or "").encode(), hashlib.sha512).hexdigest()
-        return hmac.compare_digest(expected, str(signature))
-    except Exception:                                   # pragma: no cover
-        return False
+    return bool(c["adapter"].verify_webhook(c["settings"], raw_body, headers or {}))
 
 
-# ── intents ─────────────────────────────────────────────────────────────────
-# Kept as snapshots so the desktop sees them on its next pull and the parent's
-# app can read back the status of a charge it started. They carry no secret.
+def read_webhook(c, raw_body, headers=None):
+    if not c:
+        return {"event": "", "reference": "", "event_id": "", "status": ""}
+    return c["adapter"].read_webhook(c["settings"], raw_body, headers or {})
+
 
 def _key(reference):
     return f"cloud_payment:{reference}"
@@ -212,7 +203,14 @@ def settle(store, sid, reference):
     if not c:
         return {"ok": False, "status": 400, "error": "Payments are not configured."}
 
-    v = gateway_verify(c, reference)
+    # ExpressPay identifies a payment by a token of its own rather than by the
+    # reference we gave it, and that token is already in the checkout address
+    # the parent was sent to. Every other adapter ignores the argument.
+    token = ""
+    if c["gateway"] == "expresspay":
+        from .gateways.expresspay import token_from_url
+        token = token_from_url(intent.get("authorization_url"))
+    v = gateway_verify(c, reference, token=token)
     if not v.get("ok"):
         return {"ok": False, "status": 502, "error": "Could not confirm the payment with the gateway."}
     if not v.get("paid"):
