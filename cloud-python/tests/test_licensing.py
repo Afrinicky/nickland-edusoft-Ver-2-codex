@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 os.environ.setdefault("ALLOW_DEV_SECRET", "1")
 os.environ["PLATFORM_ADMIN_KEY"] = "pk_test_" + ("x" * 32)
+PLATFORM_KEY = os.environ["PLATFORM_ADMIN_KEY"]
 os.environ["EDUSOFT_QUIET_BOOT"] = "1"
 # A FIXED key rather than a generated one: this suite asserts that a lease
 # edited by hand stops verifying, and a run that signs differently every time
@@ -221,6 +222,16 @@ def main():
     ck("deactivating frees a seat", device_lib.active_count(repo, sid2) == limit - 1)
     ck("...and that machine's credential resolves to nothing",
        device_lib.by_token(repo, tokens[1]) is None)
+
+    # The distinction the licence endpoint turns on, and the one that locked
+    # out every school configured with the school key rather than by signing
+    # in: a machine nobody ever activated is NOT a machine somebody revoked.
+    ck("a machine that was deactivated is revoked",
+       device_lib.revoked(repo, sid2, "m1"))
+    ck("...but one that never activated at all is not",
+       not device_lib.revoked(repo, sid2, "a-machine-nobody-has-seen"))
+    ck("...and neither is a caller that names no machine",
+       not device_lib.revoked(repo, sid2, ""))
     ck("...so the machine it was on is cut off at its next request",
        not device_lib.is_active(repo, sid2, "m1"))
     ck("and the freed seat can be taken",
@@ -264,6 +275,24 @@ def main():
     ck("a deactivated machine cannot renew",
        client.post("/api/v1/licence", headers=key,
                    json={"device": "office-pc"}).status_code == 401)
+
+    # A school that never activated at all — it pasted its school key into
+    # Settings → Cloud sync, which is how every school works until the
+    # activation screen ships — must still get its licence. This refused with
+    # "this computer has been deactivated", telling a paying school to undo
+    # something nobody had done.
+    plain = school(client, "Plain")
+    school_key = client.post(
+        f'/api/v1/admin/schools/{plain["school_id"]}/rotate-key',
+        headers={"x-platform-key": PLATFORM_KEY}).json()["api_key"]
+    served = client.post("/api/v1/licence", headers={"x-school-key": school_key},
+                         json={"device": "an-office-pc", "build": "b1"})
+    ck("a desktop configured with the school key gets a licence",
+       served.status_code == 200 and served.json().get("signed"),
+       (served.status_code, served.json().get("error")))
+    ck("...and can draw seals on the same credential",
+       client.post("/api/v1/seals/draw", headers={"x-school-key": school_key},
+                   json={"kind": "receipt", "count": 2}).status_code == 200)
 
     # ══ The funnel ══════════════════════════════════════════════════════
     print("\nDownloading is opting in")
