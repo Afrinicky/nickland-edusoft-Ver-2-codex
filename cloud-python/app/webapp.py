@@ -2,13 +2,21 @@
 
 The browser build of the mobile app (`mobile/dist-web`), served from the same
 origin as /api/v1 so one URL is the whole product: parents open the portal
-address and are in, with no CORS and nothing to install.
+address and are in, with no CORS and nothing to install. That same-origin
+arrangement is also how the app finds its API without being told — it asks the
+origin it was served from what it is (mobile/src/origin.js) — so there is no
+address baked into the bundle that a later deployment can make wrong.
 
-It is optional. The usual production shape puts the static build on a CDN
-(Vercel) and this service behind it as the API, in which case no build is
-installed here and the legacy portal page still answers at `/`. Copy a build
-into `cloud-python/webapp/` — the Dockerfile does — or point WEBAPP_DIR at one,
-and it takes over.
+The Dockerfile builds it and copies it to `cloud-python/webapp/`, which is the
+production shape. For a long time it did not, while this file said it did: the
+directory is gitignored, so every deployment served the placeholder page at `/`
+and nothing reported it. `boot_report` now says which of the two a running
+service is doing.
+
+A build can also be put there by hand (`npm run build:web`, which copies to all
+three servers) or pointed at with WEBAPP_DIR. With none of them, `/` falls back
+to the legacy portal page — the right answer for a deployment that is only an
+API, with the app hosted separately on a CDN.
 """
 import os
 import posixpath

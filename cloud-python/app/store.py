@@ -156,8 +156,27 @@ class MemoryStore:
         return [{"id": i["id"], "type": i["type"], "payload": i["payload"]} for i in out[-limit:]]
 
 
+# The platform's own tables, as SQL, next to this file.
+SCHEMA_SQL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql")
+
+# Advisory lock id for applying it. Arbitrary and constant: two workers booting
+# against the same empty database must not both run the file, because
+# `CREATE TABLE IF NOT EXISTS` run concurrently deadlocks rather than politely
+# doing nothing.
+_SCHEMA_LOCK = 0x6E69636B
+
+
 class PgStore:
-    """Postgres/Neon store. Requires psycopg (lazily imported). Run schema.sql once."""
+    """Postgres/Neon store. Requires psycopg (lazily imported).
+
+    `schema.sql` is applied by the service itself the first time it finds the
+    tables missing, so a deployment is one step and not two. It used to be a
+    `psql` command in a document, and the failure when somebody skipped it was
+    a 500 with a traceback about `relation "schools" does not exist` — from the
+    parent portal, on the day the school went live. The file has always been
+    written to be re-run (every statement is IF NOT EXISTS), which is what
+    makes applying it automatically safe rather than clever.
+    """
     kind = "pg"
 
     def __init__(self, dsn):
@@ -166,8 +185,9 @@ class PgStore:
         # min_size=0 so a scaled-to-zero Neon / temporarily-down DB never blocks
         # boot; connections open on first use. /health stays DB-independent.
         self._pool = ConnectionPool(dsn, min_size=0, max_size=8, open=True, kwargs={"autocommit": True})
+        self._schema_applied = False
 
-    def _q(self, sql, params=(), fetch=None):
+    def _run(self, sql, params=(), fetch=None):
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
@@ -176,6 +196,67 @@ class PgStore:
                 if fetch == "all":
                     return cur.fetchall()
         return None
+
+    def _q(self, sql, params=(), fetch=None):
+        """Every query goes through here, which is why the repair lives here.
+
+        A missing table is not retried blindly: it is repaired once per process
+        and the query is tried again exactly once. Anything else — a syntax
+        error, a constraint, a database that is simply down — is raised as it
+        always was.
+        """
+        try:
+            return self._run(sql, params, fetch)
+        except Exception as exc:
+            if not self._repair_missing_tables(exc):
+                raise
+            return self._run(sql, params, fetch)
+
+    def _repair_missing_tables(self, exc):
+        """True when the error was a missing platform table and it has now been
+        created. False for every other error, including a second attempt."""
+        try:
+            import psycopg
+        except Exception:
+            return False
+        if not isinstance(exc, psycopg.errors.UndefinedTable) or self._schema_applied:
+            return False
+        self._schema_applied = True     # one attempt per process, success or not
+        try:
+            self.apply_schema()
+            print("[edusoft] The platform tables were missing and have been created "
+                  "from schema.sql.", flush=True)
+            return True
+        except Exception as err:
+            print(f"[edusoft] Could not create the platform tables: {err}\n"
+                  f"          Load them by hand with: psql \"$DATABASE_URL\" -f {SCHEMA_SQL}",
+                  flush=True)
+            return False
+
+    def apply_schema(self):
+        """Run schema.sql, once across every worker.
+
+        The lock is held for the whole file rather than per statement: the
+        point is that the second worker waits and then finds the tables there,
+        not that it races through a file of IF NOT EXISTS statements alongside
+        the first.
+        """
+        with open(SCHEMA_SQL, encoding="utf-8") as fh:
+            sql = fh.read()
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_lock(%s)", (_SCHEMA_LOCK,))
+                try:
+                    cur.execute(sql)
+                finally:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (_SCHEMA_LOCK,))
+        return True
+
+    def platform_tables_ready(self):
+        """Whether the platform's own tables are there — asked at boot so the
+        log says it then, rather than a parent finding out at the gate."""
+        row = self._run("SELECT to_regclass('public.schools')", (), "one")
+        return bool(row and row[0])
 
     def create_school(self, name=None, school_id=None):
         sid = school_id or ("sch_" + secrets.token_hex(4))

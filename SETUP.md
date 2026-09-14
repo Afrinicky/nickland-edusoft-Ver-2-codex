@@ -92,36 +92,57 @@ Full guide: [`docs/CONNECTING.md`](docs/CONNECTING.md).
 Set up **once**, by Nickland, for all schools. Individual schools are then
 enrolled into it in one command each.
 
+One service is the whole thing: the parents' and teachers' app, the portal API,
+and the online school. The app is built into the image, so there is no second
+deployment to keep in step and no API address to compile into a bundle and get
+wrong — the app asks the address it was opened from what it is.
+
 ### C1 · The database
 
-Create a Postgres database (Neon: **New Project**) and copy the connection
-string. **Choose the region first** and put the service in the same one —
-measured, a screen takes about 100ms with the database in the same region and
-over two seconds across continents.
+Create a Postgres database (Neon: **New Project**) and copy the **pooled**
+connection string — the one whose host contains `-pooler`. **Choose the region
+first** and put the service in the same one: measured, a screen takes about
+100ms with the database in the same region and over two seconds across
+continents.
 
-Load the schema once:
-
-```bash
-psql "$DATABASE_URL" -f cloud-python/schema.sql
-```
+Nothing to load. The service creates its own tables the first time it finds
+them missing, and says so in its log. (`cloud-python/schema.sql` is still there
+and can still be run by hand — every statement in it is `IF NOT EXISTS`, which
+is what makes applying it automatically safe.)
 
 ### C2 · The service
 
-Deploy `cloud-python/` (Render: **New → Blueprint**, pointed at this
-repository). Set these in the dashboard — never in the repository:
+Deploy with **New → Blueprint**, pointed at this repository. The blueprint is
+`cloud-python/render.yaml`; it builds from the repository root because the
+image builds the app out of `mobile/` as well.
 
-| Variable | Required | What it is |
+| Variable | | What it is |
 |---|---|---|
-| `DATABASE_URL` | **yes** | The Postgres connection string, with `?sslmode=require`. Without it the service refuses to start rather than silently losing every school on restart. |
-| `PORTAL_SECRET` | **yes** | Signs parent session tokens. Anyone who knows it can mint one. A long random string; never the development value. |
-| `PLATFORM_ADMIN_KEY` | for enrolment | **Nickland's own key** — the only credential that can bring a school into existence. Keep it apart from the school keys every desktop holds. With it unset, the platform routes answer `404`. |
-| `PORTAL_BASE_DOMAIN` | optional | One domain or several: `"edusoft.gh"`, or `"edusoft.gh, nickland.edu.gh"`. See below. |
+| `DATABASE_URL` | **set it** | The pooled Postgres string, with `?sslmode=require`. Without it the service refuses to start rather than silently losing every school on restart. |
+| `PORTAL_SECRET` | generated | Signs parent and teacher sessions. Never change it later: every signed-in parent and teacher is signed out the moment you do. |
+| `PLATFORM_ADMIN_KEY` | generated | **Nickland's own key** — the only credential that can bring a school into existence. Copy it out of the dashboard and keep it apart from the school keys every desktop holds. Under 24 characters it is refused and the platform routes stay off. |
+| `PORTAL_BASE_DOMAIN` | **set it** | The domain the schools live under: `edusoft.gh`. One or several, comma-separated. |
 
-Generate the two secrets with something you did not think of yourself:
+Generating one by hand, if you are not on Render:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
+
+**Read the first five lines of the log after it starts.** They are there to be
+read, and each one is something that has been got wrong on a deploy and found
+out later by a parent:
+
+```
+[edusoft] store: pg
+[edusoft] database: the platform tables were missing and have been created
+[edusoft] platform administration: on
+[edusoft] school addresses: *.edusoft.gh
+[edusoft] parents' app: served from this service
+```
+
+`store: memory`, `platform administration: off`, or `parents' app: not in this
+build` means stop and fix it now rather than after a school is on it.
 
 ### C3 · The schools' addresses
 
@@ -142,25 +163,27 @@ it stays in the list.
 Point a **wildcard DNS record** — `*.edusoft.gh` — at the service, and every
 school is addressed with no further configuration. A school's id is a slug of
 its own name, so `ave-maria-school.edusoft.gh` needs no lookup table and a
-school enrolled a second ago is reachable at once.
+school enrolled a second ago is reachable at once. Opening that address shows
+that school and no other: the app adopts one school without asking, and offers
+a picker only where it was given several.
 
 Leaving it unset is fine: the service works, schools simply have no address.
 
 ### C4 · Enrol a school
 
 ```bash
-DATABASE_URL="postgres://…?sslmode=require" \
-PORTAL_BASE_DOMAIN="edusoft.gh" \
-python3 cloud-python/scripts/create_school.py "Ave Maria School"
-```
-
-Or over the API:
-
-```bash
 curl -X POST https://api.example/api/v1/platform/schools \
   -H "x-platform-key: $PLATFORM_ADMIN_KEY" \
   -H 'content-type: application/json' \
   -d '{"name":"Ave Maria School"}'
+```
+
+Or from a machine that can reach the database directly:
+
+```bash
+DATABASE_URL="postgres://…?sslmode=require" \
+PORTAL_BASE_DOMAIN="edusoft.gh" \
+python3 cloud-python/scripts/create_school.py "Ave Maria School"
 ```
 
 Either prints the **school id**, the **sync key** and the **portal address**.
@@ -186,11 +209,22 @@ On the office PC, **Settings → Cloud Sync**:
 ```bash
 curl https://api.example/api/v1/health
 curl https://api.example/api/v1/platform/schools -H "x-platform-key: $PLATFORM_ADMIN_KEY"
+curl -H "Host: ave-maria-school.edusoft.gh" https://api.example/api/v1/info
 ```
+
+`/health` says `web_app: true` when the app is in the build, which is what a
+parent opening the address gets.
 
 The listing says, per school, whether **both** halves are there — the registry
 row *and* its own database. A school showing `complete: false` tells you which
 half is missing, in words. That is worth reading after every enrolment.
+
+`/info` asked with a school's own Host answers with that school alone, and
+names it in `school_id`. An empty list there means the address does not belong
+to an enrolled school — a typo, or a school not yet enrolled.
+
+Then open the address in a browser and sign in as a parent. It is the only
+check that covers the whole path.
 
 ---
 
@@ -231,6 +265,10 @@ marks is worse than being told to ask the school.
 
 | What you see | What it is |
 |---|---|
+| Parents get a plain page with no sign-in | The app is not in that build — the log says `parents' app: not in this build`. Deploy the blueprint rather than the folder: the image builds the app from `mobile/`, so its build context is the repository root. |
+| Enrolment answers `404` with "no platform administration configured" | `PLATFORM_ADMIN_KEY` is unset **or under 24 characters** — the log's third line says which. A short key is refused exactly like no key at all. |
+| A school's address shows a picker with other schools on it | The Host did not resolve. Check `PORTAL_BASE_DOMAIN` against the domain actually being used, and that the wildcard record points here. |
+| A school's address shows no school at all | That address belongs to no enrolled school: a typo, or the school has not been enrolled yet. |
 | A school in the platform listing with `complete: false` | Only half enrolled. The `problem` field says which half and what to do. |
 | "The cloud address must start with https://" | Sync switched itself off rather than send the school key in clear. Fix the URL. |
 | Parents cannot sign in | The school has not pushed yet. **Settings → Cloud Sync → Re-send everything.** |

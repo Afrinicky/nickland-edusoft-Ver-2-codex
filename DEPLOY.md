@@ -1,11 +1,14 @@
 # Deploying the web app
 
 The browser app in `mobile/` is one bundle that serves three deployments. This
-covers the hosted one: **Vercel for the app, Neon for the database.**
+covers the hosted one: **the cloud service, and Neon for the database.**
 
 The other two are unchanged and need nothing here — the desktop installer ships
 its own copy in `resources/webapp/` and serves it over the school Wi-Fi, and the
 Android APK is built from the same source with the portal address baked in.
+
+For setting the whole thing up in order, from an empty account, read
+[`SETUP.md`](SETUP.md) part C. This document is the detail behind it.
 
 ---
 
@@ -13,20 +16,25 @@ Android APK is built from the same source with the portal address baked in.
 
 ```
    parent's phone  ─┐
-   teacher's phone ─┼──►  Vercel        the app itself: HTML, JS, images
-   staffroom PC    ─┘     (static)      no database, no secrets
-                              │
-                              │  /api/v1/…
-                              ▼
-                         cloud-python                the read model + the queue
-                         (Render / Fly)              of things done off-LAN
-                              │
+   teacher's phone ─┼──►  cloud-python         the app AND its API, one origin
+   staffroom PC    ─┘     (Render / Fly)       the read model + the queue of
+                              │                things done off-LAN
                               ▼
                             Neon                     Postgres
                               ▲
                               │  sync, both ways
                          the school's desktop         the source of truth
 ```
+
+**One service.** The image builds `mobile/` and serves it from the same origin
+as `/api/v1`, so a school's address is the whole product. That is not only
+tidiness: the app works out what to talk to by asking the origin it was served
+from (`mobile/src/origin.js`), so a same-origin deployment has no API address
+to configure, and therefore none to get wrong on a later move.
+
+The static-hosting shape below — the app on Vercel, this service behind it as
+the API — still works and is documented in §3. It costs you the school
+subdomains, because those are resolved by the service that serves the page.
 
 The desktop host stays the source of truth. The cloud holds a thin read model
 and a queue of changes made while the desktop was unreachable; the desktop
@@ -43,29 +51,45 @@ authoritative.
 2. Copy the **pooled** connection string, the one whose host contains
    `-pooler`. The unpooled one runs out of connections as soon as the service
    scales past one instance.
-3. Load the schema once:
-
-   ```bash
-   psql "postgres://…-pooler…?sslmode=require" -f cloud-python/schema.sql
-   ```
+3. There is no schema to load. The service applies `cloud-python/schema.sql`
+   itself the first time it finds the tables missing, under an advisory lock so
+   that two workers booting together do not both run it, and says which it did
+   in the log. Running it by hand still works and changes nothing — every
+   statement in the file is `IF NOT EXISTS`.
 
 4. `?sslmode=require` is not optional. Neon refuses plain connections, and the
    error it gives is not obviously about TLS.
 
-## 2. The API
+## 2. The service
 
-`cloud-python/` is a FastAPI service. `render.yaml` and `fly.toml` are both in
-the repo; either host works.
+`cloud-python/` is a FastAPI service, and the image also builds the app.
+`render.yaml` and `fly.toml` are both in the repo; either host works. **Build
+from the repository root** — `cloud-python/Dockerfile` copies `mobile/`, so a
+build whose context is `cloud-python/` fails on the first COPY. Both config
+files already say so.
 
 | Variable | | |
 |---|---|---|
 | `DATABASE_URL` | required | the pooled Neon string, with `?sslmode=require` |
 | `PORTAL_SECRET` | required | `openssl rand -hex 32`. Signs parent and teacher sessions — **changing it signs everyone out** |
+| `PLATFORM_ADMIN_KEY` | for enrolment | 24 characters or more, or it is treated as unset and the platform routes answer 404 |
+| `PORTAL_BASE_DOMAIN` | for addresses | the domain schools live under; see below |
 | `ALLOW_MEMORY_STORE` | never set it in production | the in-memory store loses every school, account and receipt on each restart, and each worker keeps its own copy, so the same request succeeds or 401s depending on which one answers |
 
 The service refuses to start without `DATABASE_URL` rather than falling back to
 memory, which is deliberate: a silent fallback fails in ways that look like
 random breakage rather than misconfiguration.
+
+It reports what it has on the way up, and those five lines are the fastest
+check that a deploy is what you meant:
+
+```
+[edusoft] store: pg
+[edusoft] database: ready
+[edusoft] platform administration: on
+[edusoft] school addresses: *.edusoft.gh
+[edusoft] parents' app: served from this service
+```
 
 Then provision the school and keep the key it prints — it is shown once, and it
 is what the desktop authenticates with:
@@ -74,7 +98,13 @@ is what the desktop authenticates with:
 DATABASE_URL="postgres://…" python cloud-python/scripts/create_school.py "Ave Maria Preparatory School"
 ```
 
-## 3. Vercel
+## 3. Vercel — the app on its own, if you want it there
+
+**Optional, and not the default any more.** The service above already serves
+the app. Host it separately only if you want a CDN in front of it, and know
+what it costs: a page served from another origin is not the origin a school's
+subdomain resolves on, so `ave-maria-school.edusoft.gh` stops naming a school
+and parents get the picker.
 
 Import the repository. `vercel.json` already sets the build, the install, the
 output directory, the cache headers and the SPA rewrite, so the only thing to
@@ -208,21 +238,28 @@ error.
 ## Checking a deploy
 
 ```bash
-curl https://your-api.example.com/api/v1/health          # the service is up
-curl https://your-api.example.com/api/v1/portal/schools  # it can reach Neon
-curl -I https://your-app.vercel.app/                     # the app is served
-curl -s https://your-app.vercel.app/ | grep -o 'EXPO_PUBLIC_PORTAL_URL[^"]*'
+curl https://your-service.example.com/api/v1/health          # the service is up, and whether it carries the app
+curl https://your-service.example.com/api/v1/portal/schools  # it can reach Neon
+curl -H "Host: ave-maria-school.edusoft.gh" \
+     https://your-service.example.com/api/v1/info            # the school's own address names that school
 ```
 
 `/health` is deliberately database-independent, so it answering tells you the
-process is alive and nothing more. `/portal/schools` is the one that proves the
-Neon connection works.
+process is alive and nothing more — except `web_app`, which says whether this
+build carries the app or will serve the placeholder page at `/`.
+`/portal/schools` is the one that proves the Neon connection works.
 
-If the app shows the Connect screen to everyone, the API address did not make it
-into the bundle. Check the Vercel build log for the line beginning
-`→ Building the web app (portal: …)` — if it has no `portal:`, the environment
-variable was not set for that environment (Production and Preview are
-configured separately).
+`/info` asked with a school's Host answers with that school alone and names it
+in `school_id`. An empty `schools` there means the address belongs to no
+enrolled school; the full list means the Host did not resolve at all — the
+domain does not match `PORTAL_BASE_DOMAIN`.
+
+If the app shows the Connect screen to everyone on a **separately hosted**
+build, the API address did not make it into the bundle. Check the Vercel build
+log for the line beginning `→ Building the web app (portal: …)` — if it has no
+`portal:`, the environment variable was not set for that environment
+(Production and Preview are configured separately). A build served by the
+service itself has no address to miss.
 
 ---
 
