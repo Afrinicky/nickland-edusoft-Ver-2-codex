@@ -44,27 +44,35 @@ authoritative.
 ### Which hostname gets which interface
 
 One service answers on all of them, and `/api/v1/*` is identical on every one.
-The hostname decides only which HTML is served (`cloud-python/app/site.py`):
+The hostname decides only which HTML is served (`cloud-python/app/site.py`).
 
-| Address | Interface |
-|---|---|
-| `www.<domain>` and the bare `<domain>` | the public website — pricing, registration |
-| `admin.<domain>` | the Superadmin console |
-| `app.<domain>`, `<school>.<domain>`, anything else | the school application |
+**Three domains, each named on its own, none borrowing from another:**
 
-So point `www`, `admin` and a wildcard `*` at the same service.
+| Variable | Example | Interface |
+|---|---|---|
+| `PORTAL_BASE_DOMAIN` | `edusoft.gh` | the school application — the bare name, `www`, and every subdomain |
+| `PUBLIC_SITE_DOMAIN` | `nicklandedusoft.com` | the public website — pricing, registration, payment |
+| `CONSOLE_DOMAIN` | `admin.nicklandedusoft.com` | the Superadmin console |
 
-**A deployment that has no `PORTAL_BASE_DOMAIN` set is unchanged**: every
-address still gets the school application at `/`, and the website and the
-console are reached at `/welcome` and `/console` instead. Those two paths also
-work on a configured deployment, which is what makes local development
-possible — on `localhost` every hostname is the same hostname.
+Point each domain's DNS at the same service, plus a wildcard `*.edusoft.gh` for
+the school addresses.
 
-**One thing does change for a deployment that HAS a base domain configured**:
-the bare domain used to serve the parents' app and now serves the public
-website. Parents and teachers are given their own school's address
-(`ave-maria.<domain>`), which is unaffected, and `app.<domain>` also still
-serves the application.
+**The portal domain is not touched by any of this.** Its bare name, its `www`
+and all of its subdomains go to the school application exactly as they always
+have. That is the point: parents and teachers have already been given addresses
+under it, and a marketing page appearing at one of them is a support call.
+
+Matching is **exact** — a configured domain and its `www.`, and nothing else.
+Never "ends with". A suffix rule would make every subdomain of the website's
+domain the website; this one has to be told, which is what lets the console sit
+at `admin.nicklandedusoft.com` while the website is `nicklandedusoft.com`. The
+console list is consulted first, so naming a host explicitly always wins.
+
+**A deployment that configures none of this keeps the behaviour it had**: every
+address gets the school application at `/`, and the website and the console are
+reached at `/welcome` and `/console` instead. Those two paths also work on a
+fully configured deployment, which is what makes local development possible —
+on `localhost` every hostname is the same hostname.
 
 The subscription and billing engine, the Superadmin console and the public
 website are documented in **[`docs/SAAS_PLATFORM.md`](docs/SAAS_PLATFORM.md)**.
@@ -102,6 +110,8 @@ files already say so.
 | `PORTAL_SECRET` | required | `openssl rand -hex 32`. Signs parent and teacher sessions — **changing it signs everyone out** |
 | `PLATFORM_ADMIN_KEY` | for enrolment | 24 characters or more, or it is treated as unset and the platform routes answer 404 |
 | `PORTAL_BASE_DOMAIN` | for addresses | the domain schools live under; see below |
+| `PUBLIC_SITE_DOMAIN` | for the website | the domain the public website answers on; unset means `/welcome` only |
+| `CONSOLE_DOMAIN` | for the console | the domain the Superadmin console answers on; unset means `/console` only |
 | `ALLOW_MEMORY_STORE` | never set it in production | the in-memory store loses every school, account and receipt on each restart, and each worker keeps its own copy, so the same request succeeds or 401s depending on which one answers |
 
 The service refuses to start without `DATABASE_URL` rather than falling back to

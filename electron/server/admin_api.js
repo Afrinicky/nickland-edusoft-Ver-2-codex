@@ -30,6 +30,7 @@
 //     approved; destruction stays where the audit trail is printed.
 
 const portals = require('../ipc/_portals');
+const { gatewayEnabled } = require('./gateways');
 const access = require('../ipc/_access');
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
@@ -46,10 +47,20 @@ const SETTINGS_READABLE = [
   'current_exam_title', 'mobile_parent_self_register', 'mobile_token_ttl_days',
   'payment_gateway', 'paystack_public_key', 'paystack_base_url', 'paystack_callback_url',
   'online_payments_enabled', 'online_payment_min', 'online_payment_max',
+  'flutterwave_public_key', 'flutterwave_base_url', 'flutterwave_callback_url',
+  'hubtel_merchant_account', 'hubtel_base_url', 'hubtel_status_url', 'hubtel_callback_url',
+  'expresspay_merchant_id', 'expresspay_base_url', 'expresspay_callback_url',
 ];
 // Written, but never read back. A secret that a screen can display is a secret
-// that a screenshot can carry out of the building.
-const SETTINGS_WRITE_ONLY = ['paystack_secret_key'];
+// that a screenshot can carry out of the building. Hubtel's API ID and
+// ExpressPay's key are here for the same reason their partners are: an id that
+// is half of a credential pair is a credential.
+const SETTINGS_WRITE_ONLY = [
+  'paystack_secret_key',
+  'flutterwave_secret_key', 'flutterwave_secret_hash',
+  'hubtel_client_id', 'hubtel_client_secret',
+  'expresspay_api_key',
+];
 const SETTINGS_WRITABLE = new Set([...SETTINGS_READABLE, ...SETTINGS_WRITE_ONLY]);
 
 function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, media, audit }) {
@@ -789,7 +800,7 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
       ).get().c,
       payments: {
         gateway,
-        configured: gateway !== 'none' && !!getSetting(db, 'paystack_secret_key', ''),
+        configured: gatewayEnabled(db),
         online_enabled: getSetting(db, 'online_payments_enabled', 'false') === 'true',
       },
       security: {

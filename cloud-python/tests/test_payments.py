@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient          # noqa: E402
 
 from app import ratelimit                          # noqa: E402
 from app.main import create_app                    # noqa: E402
+from app.gateways import paystack as paystack_adapter   # noqa: E402
 from app.school import db as sdb, parents, payments, session  # noqa: E402
 
 PASS = FAIL = 0
@@ -51,6 +52,10 @@ STARTED = []
 
 
 def fake_http(url, method="GET", headers=None, body=None, timeout=20):
+    # The Test-connection read. Cheap, needs a real key against the real
+    # Paystack, and answers "fine" here.
+    if "/transaction?" in url:
+        return {"status": 200, "json": {"status": True, "data": []}}
     if "/transaction/initialize" in url:
         if not GATEWAY["initialize_ok"]:
             return {"status": 400, "json": {"status": False, "message": "declined"}}
@@ -72,7 +77,11 @@ def main():
         print("DATABASE_URL is not set — the online system needs Postgres.")
         return 1
 
-    payments._http_json = fake_http
+    # The gateway is reached through its adapter now (app/gateways/paystack.py),
+    # so the seam the fake stands in for is the adapter's HTTP call rather than
+    # a helper inside payments.py. Patched on the adapter's own module, because
+    # it imported the function by name.
+    paystack_adapter.http_json = fake_http
 
     school_id = "p" + uuid.uuid4().hex[:10]
     sdb.provision(school_id)

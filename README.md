@@ -77,6 +77,18 @@ application the school then uses, and a Superadmin console where Nickland
 manages schools, plans, subscriptions, discounts, exemptions, invoices and
 payments.
 
+Each interface has its own domain, named on its own: the schools' domain stays
+entirely the schools' (`PORTAL_BASE_DOMAIN`), and the website and the console
+get `PUBLIC_SITE_DOMAIN` and `CONSOLE_DOMAIN`. Configure none of them and
+everything still works at `/`, `/welcome` and `/console`.
+
+**Every school sets up its own payment provider** — Paystack, Flutterwave,
+Hubtel or ExpressPay, whichever it already banks with — plus Arkesel for text
+messages to parents, in four steps in its own portal. Fees a school takes go to
+that school's own provider account; Nickland never holds them. The same four
+adapters run on the offline desktop, so a school keeps its provider whichever
+way it works.
+
 How that fits together, and how the subscription and billing engine works:
 **[`docs/SAAS_PLATFORM.md`](docs/SAAS_PLATFORM.md)**.
 

@@ -35,4 +35,19 @@ function httpJson(urlStr, { method = 'GET', headers = {}, body } = {}) {
   });
 }
 
-module.exports = { httpJson };
+// Form-encoded POST, for gateways that predate JSON APIs. ExpressPay wants
+// `application/x-www-form-urlencoded` in and answers JSON out, so the response
+// shape is deliberately the same as httpJson's and a caller does not have to
+// care which of the two it used.
+function httpForm(urlStr, fields, { headers = {} } = {}) {
+  const body = Object.entries(fields || {})
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v == null ? '' : v)}`)
+    .join('&');
+  return httpJson(urlStr, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+    body,
+  });
+}
+
+module.exports = { httpJson, httpForm };

@@ -12,6 +12,7 @@ const { postIncome } = require('../ipc/_ledger');
 const { autoReceiptForPayment, autoDeliverReceipt } = require('../ipc/receipts_engine');
 const { getNextReceiptNumber, getSetting } = require('../utils/idgen');
 const { getGateway } = require('./gateways');
+const { tokenFromUrl } = require('./gateways/expresspay');
 const { enqueueStudentSnapshot, postToOutbox } = require('./sync/outbox');
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
@@ -157,7 +158,8 @@ function intentsForStudent(db, studentId) {
 }
 
 function channelToMethod(channel) {
-  return { mobile: 'Mobile Money', mobile_money: 'Mobile Money', bank: 'Bank Transfer', cash: 'Cash', paystack: 'Paystack' }[channel] || 'Mobile Money';
+  return { mobile: 'Mobile Money', mobile_money: 'Mobile Money', bank: 'Bank Transfer', cash: 'Cash',
+    paystack: 'Paystack', flutterwave: 'Flutterwave', hubtel: 'Hubtel', expresspay: 'ExpressPay' }[channel] || 'Mobile Money';
 }
 
 // ── Online (gateway) payments ──
@@ -193,7 +195,11 @@ async function verifyAndSettle(db, reference, { actorUserId } = {}) {
 
   const g = getGateway(db);
   if (!g) return { ok: false, error: 'No gateway configured.' };
-  const v = await g.verify(db, reference);
+  // ExpressPay asks by token rather than by our order id, and the token is
+  // already inside the checkout URL we stored when the intent was created —
+  // so it is read back off the intent and nothing extra had to be kept. Every
+  // other adapter ignores the second argument.
+  const v = await g.verify(db, reference, { token: tokenFromUrl(intent.authorization_url) });
   if (!v.ok) return { ok: false, error: v.error };
   if (!v.paid) {
     db.prepare('UPDATE payment_intents SET gateway_status = ? WHERE id = ?').run(v.gateway_status || 'pending', intent.id);
@@ -203,7 +209,10 @@ async function verifyAndSettle(db, reference, { actorUserId } = {}) {
   if (Math.round((v.amount || 0) * 100) !== Math.round(intent.amount * 100)) {
     db.prepare('UPDATE payment_intents SET amount = ? WHERE id = ?').run(v.amount, intent.id);
   }
-  const ack = acknowledgeIntent(db, intent.id, { actorUserId: actorUserId || null, method: 'Paystack' });
+  const ack = acknowledgeIntent(db, intent.id, {
+    actorUserId: actorUserId || null,
+    method: channelToMethod(intent.gateway || g.id),
+  });
   if (ack.ok) db.prepare("UPDATE payment_intents SET gateway_status = 'success' WHERE id = ?").run(intent.id);
   return ack;
 }

@@ -268,10 +268,14 @@
             back the moment the bill is settled.</p>
         </details>
         <details style="padding:14px 0">
-          <summary style="font-weight:600;cursor:pointer">Can we pay by mobile money or bank transfer?</summary>
-          <p class="small muted" style="margin:10px 0 0">Yes. Card and mobile money are
-            handled at checkout. For a bank transfer or a termly invoice, write to us and
-            we will set it up on your account.</p>
+          <summary style="font-weight:600;cursor:pointer">What can we pay with?</summary>
+          <p class="small muted" style="margin:10px 0 0">Visa and Mastercard, and mobile
+            money, are handled at checkout <span data-accepts-note></span>. A subscription
+            that renews on its own has to be set up on a card, because a mobile-money
+            payment is a one-off and there would be nothing to charge next month — so the
+            card step asks for a card. Settling a single invoice can be done either way.
+            For a bank transfer or a termly invoice, write to us and we will set it up on
+            your account.</p>
         </details>
       </div>
     </div>
@@ -325,9 +329,10 @@
          with a column saying which school a row belongs to — its own database,
          so one school's query cannot reach another school's pupils even if
          somebody writes it wrongly.</p>
-      <p>Card details are never stored by us. They are held by the payment
-         provider, and what we keep is a reference that can be charged and
-         nothing that can be read.</p>
+      <p>Card details are never stored by us. Your Visa or Mastercard is held by
+         the payment provider, and what we keep is a reference that can be
+         charged and nothing that can be read — not the number, not the security
+         code, nothing that would work anywhere else.</p>
       <p>Administrative actions on the platform — a plan changed, a discount
          granted, a school suspended — are written to an audit trail with who did
          it and when.</p>
@@ -493,6 +498,7 @@
             </div>
           </div>
           <div class="note" style="margin-top:20px" data-payment-note></div>
+          <p class="small muted" style="margin-top:10px" data-accepted-cards hidden></p>
           <p style="margin-top:22px">
             <button type="button" class="btn btn-outline" data-back="3">Back</button>
             <button type="submit" class="btn btn-primary btn-lg" id="regSubmit">Create my school</button>

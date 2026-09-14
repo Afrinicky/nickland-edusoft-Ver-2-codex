@@ -158,7 +158,7 @@ def billing_overview(request: Request, authorization: str = Header(None)):
         "history": subs.history(repo, school_id),
         "events": subs.events(repo, school_id, limit=40),
         "can_manage": bool(actor.get("is_admin")) or portals.is_super_admin(actor),
-        "payments_available": billing_provider.configured(),
+        "payments_available": billing_provider.configured(repo),
         "currency": platform_settings.get(repo, "currency", "GHS"),
     }
 
@@ -264,7 +264,7 @@ async def billing_pay(request: Request, authorization: str = Header(None)):
         school_id, _db, actor = _caller(authorization, need_manage=True)
     except Denied as denied:
         return denied.response
-    if not billing_provider.configured():
+    if not billing_provider.configured(repo_for(store)):
         return _err(503, "Card payments are not switched on for this deployment.")
     body = await _json(request)
     store = request.app.state.store

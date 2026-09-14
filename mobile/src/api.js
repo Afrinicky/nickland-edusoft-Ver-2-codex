@@ -1342,6 +1342,29 @@ export const api = {
       : MODE === 'cloud' ? hostOnly('Changing a setting')()
                          : request('/system/settings', { method: 'POST', token, body: { settings } }),
 
+  // ── Who takes the school's money, and who sends its messages ──────
+  //
+  // Online only, and that is not an oversight. The credentials belong to the
+  // school's provider account, and the setup screen's whole value is the Test
+  // button — which needs to reach the provider from wherever the credentials
+  // are going to be used. A desktop on the school Wi-Fi sets these up in its
+  // own Settings, where it has always done.
+  integrations: (token) =>
+    MODE === 'online' ? school.integrations(token) : hostOnly('Integrations')(),
+  integrationsSavePayments: (token, body) =>
+    MODE === 'online' ? school.saveIntegrationPayments(token, body)
+                      : hostOnly('Payment setup')(),
+  integrationsTestPayments: (token) =>
+    MODE === 'online' ? school.testIntegrationPayments(token)
+                      : hostOnly('Testing the connection')(),
+  integrationsEnablePayments: (token, enabled) =>
+    MODE === 'online' ? school.enableIntegrationPayments(token, enabled)
+                      : hostOnly('Switching payments on')(),
+  integrationsSaveSms: (token, body) =>
+    MODE === 'online' ? school.saveIntegrationSms(token, body) : hostOnly('SMS setup')(),
+  integrationsTestSms: (token, to) =>
+    MODE === 'online' ? school.testIntegrationSms(token, to) : hostOnly('Testing SMS')(),
+
   // ── Photographs and documents ─────────────────────────────────────
   //
   // The installed application attaches a file by opening a dialog and copying
@@ -1784,6 +1807,17 @@ export const school = {
     schoolRequest('/system/access', { method: 'POST', token, body: { designation_id: designationId, levels } }),
   auditTrail: (token, query) => schoolRequest('/system/audit', { token, query }),
   settings: (token) => schoolRequest('/system/settings', { token }),
+  integrations: (token) => schoolRequest('/integrations', { token }),
+  saveIntegrationPayments: (token, body) =>
+    schoolRequest('/integrations/payments', { method: 'POST', token, body }),
+  testIntegrationPayments: (token) =>
+    schoolRequest('/integrations/payments/test', { method: 'POST', token, body: {} }),
+  enableIntegrationPayments: (token, enabled) =>
+    schoolRequest('/integrations/payments/enable', { method: 'POST', token, body: { enabled } }),
+  saveIntegrationSms: (token, body) =>
+    schoolRequest('/integrations/sms', { method: 'POST', token, body }),
+  testIntegrationSms: (token, to) =>
+    schoolRequest('/integrations/sms/test', { method: 'POST', token, body: { to } }),
   saveSettings: (token, settings) =>
     schoolRequest('/system/settings', { method: 'POST', token, body: { settings } }),
 

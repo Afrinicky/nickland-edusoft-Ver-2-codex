@@ -27,6 +27,7 @@
 // Registered by `createApiServer` (api.js), which owns routing, auth and CORS.
 
 const payments = require('./payments_service');
+const { gatewayEnabled } = require('./gateways');
 const { postIncome, postExpense } = require('../ipc/_ledger');
 const portals = require('../ipc/_portals');
 
@@ -605,7 +606,9 @@ function registerFinanceRoutes({ add, db, json, can, API, getSetting, audit }) {
     return json(res, 200, {
       ok: true, status,
       may_acknowledge: can(ctx, 'fees', 'edit'),
-      gateway: { id: gateway, live: gateway !== 'none' && !!getSetting(db, 'paystack_secret_key', '') },
+      // Asked of the adapter rather than of Paystack's key, so a school on
+      // Hubtel or ExpressPay is not reported as unconfigured.
+      gateway: { id: gateway, live: gatewayEnabled(db) },
       counts: {
         pending: db.prepare("SELECT COUNT(*) c FROM payment_intents WHERE status='pending'").get().c,
         acknowledged: db.prepare("SELECT COUNT(*) c FROM payment_intents WHERE status='acknowledged'").get().c,

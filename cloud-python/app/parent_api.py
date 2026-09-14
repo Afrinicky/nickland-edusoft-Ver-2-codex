@@ -233,11 +233,27 @@ async def declare(student_id: int, request: Request, authorization: str = Header
 
 
 # ══ the gateway's webhook ═══════════════════════════════════════════════════
-# Public by necessity — the gateway has no account here — and therefore the
-# most carefully guarded route in the service. The signature is checked over
-# the RAW bytes against the school's own secret before the body is believed
-# about anything, a bad one is answered 401 and nothing else, and the amount is
-# never read from the body: settlement asks the gateway directly.
+# Public by necessity — the gateway has no account here — and therefore the most
+# carefully guarded route in the service.
+#
+# What it does NOT do is take the delivery's word for anything. The amount is
+# never read from the body; settlement asks the provider over the school's own
+# authenticated connection. That was already true when Paystack was the only
+# provider, and it is what lets this route now serve providers that do not sign
+# their callbacks at all:
+#
+#   SIGNED (Paystack, Flutterwave)    a bad signature is refused, 401, and
+#                                     written to the school's audit log.
+#   UNSIGNED (Hubtel, ExpressPay)     there is nothing to refuse. The delivery
+#                                     is treated as "go and look", and the
+#                                     looking is the same `settle` the signed
+#                                     ones end in. An attacker who posts a
+#                                     forged body achieves one thing: the
+#                                     school asks its provider about a
+#                                     reference, and the provider says no.
+#
+# So an unsigned provider is not less safe here. It is slower to believe, which
+# is the correct order of those two things.
 
 webhook_router = APIRouter(prefix="/api/v1/school")
 
@@ -250,10 +266,14 @@ async def webhook(school_id: str, request: Request):
     except ValueError:
         return _err(404, "Not found")
     cfg = payments.config(db)
-    signature = (request.headers.get("x-paystack-signature")
-                 or request.headers.get("x-signature") or "")
-    if not cfg or not payments.verify_webhook(cfg["secret"], signature, raw):
-        # Recorded in the school's own audit log: somebody posting unsigned
+    if not cfg:
+        return _err(401, "Unauthorized")
+
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    signed = payments.verify_webhook(cfg, raw, headers)
+    if cfg["signed_callbacks"] and not signed:
+        # This provider signs, and this delivery was not signed properly.
+        # Recorded in the school's own audit log: somebody posting forged
         # bodies at a school's payment endpoint is worth the school knowing.
         try:
             security.audit(db, None, "security", None, "webhook_rejected",
@@ -262,15 +282,14 @@ async def webhook(school_id: str, request: Request):
             pass
         return _err(401, "Unauthorized")
 
-    import json as _json_lib
-    try:
-        payload = _json_lib.loads(raw) if raw else {}
-    except ValueError:
-        payload = {}
-    if payload.get("event") == "charge.success" and (payload.get("data") or {}).get("reference"):
+    delivery = payments.read_webhook(cfg, raw, headers)
+    reference = delivery.get("reference") or ""
+    # `succeeded` from a signed provider, `check` from an unsigned one. Both
+    # lead to the same place, because both are only a reason to go and ask.
+    if reference and delivery.get("status") in ("succeeded", "check"):
         try:
-            payments.settle(db, payload["data"]["reference"])
+            payments.settle(db, reference)
         except Exception:
             security.audit(db, None, "payment_intent", None, "webhook_failed",
-                           str(payload.get("data", {}).get("reference")), "high")
+                           reference, "high")
     return {"ok": True}

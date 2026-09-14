@@ -8,7 +8,6 @@ The cloud holds only the thin read model + change queue; the desktop stays the
 source of truth.
 """
 import datetime
-import json
 import os
 from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
@@ -17,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import admin_api
 from . import billing
 from . import billing_api
+from . import integrations_api
 from . import office
 from . import payments as cloud_payments
 from . import parent_api
@@ -90,10 +90,20 @@ def boot_report(store):
         lines.append("subscriptions: ready")
 
     from .billing import provider as billing_provider
+
+    def _billing_repo(store):
+        """The repo, or None when the billing tables cannot be reached. The
+        boot report must survive a database that is briefly down."""
+        try:
+            from .billing.repo import repo_for
+            return repo_for(store)
+        except Exception:
+            return None
+
     lines.append("subscription payments: " + (
-        "on" if billing_provider.configured() else
-        f"off ({billing_provider.ENV_SECRET} is not set) — schools can register "
-        "and start a trial, but no card is taken"))
+        "on" if billing_provider.configured(_billing_repo(store)) else
+        f"off (no gateway configured) — schools can register and start a trial, "
+        f"but no card is taken. Set one in the console, or {billing_provider.ENV_SECRET}."))
 
     key = os.environ.get(platform_api.ENV_KEY, "")
     if platform_api.platform_enabled():
@@ -106,6 +116,9 @@ def boot_report(store):
         lines.append(f"platform administration: off ({platform_api.ENV_KEY} is not set)")
 
     domains = platform_api.portal_base_domains()
+    # The portal domain is the schools', whole and undivided: its bare name and
+    # every subdomain of it reach the school application. The website and the
+    # console are named separately below and take nothing from it.
     lines.append("school addresses: " + (
         f"*.{domains[0]}" + (f" (also {', '.join(domains[1:])})" if len(domains) > 1 else "")
         if domains else "none — set PORTAL_BASE_DOMAIN to give schools an address"))
@@ -113,13 +126,20 @@ def boot_report(store):
     lines.append("parents' app: " + ("served from this service" if webapp.is_available()
                                      else "not in this build — / serves the placeholder page"))
 
-    faces = [name for name, kind in (("website", "site"), ("superadmin console", "console"))
-             if site_files.available(kind)]
-    lines.append("interfaces: " + (", ".join(faces) if faces else "none built") +
-                 (f" — on {domains[0]}: www → website, admin → console, "
-                  "every other name → the school application" if domains else
-                  f" — no domain configured, so they are at {site_files.SITE_PREFIX} "
-                  f"and {site_files.CONSOLE_PREFIX} and / stays the school application"))
+    # The other two interfaces, and where each one actually answers. Said as
+    # three separate lines because they are three separate decisions, and the
+    # commonest deployment mistake is assuming one of them follows from another.
+    for label, kind, env, prefix in (
+            ("public website", "site", site_files.ENV_SITE_DOMAIN, site_files.SITE_PREFIX),
+            ("superadmin console", "console", site_files.ENV_CONSOLE_DOMAIN,
+             site_files.CONSOLE_PREFIX)):
+        where = site_files.domains(env)
+        if not site_files.available(kind):
+            lines.append(f"{label}: not in this build")
+        elif where:
+            lines.append(f"{label}: {', '.join(where)} (also {prefix})")
+        else:
+            lines.append(f"{label}: {prefix} — set {env} to give it a domain")
 
     # A school's own tables are read from files when it is enrolled. They were
     # once left out of the image, which nothing noticed until the first school
@@ -162,6 +182,7 @@ def create_app(store=None) -> FastAPI:
     app.include_router(public_api.router)
     app.include_router(admin_api.router)
     app.include_router(billing_api.router)
+    app.include_router(integrations_api.router)
     # The online school itself: every module the offline system has, against
     # that school's own Postgres schema.
     app.include_router(school_api.router)
@@ -1067,16 +1088,19 @@ def create_app(store=None) -> FastAPI:
     async def payment_webhook(school_id: str, request: Request):
         raw = (await request.body()).decode("utf-8", "replace")
         cfg = cloud_payments.config(S(), school_id)
-        signature = request.headers.get("x-paystack-signature") or request.headers.get("x-signature") or ""
-        if not cfg or not cloud_payments.verify_webhook(cfg.get("secret"), signature, raw):
+        if not cfg:
             return _err(401, "Unauthorized")
-        try:
-            payload = json.loads(raw) if raw else {}
-        except ValueError:
-            payload = {}
-        if payload.get("event") == "charge.success" and (payload.get("data") or {}).get("reference"):
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        # A provider that signs must sign. A provider that does not sign at all
+        # — Hubtel, ExpressPay — cannot be refused on that basis, so its
+        # delivery is treated as "go and ask", and `settle` asks. The amount has
+        # never been read from a webhook body here and still is not.
+        if cfg["signed_callbacks"] and not cloud_payments.verify_webhook(cfg, raw, headers):
+            return _err(401, "Unauthorized")
+        delivery = cloud_payments.read_webhook(cfg, raw, headers)
+        if delivery.get("reference") and delivery.get("status") in ("succeeded", "check"):
             try:
-                cloud_payments.settle(S(), school_id, payload["data"]["reference"])
+                cloud_payments.settle(S(), school_id, delivery["reference"])
             except Exception:                            # pragma: no cover
                 pass
         return {"ok": True}

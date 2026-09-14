@@ -367,6 +367,75 @@ ALTER TABLE schools ADD COLUMN IF NOT EXISTS contact_phone TEXT NOT NULL DEFAULT
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS region TEXT NOT NULL DEFAULT '';
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS lifecycle_note TEXT NOT NULL DEFAULT '';
 
+-- ── A school's own payment gateway ──────────────────────────────────────────
+-- The credentials a SCHOOL uses to take fees from ITS parents. Not Nickland's,
+-- and never mixed with Nickland's: see `platform_gateways` below.
+--
+-- This table has been read and written by `app/store.py` since internet
+-- payments shipped, and nothing in this repository ever created it. On
+-- Postgres that meant a school switching online payments on from its desktop
+-- got a 500 from `/api/v1/admin/payment-config`, and no parent could ever pay
+-- through the cloud — the in-memory store the tests run on has no tables, so
+-- every test passed. It is created here, with the columns the code already
+-- expects plus the ones a multi-gateway platform needs.
+--
+-- `credentials` is the new half and the reason this is a JSONB column rather
+-- than more named ones: Paystack needs a secret key, Hubtel needs an API id, an
+-- API key and a merchant account number, ExpressPay needs a merchant id — and a
+-- table with a column per provider per field would need a migration every time
+-- a school asks for a provider it already banks with. The adapter declares its
+-- fields (`app/gateways/`), and only fields it declared are ever stored.
+--
+-- Nothing here is ever served. There is no route that reads `credentials` or
+-- `secret` back out, and there must never be one: a screen that needs to show
+-- which key is in use is given `••••` and the last four characters.
+CREATE TABLE IF NOT EXISTS school_payments (
+  school_id    TEXT PRIMARY KEY REFERENCES schools(school_id) ON DELETE CASCADE,
+  gateway      TEXT NOT NULL DEFAULT 'none',
+  secret       TEXT NOT NULL DEFAULT '',      -- Paystack's, kept for the desktops that push it
+  public_key   TEXT NOT NULL DEFAULT '',
+  base_url     TEXT NOT NULL DEFAULT '',
+  currency     TEXT NOT NULL DEFAULT 'GHS',
+  callback_url TEXT NOT NULL DEFAULT '',
+  min_amount   NUMERIC(14,2) NOT NULL DEFAULT 1,
+  max_amount   NUMERIC(14,2) NOT NULL DEFAULT 10000,
+  enabled      BOOLEAN NOT NULL DEFAULT true,
+  credentials  JSONB NOT NULL DEFAULT '{}',
+  -- A gateway is not live until a test against the real provider has passed.
+  -- These two say when, and what the provider answered. A configuration that
+  -- has never been tested cannot be switched on — which is what stops a wrong
+  -- key being found by a parent rather than by the bursar who typed it.
+  verified_at     TIMESTAMPTZ,
+  verified_detail TEXT NOT NULL DEFAULT '',
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE school_payments ADD COLUMN IF NOT EXISTS credentials JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE school_payments ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+ALTER TABLE school_payments ADD COLUMN IF NOT EXISTS verified_detail TEXT NOT NULL DEFAULT '';
+
+-- ── Nickland's own gateway ──────────────────────────────────────────────────
+-- The other direction of money entirely: the platform charging a school its
+-- subscription. One row per provider configured, at most one of them active.
+--
+-- Kept apart from `school_payments` for the reason the two have been kept apart
+-- everywhere else — a school's gateway secret must never be able to say a
+-- SUBSCRIPTION was paid, and Nickland's must never appear on a school's screen.
+-- Separate tables make that structural rather than remembered.
+CREATE TABLE IF NOT EXISTS platform_gateways (
+  gateway         TEXT PRIMARY KEY,
+  credentials     JSONB NOT NULL DEFAULT '{}',
+  currency        TEXT NOT NULL DEFAULT 'GHS',
+  callback_url    TEXT NOT NULL DEFAULT '',
+  is_active       BOOLEAN NOT NULL DEFAULT false,
+  verified_at     TIMESTAMPTZ,
+  verified_detail TEXT NOT NULL DEFAULT '',
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- One active gateway at a time, enforced by the database. Two would make
+-- "which provider settled this subscription" a question with two answers.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_gateway_active
+  ON platform_gateways((is_active)) WHERE is_active;
+
 -- ── What goes IN these tables ───────────────────────────────────────────────
 -- Nothing. The three plans, the sixteen features, the plan/feature grid and the
 -- platform's default settings are seeded from `app/billing/defaults.py` at
