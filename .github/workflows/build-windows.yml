@@ -427,8 +427,26 @@ jobs:
           name: nickland-edusoft-desk
           path: resources/desk
 
+      # electron-builder's OWN rebuild, not the deprecated standalone one.
+      #
+      # `electron-rebuild -f` FORCES a source build when it cannot fetch a
+      # prebuilt binary, and a source build needs Visual Studio. The runner
+      # image is windows-2025-vs2026, and the node-gyp these packages pin
+      # (9.4.1, 2023) cannot see a Visual Studio that new — so one flaky
+      # prebuild download turned into "Could not find any Visual Studio
+      # installation to use" and a failed release build. It had been one
+      # failed download away from that for as long as it has been on this
+      # image; it passed at 13:10 and failed at 14:36 on identical inputs.
+      #
+      # `install-app-deps` runs @electron/rebuild with buildFromSource=false:
+      # it uses the prebuilt binary and never invokes node-gyp at all. It is
+      # also what electron-builder prints in its own log — "@electron/rebuild
+      # already used by electron-builder, please consider to remove excess
+      # dependency from devDependencies" — and it is what runs during
+      # packaging anyway, so this step now proves the same thing the package
+      # step does rather than a different, more fragile thing.
       - name: Rebuild native modules for Electron
-        run: npx electron-rebuild -f -w better-sqlite3
+        run: npx electron-builder install-app-deps
 
       # Without this the installer ships a preload Electron cannot load: a
       # sandboxed preload may require "electron" and nothing else, and the
