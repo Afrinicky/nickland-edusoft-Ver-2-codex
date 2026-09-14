@@ -156,8 +156,16 @@ class MemoryStore:
         return [{"id": i["id"], "type": i["type"], "payload": i["payload"]} for i in out[-limit:]]
 
 
-# The platform's own tables, as SQL, next to this file.
-SCHEMA_SQL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql")
+# The platform's own tables, as SQL, next to this file. Two files, applied in
+# order: the sync/registry tables the service has always had, then the
+# subscription and billing tables that turn it into a SaaS platform. Separate
+# files because they are separate concerns and read better apart; applied
+# together because a deployment is one step, and a service that had half of
+# them would fail in exactly the way `_repair_missing_tables` exists to prevent.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCHEMA_SQL = os.path.join(_ROOT, "schema.sql")
+SAAS_SCHEMA_SQL = os.path.join(_ROOT, "schema-saas.sql")
+SCHEMA_FILES = [SCHEMA_SQL, SAAS_SCHEMA_SQL]
 
 # Advisory lock id for applying it. Arbitrary and constant: two workers booting
 # against the same empty database must not both run the file, because
@@ -241,13 +249,16 @@ class PgStore:
         not that it races through a file of IF NOT EXISTS statements alongside
         the first.
         """
-        with open(SCHEMA_SQL, encoding="utf-8") as fh:
-            sql = fh.read()
+        files = []
+        for path in SCHEMA_FILES:
+            with open(path, encoding="utf-8") as fh:
+                files.append(fh.read())
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_advisory_lock(%s)", (_SCHEMA_LOCK,))
                 try:
-                    cur.execute(sql)
+                    for sql in files:
+                        cur.execute(sql)
                 finally:
                     cur.execute("SELECT pg_advisory_unlock(%s)", (_SCHEMA_LOCK,))
         return True
@@ -255,8 +266,13 @@ class PgStore:
     def platform_tables_ready(self):
         """Whether the platform's own tables are there — asked at boot so the
         log says it then, rather than a parent finding out at the gate."""
-        row = self._run("SELECT to_regclass('public.schools')", (), "one")
-        return bool(row and row[0])
+        row = self._run(
+            "SELECT to_regclass('public.schools'), to_regclass('public.subscription_plans')",
+            (), "one")
+        # BOTH halves, because a service upgraded from before billing existed
+        # has the first and not the second, and reporting "ready" then is how
+        # the missing half is found out by a school at a checkout instead.
+        return bool(row and row[0] and row[1])
 
     def create_school(self, name=None, school_id=None):
         sid = school_id or ("sch_" + secrets.token_hex(4))

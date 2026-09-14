@@ -39,6 +39,27 @@ export function AuthProvider({ children }) {
         let m = (await store.get('mode')) || 'host';
         let sid = await store.get('schoolId');
 
+        // Arriving from the public website, already signed in.
+        //
+        // A school registers at www.edusoft…, chooses a plan and is sent here.
+        // It has an account — the one it just made — and asking it to type the
+        // password again at this door would make the platform two products
+        // wearing one name. So a handoff carries the session: the same
+        // `<school_id>.<token>` credential this app already uses, in the query
+        // string, adopted once and then removed from the address bar so it is
+        // not left in history or in a screenshot.
+        //
+        // Web only, and it authorises nothing on its own: the token is checked
+        // against that school's own schema on the very next request, exactly
+        // as a token typed in at the sign-in screen would be.
+        const handoff = readHandoff();
+        if (handoff) {
+          h = handoff.baseUrl; m = 'online'; sid = handoff.schoolId;
+          await persistConnection(h, m, sid);
+          await store.set('token', handoff.token);
+          await store.set('role', 'staff');
+        }
+
         // Nothing saved: work out where we are before asking anyone to type an
         // address. In a browser that is the serving origin; on the phone it is
         // the portal baked in at build time. A desktop host means full features
@@ -92,6 +113,25 @@ export function AuthProvider({ children }) {
       } finally { setReady(true); }
     })();
   }, []);
+
+  // The query string the website hands over, or null. Reading it clears it.
+  function readHandoff() {
+    try {
+      if (typeof window === 'undefined' || !window.location || !window.history) return null;
+      const params = new URLSearchParams(window.location.search || '');
+      const token = params.get('token');
+      const schoolId = params.get('school');
+      if (!token || !schoolId || token.indexOf('.') < 0) return null;
+      params.delete('token');
+      params.delete('school');
+      const rest = params.toString();
+      window.history.replaceState({}, '',
+        window.location.pathname + (rest ? '?' + rest : '') + (window.location.hash || ''));
+      return { token, schoolId: String(schoolId), baseUrl: window.location.origin.replace(/\/+$/, '') };
+    } catch (_) {
+      return null;
+    }
+  }
 
   async function persistConnection(url, m, sid) {
     await store.set('host', url);

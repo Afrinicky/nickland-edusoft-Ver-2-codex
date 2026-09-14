@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superadmin — Nickland Edusoft</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0E1F4F">
+<!-- Addressed under /console/ so the one path resolves whether this is
+     served at admin.edusoft.<domain> or at /console on a single-hostname
+     deployment. See app/site.py. -->
+<link rel="stylesheet" href="/console/console.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230E1F4F'/%3E%3Ctext x='16' y='22' font-family='Segoe UI,Arial' font-size='16' font-weight='700' fill='white' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+
+<!-- ══ SIGN IN ══════════════════════════════════════════════════════════ -->
+<div class="signin" id="signinView">
+  <div class="signin-card">
+    <h1>Superadmin console</h1>
+    <p class="muted small">Nickland Edusoft — platform administration.</p>
+
+    <div class="note bad" id="signinError" hidden role="alert"></div>
+    <div class="note" id="bootstrapNote" hidden></div>
+
+    <form id="signinForm" style="margin-top:18px">
+      <div class="field">
+        <label for="signinEmail">Email address</label>
+        <input type="email" id="signinEmail" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="signinPassword">Password</label>
+        <input type="password" id="signinPassword" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary" style="width:100%" id="signinSubmit" type="submit">Sign in</button>
+    </form>
+
+    <p class="small muted" style="margin-top:18px">
+      No operator account yet?
+      <a href="#" id="showBootstrap">Create the first one</a> with the platform key.
+    </p>
+
+    <form id="bootstrapForm" hidden style="margin-top:18px;border-top:1px solid var(--line);padding-top:18px">
+      <h3>First operator account</h3>
+      <p class="small muted">This works once, while the platform has no operator
+         accounts, and needs the <code>PLATFORM_ADMIN_KEY</code> this service was
+         deployed with.</p>
+      <div class="field">
+        <label for="bsKey">Platform key</label>
+        <input type="password" id="bsKey" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label for="bsName">Your name</label>
+        <input type="text" id="bsName" autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="bsEmail">Email address</label>
+        <input type="email" id="bsEmail" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="bsPassword">Password</label>
+        <input type="password" id="bsPassword" autocomplete="new-password" minlength="10" required>
+        <p class="hint">At least 10 characters. This account reaches every school.</p>
+      </div>
+      <button class="btn btn-primary" style="width:100%" id="bootstrapSubmit" type="submit">
+        Create the account
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- ══ CONSOLE ══════════════════════════════════════════════════════════ -->
+<div class="shell" id="consoleView" hidden>
+  <aside class="sidebar">
+    <a class="brand" href="#dashboard">
+      <span class="mark" aria-hidden="true">NE</span>
+      <span><b>Edusoft</b><small>Superadmin</small></span>
+    </a>
+    <nav aria-label="Console">
+      <div class="group">Overview</div>
+      <a href="#dashboard" data-nav="dashboard">Dashboard</a>
+      <a href="#schools" data-nav="schools">Schools <span class="tag" data-count="schools"></span></a>
+      <a href="#usage" data-nav="usage">Usage</a>
+      <div class="group">Product</div>
+      <a href="#plans" data-nav="plans">Plans</a>
+      <a href="#features" data-nav="features">Features</a>
+      <div class="group">Money</div>
+      <a href="#subscriptions" data-nav="subscriptions">Subscriptions</a>
+      <a href="#discounts" data-nav="discounts">Discounts</a>
+      <a href="#exemptions" data-nav="exemptions">Exemptions</a>
+      <a href="#invoices" data-nav="invoices">Invoices</a>
+      <a href="#payments" data-nav="payments">Payments</a>
+      <a href="#reports" data-nav="reports">Reports</a>
+      <div class="group">Platform</div>
+      <a href="#settings" data-nav="settings">System settings</a>
+      <a href="#operators" data-nav="operators">Operators</a>
+      <a href="#audit" data-nav="audit">Audit trail</a>
+    </nav>
+    <div class="who">
+      <b id="whoName">—</b>
+      <span id="whoRole" class="small"></span>
+      <button class="btn btn-dark btn-sm" id="signOut" type="button">Sign out</button>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <div id="pageError" class="note bad" hidden role="alert"></div>
+    <div id="page"><p class="skeleton" style="height:8em">&nbsp;</p></div>
+  </main>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/console/console.js"></script>
+</body>
+</html>

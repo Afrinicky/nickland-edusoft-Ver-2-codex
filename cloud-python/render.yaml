@@ -55,5 +55,29 @@ services:
       - key: PORTAL_BASE_DOMAIN
         sync: false
 
+      # ── Taking the platform's own money ──
+      # NICKLAND's gateway key, for charging SCHOOLS their subscription. It is
+      # NOT a school's gateway key — a school's own key, for taking fees from
+      # parents, is pushed up by that school's desktop and never appears here.
+      #
+      # Left unset, the platform still works: schools register, start a trial
+      # and use everything, and no card is taken. The boot log says which of
+      # the two a running service is doing, so it is not a silent state.
+      - key: PLATFORM_PAYSTACK_SECRET
+        sync: false
+      - key: PLATFORM_PAYSTACK_PUBLIC
+        sync: false                  # the publishable key; the browser needs it
+
+      # ── The billing run ──
+      # A scheduler POSTs to /api/v1/admin/cron/billing-run with this in
+      # `x-cron-key`. Its own secret, so a cron service never has to hold the
+      # console's key. Under 16 characters the route is not there at all.
+      #
+      # Render: New → Cron Job, daily, running
+      #   curl -fsS -X POST -H "x-cron-key: $BILLING_CRON_SECRET" \
+      #        https://<this service>/api/v1/admin/cron/billing-run
+      - key: BILLING_CRON_SECRET
+        generateValue: true
+
       - key: WEB_CONCURRENCY
         value: "2"
