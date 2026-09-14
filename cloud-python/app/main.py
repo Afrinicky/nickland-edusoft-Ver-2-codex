@@ -1249,7 +1249,7 @@ def create_app(store=None) -> FastAPI:
         # stored one runs out on its own schedule and it drops to read-only —
         # the same door every other lapse goes through, rather than a second
         # mechanism that would need its own explaining.
-        if device and not device_lib.is_active(repo, school["school_id"], device):
+        if device and device_lib.revoked(repo, school["school_id"], device):
             return JSONResponse(status_code=403, content={
                 "ok": False, "reason": "deactivated",
                 "error": "This computer has been deactivated from the school's "

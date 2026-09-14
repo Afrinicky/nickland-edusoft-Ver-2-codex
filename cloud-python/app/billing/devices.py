@@ -206,18 +206,39 @@ def touch(repo, school_id, device_id, remote_addr=""):
                         "last_ip": str(remote_addr or "")[:64]})
 
 
-def is_active(repo, school_id, device_id):
-    """Whether this machine still holds a seat.
+def revoked(repo, school_id, device_id):
+    """Has this machine had its seat TAKEN AWAY?
 
-    A device deactivated from the school's own billing page stops getting
-    licences on its next refresh — which is what makes the Deactivate button
-    mean something rather than being a list that can be tidied.
+    The question is deliberately that, and not "does it hold a seat" — the two
+    differ on a machine that has never been activated at all, and getting them
+    the wrong way round locked out every school that configures its desktop
+    with the school key rather than by signing in:
+
+        a row, status `deactivated`  → revoked. Somebody pressed the button;
+                                       stop issuing it licences.
+        a row, status `active`       → not revoked.
+        NO row                       → not revoked. This machine has never
+                                       activated. That is ordinary: a school
+                                       that pastes its school key into
+                                       Settings → Cloud sync never creates one,
+                                       and refusing it would deny a licence to
+                                       a school that is paying, with a message
+                                       telling it to undo something nobody did.
+        no device id at all          → not revoked. Nothing to check.
+
+    The seat LIMIT is enforced where seats are handed out (`claim`), which is
+    the only place it can be enforced honestly. This is about revocation.
     """
     device_id = str(device_id or "").strip()[:64]
     if not device_id:
-        return True          # a caller that does not identify itself is not seat-checked
+        return False
     row = repo.find_one("school_devices", {"school_id": school_id, "device_id": device_id})
-    return bool(row and row.get("status") == ACTIVE)
+    return bool(row and row.get("status") != ACTIVE)
+
+
+def is_active(repo, school_id, device_id):
+    """Kept for callers that read better this way round. See `revoked`."""
+    return not revoked(repo, school_id, device_id)
 
 
 def deactivate(store, repo, school_id, device_row_id, actor="school"):
