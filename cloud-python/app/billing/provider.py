@@ -125,9 +125,32 @@ def public_config(repo=None):
         "provider_name": adapter.name,
         "public_key": settings.cred("public_key") or None,
         "channels": list(adapter.channels),
+        # What a school may actually pay its subscription with, by name. The
+        # website prints these rather than a hard-coded list, so a deployment
+        # that moves provider does not leave a page promising Verve to schools
+        # whose gateway has never heard of it.
+        "card_brands": list(adapter.card_brands),
+        "renewal_channels": [c for c in adapter.reusable_channels if c in adapter.channels],
         "supports_renewal": adapter.supports_stored_charge,
         "from_environment": bool(_from_environment()[0]),
     }
+
+
+def _active_id(repo):
+    """Which provider this actually was.
+
+    These three places said "paystack" from when Paystack was the only one
+    there could be. A Flutterwave authorisation filed under Paystack's name is
+    a renewal nobody can trace when it fails, and a reconciliation against the
+    wrong dashboard.
+    """
+    adapter = active(repo)[0]
+    return adapter.id if adapter else ""
+
+
+def _active_currency(repo):
+    settings = active(repo)[1]
+    return (settings.currency if settings else "GHS") or "GHS"
 
 
 def new_reference(school_id, kind="sub"):
@@ -139,7 +162,7 @@ def new_reference(school_id, kind="sub"):
 
 # ── Starting a subscription ─────────────────────────────────────────────────
 def start_checkout(store, repo, school_id, email, amount, kind="subscription",
-                   invoice_id=None, callback_url=None, metadata=None):
+                   invoice_id=None, callback_url=None, metadata=None, channels=None):
     """Ask the provider for somewhere to send the school's administrator.
 
     A trial charges nothing, and a zero-amount checkout is not a checkout: the
@@ -147,6 +170,17 @@ def start_checkout(store, repo, school_id, email, amount, kind="subscription",
     the school has a payment method on file for when the trial ends. That is
     what §7 means by "provides valid payment details" while "amount charged =
     GHS 0" — the card is verified, not billed.
+
+    **A setup checkout asks for a card and nothing else, on purpose.** Its whole
+    job is to leave behind something chargeable at renewal, and on every
+    provider here that is a card: Visa, Mastercard (and Verve on Paystack). A
+    mobile-money collection is a one-off — the school would complete the trial
+    thinking it had paid, and find at month end that there was never anything to
+    charge. Offering it at that step is offering a dead end.
+
+    A one-off payment — an invoice a school is settling now — is left
+    unrestricted, because there the payer's own preference is the only thing
+    that matters and mobile money is the commonest of them.
     """
     adapter, settings = active(repo)
     if not adapter:
@@ -158,12 +192,19 @@ def start_checkout(store, repo, school_id, email, amount, kind="subscription",
     # the card is authorised for a minimal amount instead.
     charge = amount if amount > 0 else 1.0
 
+    wanted = list(channels) if channels else (
+        list(adapter.reusable_channels) if kind == "setup" else [])
+    # Never ask a provider for a channel it does not have: an unknown channel is
+    # a refused checkout on Paystack and a silently ignored field elsewhere.
+    wanted = [c for c in wanted if c in adapter.channels]
+
     started = adapter.checkout(
         settings, charge, reference,
         email=email or f"billing+{school_id}@nicklandedusoft.app",
         metadata={"school_id": school_id, "kind": kind, "invoice_id": invoice_id,
                   "description": "Edusoft subscription", **(metadata or {})},
-        callback_url=callback_url or "")
+        callback_url=callback_url or "",
+        channels=wanted)
     if not started.get("ok"):
         return {"ok": False, "status": 502,
                 "error": started.get("error") or "The payment provider could not be reached."}
@@ -179,6 +220,8 @@ def start_checkout(store, repo, school_id, email, amount, kind="subscription",
             "authorization_url": started.get("authorization_url"),
             "access_code": started.get("access_code"),
             "provider": adapter.id,
+            "channels": wanted or list(adapter.channels),
+            "card_brands": list(adapter.card_brands),
             "amount": amount, "verifying_card_only": amount <= 0}
 
 
@@ -271,8 +314,8 @@ def settle(store, repo, school_id, reference, invoice_id=None, amount=None,
         payment = repo.insert("platform_payments", {
             "school_id": school_id, "invoice_id": invoice_id,
             "subscription_id": (subs.current(repo, school_id) or {}).get("id"),
-            "provider": "paystack", "provider_reference": reference,
-            "amount": amount, "currency": "GHS", "status": "succeeded",
+            "provider": _active_id(repo), "provider_reference": reference,
+            "amount": amount, "currency": _active_currency(repo), "status": "succeeded",
             "kind": "subscription", "attempted_at": now_iso(),
             "settled_at": now_iso(), "created_at": now_iso()})
 
@@ -298,7 +341,7 @@ def settle(store, repo, school_id, reference, invoice_id=None, amount=None,
                        detail=f"Payment {reference} received.")
         if customer_id and not subscription.get("provider_customer_id"):
             repo.update("subscriptions", subscription["id"],
-                        {"provider": "paystack", "provider_customer_id": customer_id})
+                        {"provider": _active_id(repo), "provider_customer_id": customer_id})
 
     billing_audit.write(store, "payment_succeeded", school_id=school_id, actor=actor,
                         detail=f"GHS {amount:,.2f} received ({reference}).")
@@ -380,7 +423,11 @@ def remember_method(repo, school_id, method, customer_id=None):
         return existing
     repo.update_where("payment_methods", {"school_id": school_id}, {"is_default": False})
     return repo.insert("payment_methods", {
-        "school_id": school_id, "provider": "paystack",
+        # The provider that actually issued this handle. It said "paystack"
+        # from when Paystack was the only one there could be; a Flutterwave
+        # authorisation filed under Paystack's name is a renewal nobody can
+        # trace when it fails.
+        "school_id": school_id, "provider": _active_id(repo),
         "provider_customer_id": customer_id or "",
         "provider_method_ref": method["reference"],
         "kind": method.get("kind") or "card",

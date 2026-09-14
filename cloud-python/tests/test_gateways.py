@@ -65,8 +65,16 @@ ANSWER = {"ping": True, "checkout": True, "paid": True, "amount": 200.0}
 CALLS = []
 
 
+def last_call(fragment):
+    """The most recent request whose URL contains `fragment`, or None."""
+    for call in reversed(CALLS):
+        if fragment in call["url"]:
+            return call
+    return None
+
+
 def fake_http(url, method="GET", headers=None, body=None, timeout=25):
-    CALLS.append((method, url))
+    CALLS.append({"method": method, "url": url, "body": body or {}})
     if not ANSWER["ping"] and ("/transaction?" in url or "/transactions?" in url
                                or "/status?" in url or "query.php" in url
                                or "balance-details" in url):
@@ -94,7 +102,7 @@ def fake_http(url, method="GET", headers=None, body=None, timeout=25):
 
 
 def fake_form(url, fields, method="POST", headers=None, timeout=25):
-    CALLS.append((method, url))
+    CALLS.append({"method": method, "url": url, "body": dict(fields or {})})
     if not ANSWER["ping"]:
         return {"status": 200, "json": {"result": 4, "result-text": "Invalid api-key"}}
     if "submit.php" in url:
@@ -408,6 +416,138 @@ def main():
     ANSWER["ping"] = True
     ck("sending with no key is refused before the network",
        not arkesel.send(gateways.config_for("arkesel", {}), "0244000111", "hi").get("ok"))
+
+    # ══ Visa and Mastercard, and what a renewal can be charged to ═══════
+    print("\nCards")
+
+    for spec in gateways.catalogue():
+        if "card" in spec["channels"]:
+            # A provider that takes cards and will not say which networks
+            # leaves the website with nothing true to print, so it prints
+            # nothing — which reads as "cards not accepted".
+            ck(f"{spec['id']} names the card networks it takes",
+               "visa" in spec["card_brands"] and "mastercard" in spec["card_brands"],
+               spec["card_brands"])
+        ck(f"{spec['id']} says a card is what can be charged again",
+           spec["reusable_channels"] == ["card"], spec["reusable_channels"])
+
+    # A mobile-money collection is a one-off. A trial set up on one leaves
+    # nothing to charge when the trial ends, and the school finds out at month
+    # end — so the setup step asks for a card and is told to.
+    store = MemoryStore()
+    repo = repo_lib.repo_for(store)
+    os.environ["PLATFORM_PAYSTACK_SECRET"] = "sk_test_platform"
+    try:
+        sid = "card-" + uuid.uuid4().hex[:8]
+        store.create_school(name="Card School", school_id=sid)
+
+        CALLS.clear()
+        started = billing_provider.start_checkout(store, repo, sid, "head@x.test", 0,
+                                                  kind="setup")
+        ck("a trial's card check starts", started.get("ok"), started)
+        asked = last_call("/transaction/initialize")
+        ck("...and asks Paystack for a card, not for every channel",
+           asked and asked["body"].get("channels") == ["card"], asked)
+        ck("...and says so to whoever called it",
+           started.get("channels") == ["card"], started.get("channels"))
+        ck("...naming the networks the school may use",
+           "visa" in (started.get("card_brands") or []), started.get("card_brands"))
+
+        # Settling one invoice is a different thing: there is nothing to charge
+        # later, so the payer's own preference is the only thing that matters.
+        CALLS.clear()
+        paid = billing_provider.start_checkout(store, repo, sid, "head@x.test", 250,
+                                               kind="subscription")
+        asked = last_call("/transaction/initialize")
+        ck("a one-off invoice is not narrowed to a card",
+           paid.get("ok") and asked and "channels" not in asked["body"], asked)
+        ck("...and mobile money is among what the school is offered",
+           "mobile_money" in (paid.get("channels") or []), paid.get("channels"))
+
+        # The caller may still ask for something specific.
+        CALLS.clear()
+        billing_provider.start_checkout(store, repo, sid, "head@x.test", 250,
+                                        kind="subscription", channels=["mobile_money"])
+        asked = last_call("/transaction/initialize")
+        ck("an explicit channel is passed through",
+           asked and asked["body"].get("channels") == ["mobile_money"], asked)
+
+        # A channel the provider does not have is dropped rather than sent:
+        # Paystack refuses an unknown channel outright, which would turn a
+        # caller's typo into a school that cannot pay at all.
+        CALLS.clear()
+        billing_provider.start_checkout(store, repo, sid, "head@x.test", 250,
+                                        kind="subscription", channels=["carrier_pigeon"])
+        asked = last_call("/transaction/initialize")
+        ck("a channel the provider does not have is dropped, not sent",
+           asked and "channels" not in asked["body"], asked)
+
+        # What the browser is told, so the website can print it.
+        public = billing_provider.public_config(repo)
+        ck("the website is told which cards are accepted",
+           "visa" in public.get("card_brands", []) and
+           "mastercard" in public.get("card_brands", []), public)
+        ck("...and which channel a renewal can use",
+           public.get("renewal_channels") == ["card"], public)
+
+        # Filed under the provider that actually issued it. This said
+        # "paystack" unconditionally, from when Paystack was the only one.
+        settled = billing_provider.settle(store, repo, sid, "edu-sub-x-000001",
+                                          amount=250.0,
+                                          method={"reference": "AUTH_x", "brand": "visa",
+                                                  "last4": "4242", "kind": "card",
+                                                  "reusable": True},
+                                          customer_id="CUS_1")
+        ck("a settled payment records which provider took it",
+           settled.get("payment", {}).get("provider") == "paystack", settled.get("payment"))
+        stored = billing_provider.methods_for(repo, sid)
+        ck("a stored card keeps its network and last four",
+           stored and stored[0]["brand"] == "visa" and stored[0]["last4"] == "4242", stored)
+        ck("...and the provider that issued it",
+           stored and stored[0]["provider"] == "paystack", stored)
+
+        # Mobile money is never filed as a payment method: the handle cannot be
+        # charged, and a billing page showing one that silently fails at
+        # renewal is worse than a billing page showing none.
+        none_stored = billing_provider.remember_method(
+            repo, sid, {"reference": "MOMO_1", "kind": "mobile_money", "reusable": False})
+        ck("an instrument that cannot be charged again is not filed as one",
+           none_stored is None)
+    finally:
+        os.environ.pop("PLATFORM_PAYSTACK_SECRET", None)
+
+    # Flutterwave spells its channels differently, and an unrecognised spelling
+    # is ignored rather than refused — which would silently give back the
+    # unrestricted checkout this exists to avoid.
+    flw = gateways.get("flutterwave")
+    CALLS.clear()
+    flw.checkout(gateways.config_for("flutterwave", {"secret_key": "FLWSECK-x"}),
+                 100, "ref-1", channels=["card"])
+    asked = last_call("/payments")
+    ck("Flutterwave is asked in its own spelling",
+       asked and asked["body"].get("payment_options") == "card", asked)
+    CALLS.clear()
+    flw.checkout(gateways.config_for("flutterwave", {"secret_key": "FLWSECK-x"}),
+                 100, "ref-2", channels=["mobile_money"])
+    asked = last_call("/payments")
+    ck("...including for mobile money, which it calls something else entirely",
+       asked and asked["body"].get("payment_options") == "mobilemoneyghana", asked)
+    CALLS.clear()
+    flw.checkout(gateways.config_for("flutterwave", {"secret_key": "FLWSECK-x"}), 100, "ref-3")
+    asked = last_call("/payments")
+    ck("...and asking for nothing restricts nothing",
+       asked and "payment_options" not in asked["body"], asked)
+
+    # The two that cannot be told take the argument anyway, so a caller never
+    # has to know which kind of provider it holds.
+    for gid in ("hubtel", "expresspay"):
+        adapter = gateways.get(gid)
+        creds = {"client_id": "a", "client_secret": "b", "merchant_account": "2019204",
+                 "merchant_id": "M", "api_key": "K"}
+        result = adapter.checkout(gateways.config_for(gid, creds), 50, f"ref-{gid}",
+                                  channels=["card"])
+        ck(f"{gid} accepts a channel it cannot act on rather than failing",
+           result.get("ok"), result)
 
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0

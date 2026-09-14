@@ -36,6 +36,8 @@ function cfg(db) {
 
 const flutterwave = {
   id: 'flutterwave',
+  channels: ['card', 'mobile_money', 'bank'],
+  cardBrands: ['visa', 'mastercard'],
   signedCallbacks: true,
   isConfigured(db) { return !!getSetting(db, 'flutterwave_secret_key', ''); },
 

@@ -35,6 +35,7 @@ class ExpressPay(Gateway):
     country = "Ghana"
     docs_url = "https://expresspaygh.com/developers"
     channels = ("card", "mobile_money")
+    card_brands = ("visa", "mastercard")
     currencies = ("GHS",)
     supports_stored_charge = False
     signed_callbacks = False
@@ -53,7 +54,10 @@ class ExpressPay(Gateway):
     def _credentials(self, cfg):
         return {"merchant-id": cfg.cred("merchant_id"), "api-key": cfg.cred("api_key")}
 
-    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url=""):
+    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url="",
+                 channels=()):
+        # No channel restriction to pass — see the note in hubtel.py, which is
+        # in the same position for the same reason.
         target = callback_url or cfg.callback_url or ""
         base = cfg.base(LIVE_BASE)
         response = http_form(f"{base}/submit.php", {

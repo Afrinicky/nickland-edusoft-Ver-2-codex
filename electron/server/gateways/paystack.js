@@ -24,6 +24,10 @@ function cfg(db) {
 
 const paystack = {
   id: 'paystack',
+  // What a parent may actually pay with, so the app can say so rather
+  // than showing a bare 'Pay online' that half of them do not trust.
+  channels: ['card', 'mobile_money', 'bank'],
+  cardBrands: ['visa', 'mastercard', 'verve'],
   isConfigured(db) { return !!getSetting(db, 'paystack_secret_key', ''); },
 
   async initialize(db, { amount, email, reference, metadata }) {

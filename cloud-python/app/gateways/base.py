@@ -99,6 +99,11 @@ class Gateway:
     docs_url = ""
     # What the payer can actually pay with, for the school's own screen.
     channels = ()
+    # The card networks a payer may use where `card` is among the channels.
+    # Named rather than implied because "card" means different networks in
+    # different markets, and a school asking "can we pay with our Visa?"
+    # deserves the answer on the page rather than a support email.
+    card_brands = ()
     currencies = ("GHS",)
     fields = ()
     # Can the provider charge a payment method the payer authorised earlier?
@@ -113,8 +118,24 @@ class Gateway:
     # so nobody points a school at one without testing it first.
     verified = False
 
+    # Which of this provider's channels leave behind something chargeable
+    # later. On every provider here that is the card and only the card: a
+    # mobile-money collection is a one-off, and no amount of storing its
+    # reference makes it billable next month. A subscription that has to renew
+    # itself therefore has to be set up on a card, which is why
+    # `billing/provider.py` asks for these by name (§7).
+    reusable_channels = ("card",)
+
     # ── the five ────────────────────────────────────────────────────────────
-    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url=""):
+    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url="",
+                 channels=()):
+        """`channels` narrows what the payer is offered, where the provider
+        allows it — empty means "whatever this merchant account has enabled".
+
+        A provider that cannot be told is not a problem to work around here: it
+        is told at the point where it matters instead (see `reusable_channels`
+        and the renewal check in `billing/provider.py`).
+        """
         raise NotImplementedError
 
     def verify(self, cfg, reference, token=""):
@@ -142,6 +163,8 @@ class Gateway:
             "id": self.id, "name": self.name, "tagline": self.tagline,
             "country": self.country, "docs_url": self.docs_url,
             "channels": list(self.channels), "currencies": list(self.currencies),
+            "card_brands": list(self.card_brands),
+            "reusable_channels": list(self.reusable_channels),
             "fields": [f.spec() for f in self.fields],
             "supports_stored_charge": self.supports_stored_charge,
             "signed_callbacks": self.signed_callbacks,

@@ -34,6 +34,7 @@ class Hubtel(Gateway):
     country = "Ghana"
     docs_url = "https://developers.hubtel.com/"
     channels = ("mobile_money", "card")
+    card_brands = ("visa", "mastercard")
     currencies = ("GHS",)
     supports_stored_charge = False
     signed_callbacks = False
@@ -60,7 +61,14 @@ class Hubtel(Gateway):
         token = base64.b64encode(pair.encode()).decode()
         return {"Authorization": f"Basic {token}"}
 
-    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url=""):
+    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url="",
+                 channels=()):
+        # Hubtel's checkout has no channel restriction to pass; the payer picks
+        # on Hubtel's own page. `channels` is accepted and ignored rather than
+        # rejected, because the caller cannot be expected to know which
+        # providers take the hint — and the thing that actually depends on it,
+        # a subscription needing a chargeable card, is refused earlier by
+        # `supports_stored_charge` being False.
         target = callback_url or cfg.callback_url or ""
         body = {
             "totalAmount": round(float(amount or 0), 2),

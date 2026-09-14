@@ -52,6 +52,8 @@ function tokenFromUrl(url) {
 
 const expresspay = {
   id: 'expresspay',
+  channels: ['card', 'mobile_money'],
+  cardBrands: ['visa', 'mastercard'],
   signedCallbacks: false,
   isConfigured(db) {
     const c = cfg(db);

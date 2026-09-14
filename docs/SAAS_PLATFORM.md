@@ -290,7 +290,9 @@ Both sides go through the **same adapter layer** (§10a), so adding a provider
 adds it to both at once.
 
 No card number is ever stored. What Edusoft keeps is the provider's customer
-id, an authorisation reference, the brand and the last four digits.
+id, an authorisation reference, the network (Visa, Mastercard, Verve) and the
+last four digits — enough for a bursar to recognise which card is on file, and
+nothing that would work anywhere else.
 
 The webhook path is:
 
@@ -326,12 +328,17 @@ Each adapter also **declares its own fields** — label, hint, whether it is a
 secret, whether it is required — and the setup screen and the console are drawn
 from those declarations. Adding a fifth provider is one file and no screen work.
 
-| | Signs callbacks | Can charge a saved card | Verified against a live account |
-|---|---|---|---|
-| Paystack | yes — HMAC-SHA512 over the raw body | yes | **yes** |
-| Flutterwave | a shared `verif-hash`, not a signature | yes | no |
-| Hubtel | **no** | no | no |
-| ExpressPay | **no** | no | no |
+| | Cards | Other channels | Signs callbacks | Charges a saved card | Verified live |
+|---|---|---|---|---|---|
+| Paystack | Visa, Mastercard, Verve | mobile money, bank | HMAC-SHA512 over the raw body | yes | **yes** |
+| Flutterwave | Visa, Mastercard | mobile money, bank | a shared `verif-hash` | yes | no |
+| Hubtel | Visa, Mastercard | mobile money | **no** | no | no |
+| ExpressPay | Visa, Mastercard | mobile money | **no** | no | no |
+
+Card networks are **declared, not assumed** (`card_brands` on each adapter).
+The website prints what the live gateway actually accepts, so a deployment that
+moves from Paystack to Flutterwave does not leave a page promising Verve to
+schools whose gateway has never heard of it.
 
 Two honest notes, because they change how much you should trust each one:
 
@@ -354,6 +361,22 @@ is treated as what it actually is: a nudge saying *go and look*. The looking is
 here than for Paystack, because settlement has never believed a webhook about an
 amount; the only difference is that such a callback cannot by itself settle
 anything, and the code says so.
+
+**A subscription has to be set up on a card, and the checkout asks for one.**
+Every provider here can take mobile money, and for a one-off invoice that is
+usually what a school wants. But a mobile-money collection is a *one-off*: it
+leaves no handle that can be charged next month. So a **setup** checkout — the
+card check at the end of a trial (§7) — is narrowed to `reusable_channels`,
+which on all four providers is the card and only the card. A school that paid
+its trial check by mobile money would think it had a subscription and discover
+at month end that there had never been anything to charge.
+
+A **one-off** checkout is deliberately left unrestricted: there is nothing to
+charge later, so the payer's own preference is the only thing that matters.
+
+`remember_method()` is the backstop — an authorisation the provider marks
+non-reusable is not filed as a payment method at all, because a billing page
+showing one that silently fails at renewal is worse than one showing none.
 
 **The Test rule.** A gateway cannot be switched on until `ping()` has passed,
 and changing any credential clears the pass. A wrong key is therefore found by

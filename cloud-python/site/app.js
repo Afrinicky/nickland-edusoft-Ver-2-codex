@@ -158,6 +158,10 @@
       if (!config || !config.ok) return;
       state.config = config;
       state.currency = config.currency || 'GHS';
+      // Painted as soon as the config lands, not only when somebody reaches
+      // the last step of registration: the question "what can we pay with"
+      // is asked on the pricing page, by somebody who has not registered.
+      paintAccepted();
       $$('[data-currency]').forEach(function (n) { n.textContent = state.currency; });
       $$('[data-company]').forEach(function (n) { n.textContent = config.company_name || 'Nickland Sales'; });
       if (config.support_email) {
@@ -473,8 +477,8 @@
       var payments = state.config && state.config.payments;
       if (payments && payments.available) {
         note.textContent = plan.trial_days
-          ? 'After your school is created you will be asked for a payment method. ' +
-            'Nothing is charged during the trial — your card is only checked, so ' +
+          ? 'After your school is created you will be asked for a card. ' +
+            'Nothing is charged during the trial — the card is only checked, so ' +
             'that your subscription can continue when the trial ends.'
           : 'After your school is created you will be taken to the payment page.';
       } else {
@@ -482,6 +486,48 @@
           'We will be in touch about payment before it ends.';
       }
     }
+    paintAccepted();
+  }
+
+  // What this deployment's gateway actually takes, in the school's words.
+  // Printed from the provider rather than written into the page: a deployment
+  // that moves from Paystack to Flutterwave must not leave a page promising
+  // Verve to schools whose gateway has never heard of it.
+  var BRANDS = { visa: 'Visa', mastercard: 'Mastercard', verve: 'Verve',
+                 amex: 'American Express' };
+
+  function acceptedCards() {
+    var payments = state.config && state.config.payments;
+    if (!payments || !payments.available) return '';
+    var brands = (payments.card_brands || []).map(function (b) {
+      return BRANDS[b] || (b.charAt(0).toUpperCase() + b.slice(1));
+    });
+    if (!brands.length) return '';
+    return brands.length === 1 ? brands[0]
+      : brands.slice(0, -1).join(', ') + ' and ' + brands[brands.length - 1];
+  }
+
+  function paintAccepted() {
+    var cards = acceptedCards();
+    var payments = state.config && state.config.payments;
+    var momo = payments && (payments.channels || []).indexOf('mobile_money') >= 0;
+
+    var inline = $('[data-accepts-note]');
+    if (inline) {
+      inline.textContent = cards
+        ? '(' + cards + (momo ? ', and mobile money' : '') + ')' : '';
+    }
+
+    var host = $('[data-accepted-cards]');
+    if (!host) return;
+    if (!cards) { host.hidden = true; return; }
+    host.hidden = false;
+    // Said plainly, because the commonest question at this step is "will my
+    // card work" and the second commonest is "why can I not use MoMo here".
+    host.textContent = 'We accept ' + cards + '.'
+      + (momo ? ' Mobile money is accepted for one-off invoices; the card step above '
+              + 'asks for a card because that is what a renewing subscription can '
+              + 'be charged to.' : '');
   }
 
   function submitRegistration(event) {

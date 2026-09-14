@@ -1262,7 +1262,15 @@
                       : '.') +
                     (data.active.supports_renewal ? ''
                       : ' It cannot charge a saved card, so renewals have to be paid ' +
-                        'from the invoice each time.') })])
+                        'from the invoice each time.') }),
+              el('p', { class: 'small muted',
+                text: 'Schools pay with ' +
+                      ((data.active.card_brands || []).map(function (b) {
+                        return CARD_BRANDS[b] || b; }).join(', ') || 'a card') +
+                      ((data.active.channels || []).indexOf('mobile_money') >= 0
+                        ? ', or mobile money for a one-off invoice' : '') +
+                      '. The card step at registration asks for a card specifically, ' +
+                      'because a mobile-money payment leaves nothing to charge at renewal.' })])
           : el('div', { class: 'note warn' }, [el('p', {
               text: 'No gateway is live. Schools can register and start a trial, and ' +
                     'no card is taken from anybody.' })])
@@ -1270,11 +1278,35 @@
     });
   };
 
+  // Which card networks and other channels a provider takes, in words. The
+  // question an operator is actually asking of this page is "can a school pay
+  // us with its Visa", and the answer belongs beside the provider's name.
+  var CARD_BRANDS = { visa: 'Visa', mastercard: 'Mastercard', verve: 'Verve',
+                      amex: 'American Express' };
+  var CHANNELS = { card: 'cards', mobile_money: 'mobile money', bank: 'bank transfer' };
+
+  function acceptedBy(spec) {
+    var brands = (spec.card_brands || []).map(function (b) {
+      return CARD_BRANDS[b] || b;
+    });
+    var other = (spec.channels || []).filter(function (c) { return c !== 'card'; })
+      .map(function (c) { return CHANNELS[c] || c; });
+    var parts = [];
+    if (brands.length) parts.push(brands.join(', '));
+    if (other.length) parts.push(other.join(' and '));
+    if (!parts.length) return '';
+    return 'Takes ' + parts.join('; ') + '. '
+      + (spec.supports_stored_charge
+          ? 'A subscription set up on a card renews itself.'
+          : 'Renewals cannot be charged automatically on this one.');
+  }
+
   function gatewayPanel(spec, row) {
     var inputs = {};
     var body = el('div', {});
 
     body.appendChild(el('p', { class: 'muted small', text: spec.tagline }));
+    body.appendChild(el('p', { class: 'muted small', text: acceptedBy(spec) }));
     if (!spec.verified) {
       body.appendChild(el('div', { class: 'note warn' }, [el('p', {
         text: 'This adapter was written from ' + spec.name + '’s published documentation ' +

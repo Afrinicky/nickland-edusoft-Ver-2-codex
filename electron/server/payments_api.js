@@ -76,6 +76,11 @@ function registerPaymentRoutes({ add, db, json, API, getSetting: gs, audit, rate
       online: {
         available: onlinePaymentsEnabled(db),
         gateway: g ? g.id : null,
+        // Named so the app can say "Visa, Mastercard or mobile money" rather
+        // than a bare "Pay online", which is the difference between a parent
+        // tapping it and a parent walking to the office.
+        channels: g ? (g.channels || []) : [],
+        card_brands: g ? (g.cardBrands || []) : [],
         min, max,
       },
       // The office's own channels, which work whether or not a gateway does.

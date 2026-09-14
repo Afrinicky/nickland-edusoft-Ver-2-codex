@@ -274,6 +274,20 @@ async function main() {
     ck(`the same four providers on both sides (${desktop.join(', ')})`,
       JSON.stringify(cloud) === JSON.stringify(desktop));
 
+    // Visa and Mastercard on both sides, and the SAME answer on both sides: a
+    // parent told at the desktop that their Mastercard works must not be told
+    // otherwise by the portal serving the same school.
+    for (const id of desktop) {
+      const spec = ADAPTERS[id];
+      ck(`${id} takes Visa and Mastercard`,
+        (spec.cardBrands || []).includes('visa') && (spec.cardBrands || []).includes('mastercard'));
+      const py = fs.readFileSync(path.join(dir, `${id}.py`), 'utf8');
+      const declared = (py.match(/card_brands = \(([^)]*)\)/) || [, ''])[1]
+        .split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean).sort();
+      ck(`…and the cloud's ${id} agrees exactly (${declared.join(', ')})`,
+        JSON.stringify(declared) === JSON.stringify([...(spec.cardBrands || [])].sort()));
+    }
+
     // The settings screen is the only way a school picks one, so a provider
     // the registry knows and the screen does not is a provider nobody can use.
     const screen = fs.readFileSync(

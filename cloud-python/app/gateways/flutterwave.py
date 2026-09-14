@@ -32,6 +32,7 @@ class Flutterwave(Gateway):
     country = "Ghana · Nigeria · Kenya · and more"
     docs_url = "https://developer.flutterwave.com/docs/collecting-payments/standard/"
     channels = ("card", "mobile_money", "bank")
+    card_brands = ("visa", "mastercard")
     currencies = ("GHS", "NGN", "KES", "UGX", "TZS", "ZAR", "USD")
     supports_stored_charge = True
     signed_callbacks = True          # a shared secret rather than an HMAC; see above
@@ -52,7 +53,15 @@ class Flutterwave(Gateway):
     def _headers(self, cfg):
         return {"Authorization": f'Bearer {cfg.cred("secret_key")}'}
 
-    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url=""):
+    # Flutterwave spells them differently from everyone else, and the spelling
+    # is not optional — an unrecognised option is ignored rather than refused,
+    # which would silently give back the unrestricted checkout this is trying
+    # to avoid.
+    PAYMENT_OPTIONS = {"card": "card", "mobile_money": "mobilemoneyghana",
+                       "bank": "banktransfer"}
+
+    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url="",
+                 channels=()):
         body = {
             "tx_ref": reference,
             "amount": str(round(float(amount or 0), 2)),
@@ -62,6 +71,9 @@ class Flutterwave(Gateway):
             "customizations": {"title": "School fees"},
             "meta": metadata or {},
         }
+        wanted = [self.PAYMENT_OPTIONS[c] for c in channels if c in self.PAYMENT_OPTIONS]
+        if wanted:
+            body["payment_options"] = ",".join(wanted)
         response = http_json(f"{cfg.base(DEFAULT_BASE)}/payments", "POST",
                              self._headers(cfg), body)
         payload = response.get("json") or {}

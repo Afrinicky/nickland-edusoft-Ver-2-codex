@@ -43,6 +43,8 @@ function auth(c) {
 
 const hubtel = {
   id: 'hubtel',
+  channels: ['mobile_money', 'card'],
+  cardBrands: ['visa', 'mastercard'],
   signedCallbacks: false,
   isConfigured(db) {
     const c = cfg(db);

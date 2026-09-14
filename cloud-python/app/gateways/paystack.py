@@ -25,6 +25,7 @@ class Paystack(Gateway):
     country = "Ghana · Nigeria"
     docs_url = "https://paystack.com/docs/payments/accept-payments/"
     channels = ("card", "mobile_money", "bank")
+    card_brands = ("visa", "mastercard", "verve")
     currencies = ("GHS", "NGN", "ZAR", "KES", "USD")
     supports_stored_charge = True
     signed_callbacks = True
@@ -46,7 +47,8 @@ class Paystack(Gateway):
     def _headers(self, cfg):
         return {"Authorization": f'Bearer {cfg.cred("secret_key")}'}
 
-    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url=""):
+    def checkout(self, cfg, amount, reference, email="", metadata=None, callback_url="",
+                 channels=()):
         body = {
             "amount": minor(amount),
             "email": email or "payments@nicklandedusoft.app",
@@ -54,6 +56,12 @@ class Paystack(Gateway):
             "currency": cfg.currency,
             "metadata": metadata or {},
         }
+        # Paystack shows every channel the merchant account has enabled unless
+        # it is told otherwise. Told otherwise, it shows only these — which is
+        # how a subscription setup asks for a card and gets a card, rather than
+        # a mobile-money collection that cannot be charged again next month.
+        if channels:
+            body["channels"] = list(channels)
         target = callback_url or cfg.callback_url
         if target:
             body["callback_url"] = target
