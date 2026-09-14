@@ -26,6 +26,7 @@ const { registerUploadRoutes } = require('./uploads_api');
 const { registerPaymentRoutes, onlinePaymentsEnabled } = require('./payments_api');
 const { registerDeskRoutes } = require('./desk_api');
 const portals = require('../ipc/_portals');
+const licence = require('../licence');
 // Required at call-time (not destructured at load) to avoid a load-order
 // circular-dependency warning: auth.js attaches resolveEffectivePermissions
 // to module.exports after its main export.
@@ -304,6 +305,20 @@ function createApiServer(db, opts = {}) {
       public: !!routeOpts.public, rawBody: !!routeOpts.rawBody,
       maxBody: routeOpts.maxBody || DEFAULT_MAX_BODY,
     });
+
+  // Mirrors LICENCE_EXEMPT in ipc/_guard.js, and for the same reasons: signing
+  // in, reading and writing the cloud settings that fix the problem, taking a
+  // backup out, and the health check a school's IT person uses to find out
+  // what is wrong.
+  const LICENCE_EXEMPT_PATHS = new Set([
+    'auth', 'session', 'licence', 'cloud', 'cloud-sync', 'backup', 'health', 'info',
+  ]);
+
+  const licenceExempt = (reqParts) => {
+    // reqParts is ['api','v1',<area>,…]; the area is what decides.
+    const area = reqParts[0] === 'api' ? reqParts[2] : reqParts[0];
+    return LICENCE_EXEMPT_PATHS.has(String(area || ''));
+  };
 
   const match = (parts, reqParts) => {
     if (parts.length !== reqParts.length) return null;
@@ -1689,6 +1704,27 @@ function createApiServer(db, opts = {}) {
       }
     }
     if (!route) return json(res, 404, { ok: false, error: 'Not found' });
+
+    // The licence, on the LAN path too. A browser on the school Wi-Fi reaches
+    // the same handlers the office window does (see ipc/_registry.js), so it
+    // has to meet the same gate — otherwise "no subscription, no usage" would
+    // be true of the window and false of a phone on the same network, which is
+    // not a rule, it is a workaround.
+    //
+    // GET is treated as reading and everything else as changing. Cruder than
+    // the IPC side's per-channel action, and right for the same reason the
+    // verb table is read the safe way round: an unusual write must not slip
+    // through, and a read wrongly refused is visible and fixable.
+    if (!licenceExempt(reqParts) && req.method !== 'GET' && req.method !== 'HEAD') {
+      const verdict = licence.allows(db, 'edit');
+      if (!verdict.ok) {
+        return json(res, 402, {
+          ok: false, licence: true, reason: verdict.state.reason,
+          access: verdict.state.access, renew_url: verdict.state.renew_url || '',
+          error: verdict.state.message,
+        });
+      }
+    }
 
     let ctx = null, tokenId = null;
     if (!route.public) {

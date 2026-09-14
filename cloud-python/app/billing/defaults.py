@@ -148,6 +148,63 @@ SETTINGS = {
     # their own records and settle the bill; `blocked` shuts the door. Never
     # anything that deletes: suspension does not destroy data, ever.
     "suspended_access": "read_only",
+    # ── The offline licence (app/billing/licence.py) ──
+    # How long a desktop may run on one lease before it has to ask again, and
+    # how long it may keep running while asking is failing. The first is the
+    # answer to "how long can a school that stopped paying keep working"; the
+    # second is the answer to "how long can a school with no internet keep
+    # working", and they are different questions with different right answers.
+    "licence_lease_days": "14",
+    "licence_lease_grace_days": "7",
+    "licence_signing_key": "",
+    # What a desktop does when both have run out. `read_only` leaves every
+    # record readable, printable and exportable and refuses every write, which
+    # is what §11's "suspension never deletes data" means on a machine we do
+    # not control. `blocked` shuts the door.
+    "licence_expired_access": "read_only",
+
+    # ── Renewal reminders (app/billing/reminders.py) ──
+    # Days before the subscription ends on which a school is reminded. Claude's
+    # own subscription reminders are the model: told early, told again nearer,
+    # told on the day, and told once more when it has lapsed — never nagged
+    # daily, and every message carries the button that fixes it.
+    "reminder_days_before": "14,7,3,1",
+    "reminders_enabled": "1",
+    "reminder_channels": "inapp,email,sms",
+    # Where the Renew button in a reminder points. Blank means "work it out
+    # from the school's own subdomain", which is right for a normal deployment.
+    "portal_url": "",
+    # The PLATFORM's own SMS key, for telling a school its subscription is
+    # ending. Deliberately not the school's: a school being told it has lapsed
+    # must not pay for the message, and a suspended school may have no credit
+    # left to send it with.
+    # ── Downloads (§: the installers the website hands out) ──
+    # The SAME file for everybody. There are no per-customer builds: a build
+    # that has to be kept secret is a build that leaks once and is then
+    # worthless forever, which is why Adobe, Wondershare and everyone else
+    # licenses at RUN time by sign-in instead. The download is free and inert;
+    # the account is what is worth something.
+    "download_desktop_windows": "",
+    "download_desktop_mac": "",
+    "download_android": "",
+    "download_version": "",
+    "download_notes": "",
+    # How many machines a school may activate when its plan does not say.
+    "default_device_seats": "5",
+
+    "platform_sms_provider": "arkesel",
+    "platform_sms_key": "",
+    "platform_sms_sender": "",
+
+    # ── Sending email (app/mail.py) ──
+    "smtp_host": "",
+    "smtp_port": "587",
+    "smtp_user": "",
+    "smtp_password": "",
+    "smtp_from": "",
+    "smtp_from_name": "",
+    "smtp_starttls": "1",
+
     "support_email": "support@nicklandedusoft.com",
     "support_phone": "",
     "company_name": "Nickland Sales",

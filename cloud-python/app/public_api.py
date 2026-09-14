@@ -21,6 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from . import identity, platform_api, ratelimit
+from .billing import devices as device_lib
 from .billing import engine, entitlements, plans as plan_lib
 from .billing import provider as billing_provider
 from .billing import settings as platform_settings
@@ -141,6 +142,62 @@ async def public_login(request: Request):
             "ok": False, "choose": True, "error": result["error"],
             "schools": result["schools"]})
     return _send(result)
+
+
+@router.get("/downloads")
+def public_downloads(request: Request):
+    """The installers — but only for somebody who has an account.
+
+    This is the arrangement the user asked for and the one Adobe settled on:
+    **downloading is opting in.** You register, you choose a plan, you give
+    payment details (a trial charges GHS 0 and still takes them), and only then
+    does the page hand you a file. A visitor who has not done that is told what
+    to do rather than given a link.
+
+    It is not the file that is protected — it is the same build for everybody
+    and a copied link works. What the sign-in buys is that the person holding
+    the installer has an account it can be activated against, and nothing can
+    be activated without one (see /api/v1/activate). That is the whole of the
+    protection, and it is the whole of what has ever worked: the download is
+    free and inert, and the account is what is worth something.
+    """
+    store = _store(request)
+    repo = repo_for(store)
+    school_id = _school_from_token(request, {})
+    catalogue = platform_settings.downloads(repo)
+
+    if not school_id:
+        return JSONResponse(status_code=401, content={
+            "ok": False, "signed_in": False,
+            "error": "Create your school first — it takes a minute, and the "
+                     "trial does not charge you. Then this page gives you the "
+                     "installer and the app signs in with the same details.",
+            "version": catalogue["version"],
+            "platforms": [b["label"] for b in catalogue["builds"]]})
+
+    subscription = subs.current(repo, school_id)
+    if not subscription:
+        return JSONResponse(status_code=402, content={
+            "ok": False, "signed_in": True, "needs_subscription": True,
+            "error": "Choose a plan before downloading. The free trial does not "
+                     "charge your card."})
+
+    entitlement = entitlements.summary(entitlements.for_school(store, school_id))
+    return {
+        "ok": True, "signed_in": True,
+        **catalogue,
+        "school_id": school_id,
+        "status": entitlement.get("status"),
+        "status_label": entitlement.get("status_label"),
+        "plan_name": entitlement.get("plan_name"),
+        "seats": device_lib.summary(repo, school_id),
+        # Said on the page, because it is the step people get stuck on: the
+        # installer asks for these and nothing else.
+        "activation": {
+            "how": "Install it, then sign in with the same email and password "
+                   "you used here. That activates the copy.",
+        },
+    }
 
 
 @router.post("/checkout")

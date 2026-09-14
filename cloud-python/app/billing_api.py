@@ -30,6 +30,8 @@ from . import identity, portals
 from .billing import adjustments, engine, entitlements, invoices as invoice_lib
 from .billing import plans as plan_lib
 from .billing import provider as billing_provider
+from .billing import devices as device_lib
+from .billing import reminders
 from .billing import settings as platform_settings
 from .billing import subscriptions as subs
 from .billing import usage as usage_lib
@@ -159,8 +161,126 @@ def billing_overview(request: Request, authorization: str = Header(None)):
         "events": subs.events(repo, school_id, limit=40),
         "can_manage": bool(actor.get("is_admin")) or portals.is_super_admin(actor),
         "payments_available": billing_provider.configured(repo),
+        "payment_channels": billing_provider.public_config(repo),
+        "currency": platform_settings.get(repo, "currency", "GHS"),
+        # What the school has been told and when — the same reminders that went
+        # out by email and SMS, shown here so a bursar who deleted the text can
+        # still find out what it said.
+        "reminders": reminders.unread_for(repo, school_id, limit=10),
+        # The machines this school has activated, and how many it may. The
+        # school manages these itself — an operator should never be the one
+        # freeing a seat because somebody's laptop was stolen.
+        "seats": device_lib.summary(repo, school_id),
+        "renew": renewal_quote(store, repo, school_id, subscription, plan, counted),
+    }
+
+
+def renewal_quote(store, repo, school_id, subscription, plan, counted):
+    """What renewing would cost, and whether it is worth offering.
+
+    A school renews EARLY — before the period ends — as often as it renews
+    late, and both go through the same door. The figure is this school's own
+    quote at its current roll, not the plan's list price, so the number on the
+    Renew button is the number that gets charged.
+    """
+    if not (subscription and plan):
+        return {"available": False}
+    quoted = engine.quote(repo, school_id, plan, counted["billable_students"],
+                          subscription=subscription)
+    outstanding = [i for i in invoice_lib.list_invoices(repo, school_id=school_id)
+                   if i["status"] in invoice_lib.OUTSTANDING]
+    outstanding.sort(key=lambda i: str(i.get("issued_at") or ""))
+    return {
+        "available": subscription.get("status") in subs.LIVE,
+        # An unpaid invoice is what renewal means for a school that has fallen
+        # behind; a school that is up to date is paying for the period ahead.
+        "invoice_id": outstanding[0]["id"] if outstanding else None,
+        "amount": money(outstanding[0]["total_amount"]) if outstanding
+                  else quoted["total_amount"],
+        "settles_arrears": bool(outstanding),
+        "period_end": subscription.get("current_period_end") or "",
+        "status": subscription.get("status"),
         "currency": platform_settings.get(repo, "currency", "GHS"),
     }
+
+
+@router.post("/renew")
+async def billing_renew(request: Request, authorization: str = Header(None)):
+    """Renew this subscription — the button every reminder points at.
+
+    Deliberately NOT restricted to a card. §7's card check exists because a
+    subscription that renews ITSELF needs something chargeable next month; a
+    school renewing by hand needs no such thing, and in Ghana the way most
+    schools pay is mobile money. Refusing it here would mean a reminder whose
+    button a bursar cannot use.
+
+    Nothing about the lifecycle moves here. The payment is started; the period
+    is extended when the money actually arrives, by the same `settle()` every
+    other payment goes through — so a checkout somebody abandons costs the
+    school nothing and grants it nothing.
+    """
+    try:
+        school_id, _db, _actor = _caller(authorization, need_manage=True)
+    except Denied as denied:
+        return denied.response
+
+    store = request.app.state.store
+    repo = repo_for(store)
+    if not billing_provider.configured(repo):
+        return _err(503, "Online payment is not switched on for this deployment.")
+
+    body = await _json(request)
+    subscription = subs.current(repo, school_id)
+    if not subscription:
+        return _err(404, "This school has no subscription to renew.")
+
+    counted = usage_lib.count_students(store, repo, school_id)
+    plan = plan_lib.get_plan(repo, subscription["plan_id"])
+    quote = renewal_quote(store, repo, school_id, subscription, plan, counted)
+    amount = money(body.get("amount") or quote["amount"])
+    if amount <= 0:
+        return _err(400, "There is nothing to pay.")
+
+    identities = identity.directory_entry(store, school_id)
+    email = str(body.get("email") or (identities[0]["email"] if identities else "")).strip()
+    started = billing_provider.start_checkout(
+        store, repo, school_id, email, amount, kind="subscription",
+        invoice_id=quote.get("invoice_id"),
+        callback_url=str(body.get("callback_url") or "") or None,
+        # Whatever the school wants to pay with. See the docstring.
+        channels=body.get("channels") or None)
+    return _send(started)
+
+
+@router.delete("/devices/{device_id}")
+def billing_deactivate_device(device_id: int, request: Request,
+                              authorization: str = Header(None)):
+    """Free a seat. The school's own button, not an operator's.
+
+    Takes effect at that machine's very next request, because its credential is
+    its own and resolving it checks the seat (see main.require_school). The
+    machine then falls back to its stored lease and, when that runs out,
+    read-only — the same door every other lapse goes through.
+    """
+    try:
+        school_id, _db, _actor = _caller(authorization, need_manage=True)
+    except Denied as denied:
+        return denied.response
+    store = request.app.state.store
+    return _send(device_lib.deactivate(store, repo_for(store), school_id, device_id,
+                                       actor="school"))
+
+
+@router.post("/reminders/read")
+async def billing_reminders_read(request: Request, authorization: str = Header(None)):
+    """Mark the in-app reminders seen, so the banner stops shouting."""
+    try:
+        school_id, _db, _actor = _caller(authorization)
+    except Denied as denied:
+        return denied.response
+    body = await _json(request)
+    repo = repo_for(request.app.state.store)
+    return _send(reminders.mark_read(repo, school_id, body.get("id")))
 
 
 @router.get("/plans")
@@ -264,11 +384,15 @@ async def billing_pay(request: Request, authorization: str = Header(None)):
         school_id, _db, actor = _caller(authorization, need_manage=True)
     except Denied as denied:
         return denied.response
-    if not billing_provider.configured(repo_for(store)):
-        return _err(503, "Card payments are not switched on for this deployment.")
-    body = await _json(request)
+    # `store` first. This read used to come BEFORE the assignment below, which
+    # makes `store` a local that does not exist yet — so every call to this
+    # route raised UnboundLocalError and no school could ever pay from the
+    # portal. Nothing caught it because the route had no test that got this far.
     store = request.app.state.store
     repo = repo_for(store)
+    if not billing_provider.configured(repo):
+        return _err(503, "Card payments are not switched on for this deployment.")
+    body = await _json(request)
 
     invoice = None
     if body.get("invoice_id"):

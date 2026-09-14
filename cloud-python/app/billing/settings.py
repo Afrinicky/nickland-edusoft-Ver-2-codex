@@ -118,6 +118,30 @@ def set_many(repo, patch, actor="platform"):
     return {"ok": True, "settings": written}
 
 
+def put(repo, key, value, actor="platform"):
+    """One setting. The same validation as `set_many`, which is the point —
+    there is no back door here that writes a key the console would refuse."""
+    return set_many(repo, {key: value}, actor=actor)
+
+
+def get_list(repo, key, fallback=()):
+    """A comma-separated setting as a list of non-empty pieces."""
+    raw = get(repo, key, "")
+    parts = [p.strip() for p in str(raw or "").replace(";", ",").split(",")]
+    parts = [p for p in parts if p]
+    return parts or list(fallback)
+
+
+def get_ints(repo, key, fallback=()):
+    out = []
+    for piece in get_list(repo, key):
+        try:
+            out.append(int(piece))
+        except ValueError:
+            continue
+    return out or list(fallback)
+
+
 def public_view(repo):
     """What the public website may know.
 
@@ -134,4 +158,30 @@ def public_view(repo):
         "trial_enabled": str(values.get("trial_enabled", "1")).strip() in ("1", "true", "yes"),
         "tax_label": values.get("tax_label", ""),
         "tax_rate": float(values.get("tax_rate") or 0),
+        "downloads_available": any(values.get(k) for k in (
+            "download_desktop_windows", "download_desktop_mac", "download_android")),
+    }
+
+
+def downloads(repo):
+    """The installers, for the website's download page.
+
+    Addresses only — the files themselves are wherever a deployment keeps large
+    binaries, which is not this service's job and should not be. A blank entry
+    is a platform this release does not ship, and the page simply does not
+    offer it rather than offering a link that 404s.
+    """
+    values = all_settings(repo)
+    builds = [
+        {"id": "windows", "label": "Windows", "note": "Windows 10 or newer",
+         "url": values.get("download_desktop_windows", "")},
+        {"id": "mac", "label": "macOS", "note": "macOS 12 or newer",
+         "url": values.get("download_desktop_mac", "")},
+        {"id": "android", "label": "Android", "note": "Android 8 or newer",
+         "url": values.get("download_android", "")},
+    ]
+    return {
+        "builds": [b for b in builds if b["url"]],
+        "version": values.get("download_version", ""),
+        "notes": values.get("download_notes", ""),
     }

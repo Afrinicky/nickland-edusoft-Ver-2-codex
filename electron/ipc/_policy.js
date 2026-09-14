@@ -240,6 +240,11 @@ const ALWAYS_ALLOWED = new Set([
   'auth:request-password-reset', 'auth:password-reset-status', 'auth:complete-password-reset',
   'auth:pending-password-resets', 'auth:list-password-resets', 'auth:decide-password-reset',
   'session:get', 'session:set', 'session:clear', 'session:info',
+  // Reading this installation's own licence, and asking it to re-check. Open
+  // to anybody signed in for the same reason `session:info` is: it is how the
+  // banner explaining a read-only system gets its words, and a person who
+  // cannot see WHY the system is read-only cannot go and tell the bursar.
+  'licence:status', 'licence:refresh', 'licence:activate',
   'settings:get-all', 'settings:get', 'settings:list-classes', 'settings:list-terms',
   'settings:current-term', 'settings:list-subjects', 'settings:get-class-subjects',
   'dashboard:summary', 'dashboard:metrics',

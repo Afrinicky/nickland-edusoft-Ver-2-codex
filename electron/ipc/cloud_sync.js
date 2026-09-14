@@ -7,6 +7,8 @@ const client = require('../server/sync/client');
 const outbox = require('../server/sync/outbox');
 const { httpJson } = require('../server/gateways/http');
 const { getSetting, setSetting } = require('../utils/idgen');
+const licenceLib = require('../licence');
+const refresh = require('../licence/refresh');
 
 let timer = null;
 
@@ -22,6 +24,14 @@ function conflictCount(db) {
 function startScheduler(db) {
   if (timer) return;
   const tick = async () => {
+    // The licence FIRST, and regardless of whether sync is switched on.
+    //
+    // Sync is a school's choice — a school that does not want its data in the
+    // cloud can turn it off, and that has always been allowed. The licence is
+    // not a choice, and hanging it off the sync switch would have meant the
+    // way to run an unpaid copy forever was a toggle in Settings. So it is
+    // asked for on its own, needing only the cloud address and the school key.
+    try { await refresh.ensure(db); } catch (_) {}
     try {
       if (client.blockedReason(db)) return;
       await client.syncOnce(db);
@@ -29,12 +39,36 @@ function startScheduler(db) {
   };
   timer = setInterval(tick, 5 * 60 * 1000); // every 5 minutes
   if (timer.unref) timer.unref();
+  // And once at boot, a moment after start-up so the window is not held up by
+  // a portal that is slow to answer.
+  const soon = setTimeout(tick, 4000);
+  if (soon.unref) soon.unref();
+}
+
+// The licence, in the shape a screen wants it: what may be done, why, and the
+// address of the page that fixes it.
+function licenceState(db) {
+  const state = licenceLib.state(db);
+  return {
+    access: state.access,
+    reason: state.reason,
+    verified: state.verified,
+    message: state.message || '',
+    renew_url: state.renew_url || '',
+    expires_at: state.expires_at || '',
+    plan_name: (state.licence && state.licence.plan_name) || '',
+    status_label: (state.licence && state.licence.status_label) || '',
+    last_checked_at: getSetting(db, licenceLib.SETTINGS.lastCheck, '') || null,
+    last_error: getSetting(db, licenceLib.SETTINGS.lastError, '') || null,
+  };
 }
 
 module.exports = function registerCloudSyncHandlers(ipcMain, db) {
   const security = require('./_security');
 
-  if (getSetting(db, 'cloud_sync_enabled', 'false') === 'true') startScheduler(db);
+  // Always started. The scheduler's first job is the licence, which is not
+  // conditional on sync being on — see the note in startScheduler.
+  startScheduler(db);
 
   ipcMain.handle('cloud:status', () => {
     const blocked = client.blockedReason(db);
@@ -59,7 +93,28 @@ module.exports = function registerCloudSyncHandlers(ipcMain, db) {
       // told, or "the mark I entered is not there" becomes a support call with
       // no answer.
       conflicts: conflictCount(db),
+      licence: licenceState(db),
     };
+  });
+
+  // What this installation is allowed to do, and why. Its own channel because
+  // the banner that shows it is drawn on every screen and must not have to
+  // fetch the whole sync status to do it.
+  ipcMain.handle('licence:status', () => ({ ok: true, ...licenceState(db) }));
+
+  // "Try again now", for the person standing at the machine who has just
+  // plugged the network back in and does not want to wait for the timer.
+  ipcMain.handle('licence:refresh', async () => {
+    const result = await refresh.ensure(db, { force: true });
+    return { ok: !!result.ok, error: result.error || null, ...licenceState(db) };
+  });
+
+  // Activating this copy: the same email and password the school signed up
+  // with on the website. Open to anybody at the keyboard, because on a fresh
+  // install there IS nobody signed in yet — that is the state this clears.
+  ipcMain.handle('licence:activate', async (_e, payload = {}) => {
+    const result = await refresh.activate(db, payload);
+    return { ...result, ...(result.ok ? licenceState(db) : {}) };
   });
 
   // What the desktop kept, and what it kept it instead of. Read-only: resolving

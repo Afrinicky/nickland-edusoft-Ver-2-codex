@@ -218,7 +218,17 @@ async function syncOnce(db) {
 
   const p = await push(db).catch(() => ({ ok: false }));
   const q = await pull(db).catch(() => ({ ok: false }));
-  return { push: p, pull: q };
+
+  // The licence rides the connection that is already open. Every successful
+  // sync is a chance to renew the lease, which is why a school that syncs
+  // normally never sees a licence message at all — it is refreshed weeks
+  // before it could matter, and the school never knows this exists.
+  let lease = null;
+  try {
+    lease = await require('../../licence/refresh').ensure(db);
+  } catch (_) { /* the stored lease stands; see licence/index.js */ }
+
+  return { push: p, pull: q, licence: lease };
 }
 
 module.exports = { config, configured, blockedReason, insecureBase, push, pull, applyChange, syncOnce };

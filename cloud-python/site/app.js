@@ -17,7 +17,8 @@
 
   var PATHS = {
     '/': 'home', '/features': 'features', '/pricing': 'pricing', '/about': 'about',
-    '/support': 'support', '/register': 'register', '/login': 'login'
+    '/support': 'support', '/register': 'register', '/login': 'login',
+    '/download': 'download'
   };
 
   // The site is served from the same origin as the API on a normal deployment,
@@ -97,6 +98,27 @@
     return PATHS[path] || '404';
   }
 
+  // ── Who is asking, for the one page that needs to know ──────────────────
+  // Only the download page. Everywhere else the site hands the token straight
+  // to the school application and keeps nothing, which is why there has never
+  // been a session here.
+  //
+  // sessionStorage, not localStorage: an office PC is a shared computer, and a
+  // sign-in that outlives the tab is one the next person inherits.
+  var SESSION_KEY = 'edusoft.site.token';
+
+  function remember(result) {
+    if (!result || !result.token) return;
+    try {
+      window.sessionStorage.setItem(SESSION_KEY, result.token);
+    } catch (_) { state.token = result.token; }
+  }
+
+  function held() {
+    try { return window.sessionStorage.getItem(SESSION_KEY) || state.token || ''; }
+    catch (_) { return state.token || ''; }
+  }
+
   function basePrefix() {
     // On a single-hostname deployment the site lives under /welcome, and every
     // internal link has to keep that prefix or it lands on the school app.
@@ -125,6 +147,7 @@
     $('#menuBtn').setAttribute('aria-expanded', 'false');
     if (route === 'pricing') renderPlans();
     if (route === 'register') renderPlanChoices();
+    if (route === 'download') paintDownloads();
     observeReveals();
   }
 
@@ -137,6 +160,7 @@
       support: 'Support — Nickland Edusoft',
       register: 'Register your school — Nickland Edusoft',
       login: 'Sign in — Nickland Edusoft',
+      download: 'Download — Nickland Edusoft',
       '404': 'Not found — Nickland Edusoft'
     };
     return names[route] || names.home;
@@ -507,6 +531,83 @@
       : brands.slice(0, -1).join(', ') + ' and ' + brands[brands.length - 1];
   }
 
+  // ── The download page ───────────────────────────────────────────────────
+  // Downloading is opting in. The file is the same for everybody and a copied
+  // link works — what the sign-in buys is that whoever holds the installer has
+  // an account it can be activated against, and nothing activates without one.
+  // See cloud-python/app/public_api.py and /api/v1/activate.
+  function paintDownloads() {
+    var gate = $('[data-download-gate]');
+    var ready = $('[data-download-ready]');
+    var empty = $('[data-download-empty]');
+    if (!gate || !ready) return;
+
+    function show(which, text) {
+      gate.hidden = which !== 'gate';
+      ready.hidden = which !== 'ready';
+      if (empty) empty.hidden = which !== 'empty';
+      if (which === 'gate' && text) $('[data-download-gate-text]').textContent = text;
+    }
+
+    var token = held();
+    var headers = token ? { Authorization: 'Bearer ' + token } : {};
+    show('gate', 'Sign in, or create your school, and the installer appears here.');
+
+    api('/public/downloads', { headers: headers })
+      .then(function (result) {
+        if (!result || !result.ok) {
+          try { sessionStorage.setItem('edusoft.site.after', 'download'); } catch (_) {}
+          show('gate', (result && result.error)
+            || 'Sign in, or create your school, and the installer appears here.');
+          return;
+        }
+        if (!(result.builds || []).length) { show('empty'); return; }
+
+        show('ready');
+        var status = $('[data-download-status]');
+        if (status) {
+          status.textContent = (result.plan_name ? result.plan_name + ' — ' : '')
+            + (result.status_label || '') + '. '
+            + (result.activation ? result.activation.how : '');
+        }
+
+        var list = $('[data-download-list]');
+        list.innerHTML = '';
+        (result.builds || []).forEach(function (build) {
+          var row = el('div', { class: 'download' });
+          var what = el('div', {});
+          what.appendChild(el('div', { class: 'what', text: build.label }));
+          what.appendChild(el('div', { class: 'note', text: build.note || '' }));
+          row.appendChild(what);
+          var link = el('a', { class: 'btn btn-primary', href: build.url, text: 'Download' });
+          // A build is a file on somebody else's storage; opening it in this
+          // tab would lose the page the person still needs the instructions on.
+          link.setAttribute('rel', 'noopener');
+          row.appendChild(link);
+          list.appendChild(row);
+        });
+
+        var version = $('[data-download-version]');
+        if (version) {
+          version.textContent = [result.version ? 'Version ' + result.version : '',
+                                 result.notes || ''].filter(Boolean).join(' · ');
+        }
+
+        var seats = $('[data-download-seats]');
+        if (seats && result.seats) {
+          seats.textContent = result.seats.unlimited
+            ? 'Your plan does not limit how many computers you install this on.'
+            : 'Your plan covers ' + result.seats.limit + ' computer'
+              + (result.seats.limit === 1 ? '' : 's') + '. '
+              + result.seats.used + ' in use. You can free one at any time from '
+              + 'Billing inside the app.';
+        }
+      })
+      .catch(function () {
+        show('gate', 'We could not check your account just now. Try again in a moment.');
+      });
+  }
+
   function paintAccepted() {
     var cards = acceptedCards();
     var payments = state.config && state.config.payments;
@@ -559,6 +660,7 @@
   }
 
   function renderDone(result) {
+    remember(result);
     var message = $('[data-done-message]');
     if (message) {
       message.textContent = result.trial
@@ -632,6 +734,14 @@
         }
         if (!result.ok) {
           showError($('#loginError'), result.error || 'Those details did not match an account.');
+          return;
+        }
+        remember(result);
+        // Signing in FROM the download page goes back to it rather than into
+        // the school application — the person came here for a file.
+        if (sessionStorage.getItem('edusoft.site.after') === 'download') {
+          sessionStorage.removeItem('edusoft.site.after');
+          go(basePrefix() + '/download');
           return;
         }
         var target = result.app_url || '/app';

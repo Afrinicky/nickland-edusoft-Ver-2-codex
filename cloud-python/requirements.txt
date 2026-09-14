@@ -8,3 +8,10 @@ bcrypt>=4.1
 
 # The online system holds every school's full database, so the service needs
 # the same driver the thin-cloud store uses — listed once, above.
+
+# Signing the offline licences the desktop runs on (app/billing/licence.py).
+# Ed25519: the private key signs here and never leaves this service; the
+# desktop carries only the public key, which can check a lease and not make
+# one. A deployment without this library still boots and still serves every
+# school — it loses offline licensing and says so in the boot report.
+cryptography>=41

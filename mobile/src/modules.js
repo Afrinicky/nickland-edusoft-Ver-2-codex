@@ -268,6 +268,7 @@ export const MODULES = [
       { id: 'grading',     label: 'Grading',             group: 'Academic' },
       { id: 'canteen',     label: 'Canteen',             group: 'Finance & Operations', module: 'canteen' },
       { id: 'payroll',     label: 'Payroll',             group: 'Finance & Operations', module: 'payroll' },
+      { id: 'billing',     label: 'Subscription & renewal', group: 'Finance & Operations', super: true },
       { id: 'integrations', label: 'Payments & SMS setup', group: 'Finance & Operations', super: true },
       { id: 'payments',    label: 'Payment limits',      group: 'Finance & Operations', module: 'fees' },
       { id: 'notify',      label: 'Notifications',       group: 'Communications', module: 'notifications' },

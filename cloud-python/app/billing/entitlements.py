@@ -274,4 +274,17 @@ def summary(entitlement):
         "trial_days_left": entitlement.get("trial_days_left"),
         "notice": entitlement.get("notice"),
         "notice_level": entitlement.get("notice_level"),
+        # The three dates everything downstream counts from — the offline
+        # licence's expiry, the reminder schedule, the banner that says how
+        # long is left. Read off the subscription here so that each of them is
+        # not separately re-deriving "when does this end", and disagreeing.
+        **_dates(entitlement.get("subscription") or {}),
+    }
+
+
+def _dates(subscription):
+    return {
+        "trial_ends_at": subscription.get("trial_ends_at") or "",
+        "current_period_end": subscription.get("current_period_end") or "",
+        "grace_ends_at": subscription.get("grace_ends_at") or "",
     }
