@@ -90,7 +90,7 @@ def save_paper(db, actor, data):
         return {"ok": False, "status": 400, "error": "Give the paper a title."}
     paper_id = (data or {}).get("id")
     if paper_id:
-        sets = ", ".join(f'"{k}" = %s' for k in row)
+        sets = db.assignments(row)
         db.run(f"UPDATE exam_papers SET {sets} WHERE id = %s", tuple(row.values()) + (paper_id,))
     else:
         row.setdefault("status", "draft")
@@ -124,7 +124,7 @@ def save_section(db, actor, data):
         return {"ok": False, "status": 400, "error": "A section needs a paper and a label."}
     section_id = (data or {}).get("id")
     if section_id:
-        sets = ", ".join(f'"{k}" = %s' for k in row)
+        sets = db.assignments(row)
         db.run(f"UPDATE exam_sections SET {sets} WHERE id = %s", tuple(row.values()) + (section_id,))
     else:
         section_id = db.insert("exam_sections", row)
@@ -174,7 +174,7 @@ def save_question(db, actor, data):
         return {"ok": False, "status": 400, "error": "A question needs its text."}
     question_id = (data or {}).get("id")
     if question_id:
-        sets = ", ".join(f'"{k}" = %s' for k in row)
+        sets = db.assignments(row)
         db.run(f"UPDATE exam_questions SET {sets} WHERE id = %s",
                tuple(row.values()) + (question_id,))
     else:

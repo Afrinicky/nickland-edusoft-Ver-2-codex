@@ -14,6 +14,7 @@
 const { httpJson } = require('../server/gateways/http');
 const { getSetting } = require('../utils/idgen');
 const licence = require('./index');
+const sentinel = require('./sentinel');
 
 function endpoint(db) {
   const base = (getSetting(db, 'cloud_base_url', '') || '').replace(/\/+$/, '');
@@ -39,7 +40,15 @@ async function refresh(db, { force = false } = {}) {
   const res = await httpJson(`${where.base}/api/v1/licence`, {
     method: 'POST',
     headers: { 'x-school-key': where.key },
-    body: { device: licence.deviceId(db) },
+    body: {
+      device: licence.deviceId(db),
+      build: licence.buildId(),
+      // Anything the scattered checks noticed since last time. Reported here
+      // rather than acted on locally: the cloud is where a decision cannot be
+      // patched out, and a report that arrives minutes after the tampering
+      // does not point at the line that produced it.
+      integrity: (sentinel.flagged(db) || {}).reason || '',
+    },
   });
 
   if (!(res.status >= 200 && res.status < 300) || !res.json || !res.json.ok) {
@@ -53,6 +62,10 @@ async function refresh(db, { force = false } = {}) {
     licence.recordFailure(db, 'portal_cannot_sign');
     return { ok: false, error: 'portal_cannot_sign', state: licence.state(db) };
   }
+
+  // The cloud has heard about it; stop repeating ourselves. Whatever it
+  // decided is in the lease we are about to store.
+  sentinel.clear(db);
 
   const stored = licence.install(db, res.json.token, res.json.licence);
   if (!stored.ok) {
@@ -108,6 +121,7 @@ async function activate(db, { email, password, schoolId, label } = {}) {
       password: String(password || ''),
       school_id: schoolId || undefined,
       device: licence.deviceId(db),
+      build: licence.buildId(),
       label: label || os.hostname(),
       platform: `${os.platform()} ${os.release()}`,
       app: 'desktop',

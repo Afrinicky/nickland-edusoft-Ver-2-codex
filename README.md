@@ -104,6 +104,14 @@ another computer or edit the licence by hand, and it drops to **read-only** —
 every record readable, every report printable, nothing deleted, ever, and
 everything back the moment the bill is settled.
 
+**Receipts and report cards carry a seal we signed.** A code on the document,
+checkable by anybody at `/verify`. Minting one needs a key that lives on the
+service and on no school's computer — so a cracked copy runs and simply cannot
+produce paperwork that verifies. That, and Electron's ASAR-integrity fuses, are
+the two layers that actually hold; everything else raises the cost. Code running
+on somebody else's computer can always be changed by somebody determined enough,
+and this repository does not pretend otherwise.
+
 **Schools renew themselves.** Reminders go out at 14, 7, 3 and 1 days, on the
 day, and once after — in the app, by email and by SMS, each carrying the same
 Renew button. Renewal takes mobile money as well as cards.

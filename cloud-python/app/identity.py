@@ -333,7 +333,7 @@ def _update_school_row(store, school_id, patch):
     it yet."""
     if getattr(store, "kind", "") != "pg":
         return False
-    sets = ", ".join(f'"{k}" = %s' for k in patch)
+    sets = sdb.SchoolDb.assignments(patch)
     store._q(f"UPDATE schools SET {sets} WHERE school_id = %s",
              (*patch.values(), school_id))
     return True

@@ -21,6 +21,7 @@ const security = require('./_security');
 const scopes = require('./_scope');
 const { POLICY, ALWAYS_ALLOWED, fallbackRule } = require('./_policy');
 const licence = require('../licence');
+const sentinel = require('../licence/sentinel');
 
 // ── The licence gate ────────────────────────────────────────────────────────
 // Checked BEFORE the elevated shortcut below, deliberately: an administrator
@@ -41,6 +42,13 @@ const licence = require('../licence');
 const LICENCE_EXEMPT = /^(auth|session|licence|cloud|cloud-sync|backup|dashboard|app):/;
 
 function licenceRefusal(db, channel) {
+  // A second opinion, on a small random fraction of calls and never at a
+  // predictable moment. It re-derives the verdict from the stored token rather
+  // than asking licence.state(), so patching state() alone does not satisfy
+  // it — and it records rather than refuses, so the consequence arrives at the
+  // next renewal instead of at the keystroke that caused it.
+  try { sentinel.sample(db); } catch (_) {}
+
   if (LICENCE_EXEMPT.test(channel)) return null;
 
   const rule = POLICY[channel] || fallbackRule(channel);

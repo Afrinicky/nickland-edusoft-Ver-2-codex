@@ -288,6 +288,40 @@ CREATE TABLE IF NOT EXISTS billing_webhook_events (
   received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── Document seals ──────────────────────────────────────────────────────────
+-- The strongest part of the licensing design, and the only part a patched
+-- desktop cannot reach: a short signed statement that WE issued a particular
+-- receipt or report card, printed on it and checkable by anybody at /verify.
+--
+-- Minting one needs the private signing key, which is on this service and on
+-- no school's computer. So a cracked copy still runs and simply cannot produce
+-- paperwork that verifies — which is a far better position to argue from than
+-- a licence check somebody has already removed.
+--
+-- Drawn in batches while online and spent offline, exactly as a chequebook is,
+-- so a paying school never notices this exists.
+CREATE TABLE IF NOT EXISTS document_seals (
+  id         BIGSERIAL PRIMARY KEY,
+  school_id  TEXT NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'receipt',
+  serial     TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'issued',
+  reference  TEXT NOT NULL DEFAULT '',
+  device_id  TEXT NOT NULL DEFAULT '',
+  issued_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  spent_at   TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The serial is the document's identity, platform-wide. UNIQUE because two
+-- documents with the same verification code is the one thing that would make
+-- the whole mechanism worthless.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_document_seal_serial
+  ON document_seals (serial);
+CREATE INDEX IF NOT EXISTS idx_document_seal_stock
+  ON document_seals (school_id, kind, status);
+
 -- ── Activated devices (seats) ───────────────────────────────────────────────
 -- Which computers and phones a school has activated, and when each last spoke
 -- to us. The model is Adobe's and Filmora's, because it is the one customers
@@ -308,6 +342,10 @@ CREATE TABLE IF NOT EXISTS school_devices (
   platform       TEXT NOT NULL DEFAULT '',
   app            TEXT NOT NULL DEFAULT 'desktop',
   app_version    TEXT NOT NULL DEFAULT '',
+  -- What the running code hashes to (electron/licence/integrity.js). A
+  -- value that is not one we published means those files changed after we
+  -- built them, which the console shows and the licence endpoint records.
+  build_id       TEXT NOT NULL DEFAULT '',
   status         TEXT NOT NULL DEFAULT 'active',
   activated_by   TEXT NOT NULL DEFAULT '',
   -- This device's OWN credential, hashed. Each activated machine gets its own
@@ -442,6 +480,15 @@ ALTER TABLE schools ADD COLUMN IF NOT EXISTS contact_email TEXT NOT NULL DEFAULT
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS contact_phone TEXT NOT NULL DEFAULT '';
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS region TEXT NOT NULL DEFAULT '';
 ALTER TABLE schools ADD COLUMN IF NOT EXISTS lifecycle_note TEXT NOT NULL DEFAULT '';
+
+-- ── Columns added after a table first shipped ───────────────────────────────
+-- `CREATE TABLE IF NOT EXISTS` above does nothing to a table that already
+-- exists, so every column added to one after its first release has to be
+-- ALTERed in here as well. Forgetting is not a subtle failure: the repository
+-- names the column in its SELECT list and every read of the table raises
+-- UndefinedColumn on exactly the deployments that have been running longest.
+ALTER TABLE school_devices ADD COLUMN IF NOT EXISTS build_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE school_devices ADD COLUMN IF NOT EXISTS token_hash TEXT NOT NULL DEFAULT '';
 
 -- ── A school's own payment gateway ──────────────────────────────────────────
 -- The credentials a SCHOOL uses to take fees from ITS parents. Not Nickland's,

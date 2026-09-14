@@ -100,6 +100,7 @@ def public(device):
         "platform": device.get("platform") or "",
         "app": device.get("app") or "desktop",
         "app_version": device.get("app_version") or "",
+        "build_id": device.get("build_id") or "",
         "status": device.get("status"),
         "last_seen_at": device.get("last_seen_at"),
         "activated_at": device.get("created_at"),
@@ -108,7 +109,7 @@ def public(device):
 
 
 def claim(store, repo, school_id, device_id, *, label="", platform="", app="desktop",
-          app_version="", actor="", remote_addr=""):
+          app_version="", build_id="", actor="", remote_addr=""):
     """Take a seat for this machine, or say why it cannot.
 
     Returns `{"ok": True, "device": …}` or a refusal naming what is using the
@@ -128,6 +129,7 @@ def claim(store, repo, school_id, device_id, *, label="", platform="", app="desk
         "platform": str(platform or "")[:60],
         "app": str(app or "desktop")[:20],
         "app_version": str(app_version or "")[:40],
+        "build_id": str(build_id or "")[:64],
         "status": ACTIVE,
         "last_seen_at": now_iso(),
         "last_ip": str(remote_addr or "")[:64],

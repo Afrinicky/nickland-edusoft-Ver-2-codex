@@ -126,6 +126,20 @@ def boot_report(store):
     lines.append("parents' app: " + ("served from this service" if webapp.is_available()
                                      else "not in this build — / serves the placeholder page"))
 
+    # Offline licensing. Said out loud on every boot, because a platform that
+    # is quietly not signing licences is a platform whose desktops all run
+    # unlicensed and nobody notices until they look at the revenue.
+    from .billing import licence as licence_lib
+    if licence_lib.managed():
+        keys = len(licence_lib.public_keys())
+        lines.append("offline licensing: on"
+                     + (" (a key rotation is in flight — two keys verify)"
+                        if keys > 1 else ""))
+    else:
+        lines.append("offline licensing: OFF — every installed desktop will run "
+                     f"unlicensed. {licence_lib.ENV_ALLOW_WEAK} is set; unset it "
+                     f"and set {licence_lib.ENV_KEY}.")
+
     # The other two interfaces, and where each one actually answers. Said as
     # three separate lines because they are three separate decisions, and the
     # commonest deployment mistake is assuming one of them follows from another.
@@ -159,8 +173,61 @@ def boot_report(store):
 
 
 def create_app(store=None) -> FastAPI:
+    # BEFORE anything else, and deliberately fatal. The signing key is the whole
+    # of the offline protection: anybody holding it can mint a licence granting
+    # any school permanent full access on any machine for ever. A service that
+    # starts without one serves every desktop unlicensed and looks perfectly
+    # healthy doing it, which is the worst kind of failure there is — so it is
+    # refused here, beside DATABASE_URL and PORTAL_SECRET, rather than
+    # discovered in a revenue report six months later.
+    from .billing import licence as licence_lib
+    licence_lib.require_key()
+
     app = FastAPI(title="Nickland Edusoft Cloud", docs_url=None, redoc_url=None)
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    # Wildcard origins are correct here and not the hole they look like: every
+    # authenticated call carries a Bearer token, nothing is authorised by a
+    # cookie, and Starlette refuses `allow_credentials` alongside a wildcard.
+    # A page on another origin can therefore make a request and cannot make an
+    # AUTHENTICATED one without already holding the token. The separately
+    # hosted deployment in DEPLOY.md §3 needs this.
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
+                       allow_headers=["*"])
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        """The headers a browser needs in order to protect the person using it.
+
+        They were set on two hand-written responses and nowhere else, which
+        meant the console — the one interface that can suspend a school, grant
+        an exemption or read the audit trail — could be framed by any page on
+        the internet. A superadmin clicking what they think is a cookie banner
+        while their session is live is the whole of a clickjacking attack.
+
+          X-Frame-Options / frame-ancestors  no framing, by anybody
+          X-Content-Type-Options             no MIME sniffing
+          Referrer-Policy                    a school's own address is not
+                                             leaked to whatever it links to
+          HSTS                               only over TLS, and never on a bare
+                                             hostname, which would pin a
+                                             developer's localhost to https
+        """
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("X-Frame-Options", "DENY")
+        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        headers.setdefault("Permissions-Policy",
+                           "geolocation=(), microphone=(), camera=(), payment=()")
+        # `frame-ancestors` is the modern half of X-Frame-Options and the only
+        # one some browsers still honour. Deliberately not a full CSP: the
+        # school application is an Expo bundle that would need a long
+        # script-src, and a CSP written wrongly breaks the product silently.
+        headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+            headers.setdefault("Strict-Transport-Security",
+                               "max-age=31536000; includeSubDomains")
+        return response
     app.state.store = store or create_store()
 
     # The subscription engine's own defaults: the plans, the features, the grid
@@ -1131,12 +1198,15 @@ def create_app(store=None) -> FastAPI:
             label=body.get("label") or "", platform=body.get("platform") or "",
             app=body.get("app") or "desktop", app_version=body.get("app_version") or "",
             actor=(signed_in.get("user") or {}).get("username") or signed_in.get("school_id"),
+            build_id=str(body.get("build") or ""),
             remote_addr=_client_addr(request))
         if not claimed.get("ok"):
             return JSONResponse(status_code=claimed.get("status", 409),
                                 content={k: v for k, v in claimed.items() if k != "status"})
 
-        lease = licence_lib.issue(S(), repo, school_id, device=str(body.get("device") or ""))
+        lease = licence_lib.issue(S(), repo, school_id,
+                                  device=str(body.get("device") or ""),
+                                  build_id=str(body.get("build") or ""))
         platform_api.audit(S(), "install_activated", actor="desktop", school_id=school_id,
                            detail=f'{claimed["device"].get("label") or "a computer"} activated.',
                            remote_addr=_client_addr(request))
@@ -1186,13 +1256,111 @@ def create_app(store=None) -> FastAPI:
                          "Billing page. Sign in again to activate it."})
 
         device_lib.touch(repo, school["school_id"], device, _client_addr(request))
-        lease = licence_lib.issue(S(), repo, school["school_id"], device=device)
+        build_id = str(body.get("build") or "")
+        verdict = licence_lib.build_verdict(repo, build_id)
+
+        # What the installation's own scattered checks noticed since it last
+        # spoke to us (electron/licence/sentinel.js). Recorded here, where it
+        # cannot be patched away, and acted on by the same setting that governs
+        # a build mismatch — the two are the same finding by different routes.
+        reported = str(body.get("integrity") or "").strip()[:60]
+        if reported:
+            platform_api.audit(
+                S(), "integrity_reported", actor="desktop", outcome="flagged",
+                school_id=school["school_id"],
+                detail=f"A desktop reported its own licence checks disagreeing "
+                       f"({reported}).",
+                remote_addr=_client_addr(request))
+
+        if verdict["state"] == "tampered":
+            # Recorded on the PLATFORM's audit trail rather than the school's:
+            # the school is very often the victim here (a "helpful" IT person,
+            # a copy from a friend), and filling their own log with it teaches
+            # them nothing and tells whoever did it that it was noticed.
+            platform_api.audit(
+                S(), "build_mismatch", actor="desktop", outcome="flagged",
+                school_id=school["school_id"],
+                detail=f'A desktop reported build {verdict.get("build", "?")[:16]}, '
+                       "which is not one we published.",
+                remote_addr=_client_addr(request))
+        lease = licence_lib.issue(S(), repo, school["school_id"], device=device,
+                                  build_id=build_id, integrity_report=reported)
         platform_api.audit(S(), "licence_issued", actor="desktop",
                            school_id=school["school_id"],
                            detail=f'Lease to {lease["licence"]["not_after"][:10]} '
                                   f'({lease["licence"]["access"]}).',
                            remote_addr=_client_addr(request))
         return lease
+
+    @app.post("/api/v1/seals/draw")
+    async def draw_seals(request: Request, x_school_key: str = Header(None)):
+        """A batch of document seals for a school to carry offline.
+
+        Drawn against the SAME credential the desktop already syncs with, and
+        refused to a suspended school — which is the whole mechanism: a cracked
+        copy runs perfectly and cannot mint one of these, because minting needs
+        the signing key and that is here.
+        """
+        from .billing import seals as seal_lib
+        from .billing.repo import repo_for
+        school = require_school(x_school_key, request)
+        body = await _json(request)
+        result = seal_lib.draw(S(), repo_for(S()), school["school_id"],
+                               kind=str(body.get("kind") or "receipt"),
+                               count=body.get("count"),
+                               device=str(body.get("device") or ""))
+        if not result.get("ok"):
+            return JSONResponse(status_code=result.get("status", 400),
+                                content={k: v for k, v in result.items() if k != "status"})
+        return result
+
+    @app.post("/api/v1/seals/spend")
+    async def spend_seals(request: Request, x_school_key: str = Header(None)):
+        """Tell us a seal has been used, so a second use of it is caught.
+
+        Best effort and reported in bulk on the next sync: a school offline for
+        a fortnight is not prevented from issuing receipts, it simply has not
+        told us yet. Sealing is what proves a document genuine; this is what
+        catches the same seal appearing twice.
+        """
+        from .billing import seals as seal_lib
+        from .billing.repo import repo_for
+        school = require_school(x_school_key, request)
+        body = await _json(request)
+        repo = repo_for(S())
+        done, clashes = 0, []
+        for item in (body.get("spent") or [])[:1000]:
+            outcome = seal_lib.spend(repo, school["school_id"],
+                                     (item or {}).get("serial"),
+                                     reference=(item or {}).get("reference") or "")
+            if outcome.get("ok"):
+                done += 1
+            elif outcome.get("already"):
+                clashes.append((item or {}).get("serial"))
+        if clashes:
+            platform_api.audit(
+                S(), "seal_reused", actor="desktop", outcome="flagged",
+                school_id=school["school_id"],
+                detail=f"{len(clashes)} seal(s) were presented as used twice — "
+                       "a restored backup, or a copied database.",
+                remote_addr=_client_addr(request))
+        return {"ok": True, "recorded": done, "reused": clashes}
+
+    @app.get("/api/v1/verify/{serial}")
+    def verify_document(serial: str, request: Request):
+        """Is this receipt genuine? Asked by anybody, holding nothing.
+
+        Deliberately says very little: that we sealed it, which school, and
+        when. Never what the document said or who it was for — a page that
+        leaks a pupil's fee history to whoever is holding a receipt code would
+        be worse than having no verification at all.
+        """
+        from .billing import seals as seal_lib
+        from .billing.repo import repo_for
+        if ratelimit.limited(request, "verify", serial):
+            return JSONResponse(status_code=429, content={
+                "ok": False, "error": "Too many checks. Try again shortly."})
+        return seal_lib.verify(S(), repo_for(S()), serial)
 
     @app.get("/api/v1/licence/key")
     def licence_public_key():

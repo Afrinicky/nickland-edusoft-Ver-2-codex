@@ -20,6 +20,10 @@ import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("ALLOW_DEV_SECRET", "1")
+# Licences are signed in every suite, so the service boots exactly as it does in
+# production rather than down a path only tests take. A FIXED key: a generated
+# one would make every run sign differently and a failure impossible to repeat.
+os.environ.setdefault("LICENCE_SIGNING_KEY", "drupkjj9JHpGHCss-T0QStTqdmrajb4_uNJK3z7FKqk")
 os.environ.setdefault("ALLOW_MEMORY_STORE", "1")
 
 from fastapi.testclient import TestClient          # noqa: E402

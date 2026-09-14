@@ -141,7 +141,7 @@ def save_period(db, actor, data):
         return {"ok": False, "status": 400,
                 "error": "When does it start and end? A period needs both times."}
     if period_id:
-        sets = ", ".join(f'"{k}" = %s' for k in row)
+        sets = db.assignments(row)
         db.run(f"UPDATE timetable_periods SET {sets} WHERE id = %s",
                tuple(row.values()) + (period_id,))
     else:

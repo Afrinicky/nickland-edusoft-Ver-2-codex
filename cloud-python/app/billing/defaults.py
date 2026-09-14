@@ -156,7 +156,6 @@ SETTINGS = {
     # working", and they are different questions with different right answers.
     "licence_lease_days": "14",
     "licence_lease_grace_days": "7",
-    "licence_signing_key": "",
     # What a desktop does when both have run out. `read_only` leaves every
     # record readable, printable and exportable and refuses every write, which
     # is what §11's "suspension never deletes data" means on a machine we do
@@ -191,6 +190,22 @@ SETTINGS = {
     "download_notes": "",
     # How many machines a school may activate when its plan does not say.
     "default_device_seats": "5",
+    # The build fingerprints this platform has published, comma separated. A
+    # desktop reports its own (electron/licence/integrity.js) on every check-in
+    # and one that is not on this list has had its code changed since we built
+    # it. Empty means "we have not published any yet", which is not evidence of
+    # anything and is therefore not acted on.
+    "expected_build_ids": "",
+    # What to do about a desktop whose code does not match. `report` records it
+    # and leaves the school working — right while the list is being kept up to
+    # date for the first time, and right for a support team that would rather
+    # ring a school than lock it out. `refuse` issues that machine a read-only
+    # lease until it is running a build we published.
+    "tampered_build_action": "report",
+    # How many document seals a school draws at a time. Sized so a large
+    # school's whole term of receipts fits in one batch — running out is the
+    # only failure here that would hurt a paying customer.
+    "seal_batch": "500",
 
     "platform_sms_provider": "arkesel",
     "platform_sms_key": "",

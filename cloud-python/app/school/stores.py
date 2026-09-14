@@ -49,7 +49,7 @@ def save_item(db, actor, data):
     row["name"] = name[:120]
     item_id = data.get("id")
     if item_id:
-        sets = ", ".join(f'"{k}" = %s' for k in row)
+        sets = db.assignments(row)
         db.run(f"UPDATE inventory_items SET {sets} WHERE id = %s", tuple(row.values()) + (item_id,))
     else:
         row.setdefault("quantity_on_hand", 0)
@@ -160,7 +160,7 @@ def save_route(db, actor, data):
     row["name"] = name[:120]
     route_id = data.get("id")
     if route_id:
-        sets = ", ".join(f'"{k}" = %s' for k in row)
+        sets = db.assignments(row)
         db.run(f"UPDATE transport_routes SET {sets} WHERE id = %s", tuple(row.values()) + (route_id,))
     else:
         row["is_active"] = 1

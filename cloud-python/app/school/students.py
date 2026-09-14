@@ -234,7 +234,7 @@ def update(db, actor, student_id, data):
         if not db.one("SELECT id FROM class_groups WHERE id = %s", (patch["current_class_id"],)):
             return {"ok": False, "status": 400, "error": "That class does not exist."}
 
-    sets = ", ".join(f'"{k}" = %s' for k in patch)
+    sets = db.assignments(patch)
     db.run(f"UPDATE students SET {sets}, updated_at = %s WHERE id = %s",
            tuple(patch.values()) + (datetime.datetime.now(datetime.timezone.utc)
                                     .strftime("%Y-%m-%d %H:%M:%S"), student_id))

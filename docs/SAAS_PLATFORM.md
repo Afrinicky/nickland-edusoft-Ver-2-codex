@@ -488,6 +488,101 @@ locked itself overnight. It is not a second free trial: the trial is the
 cloud's, counted per school, and reinstalling to get another month gets you a
 database with none of your pupils in it.
 
+### What the protection is actually worth
+
+Layered, and worth listing in order of value so nobody later mistakes the
+bottom of the list for the top:
+
+| | Layer | Enforced by | Defeating it needs |
+|---|---|---|---|
+| 1 | **Server-signed document seals** (§10f) | the private key, which is on the service | the key. There is no client-side route at all. |
+| 2 | **Electron fuses** — ASAR integrity + asar-only loading | the OS, via the code signature | a code-signing bypass |
+| 3 | **Build hash inside the signed lease** | the private key | the key, or patching the check |
+| 4 | **Scattered independent checks** | the app, in several places at unpredictable moments | finding all of them |
+| 5 | **Bytecode-compiled licence core** | nothing — it is obfuscation | patience |
+
+**Only 1 and 2 are load-bearing.** Everything below them raises the cost of a
+crack; only those two make one structurally hard. Said plainly here because the
+failure mode of a document like this is somebody reading layer 5, feeling
+protected, and letting layer 2 lapse.
+
+**And the honest limit.** Code that runs on somebody else's computer can be
+changed by somebody sufficiently determined and skilled. Every vendor lives
+with this, Adobe included. What this achieves is moving "use it without paying"
+from something a bursar does with a text editor in ten minutes to something
+that needs a reverse engineer, a signing bypass, and a fresh effort after every
+release — and even then leaves them with paperwork that will not verify.
+
+---
+
+## 10f. Document seals — the part patching cannot reach
+
+Every other layer protects code on somebody else's computer. This one does not
+run there at all.
+
+A seal is a short signed statement that Nickland issued a particular receipt or
+report card — `NE-7K2M-4QXP-9` — printed on the document and checkable by
+anybody at `/api/v1/verify/{code}`. Minting one needs the signing key.
+
+```
+  online          POST /api/v1/seals/draw   → 500 signed seals
+  offline         each receipt spends one, and prints its code
+  next sync       POST /api/v1/seals/spend  → tells us which were used
+```
+
+So a cracked copy runs perfectly and **cannot produce a receipt that verifies**,
+because the thing that makes one verify was never on that machine. The school is
+left choosing between a working system whose paperwork nobody can confirm, and
+paying — a far better position to argue from than a licence check somebody has
+already removed.
+
+It does not break offline use, which is the whole product: seals are drawn in
+batches and spent like a chequebook. A paying school carries hundreds, tops up
+on any sync, and never learns this exists. A school that stops paying stops
+being issued new ones and spends what it has — no cliff, nothing deleted, and a
+term or so of runway.
+
+**Seals already issued stay valid for ever.** A receipt that was genuine when it
+was written does not become a forgery because the school fell behind later.
+
+**The verification page says very little on purpose** — that we sealed it, which
+school, and when. Never what the document contained or who it was for: a page
+that leaks a pupil's fee history to whoever holds a receipt code would be worse
+than having no verification at all.
+
+**Re-use is caught.** Serials are UNIQUE platform-wide and single-use. The same
+seal presented twice means a restored backup or a copied database, and the
+console hears about it.
+
+---
+
+## 10g. The signing key
+
+`LICENCE_SIGNING_KEY` is not a configuration detail. **Anybody holding it can
+mint a licence granting any school permanent full access on any machine for
+ever, and can forge document seals.** It is the thing being protected.
+
+* **It comes from the environment and nowhere else.** It used to fall back to
+  generating one into `platform_settings`. That is gone: a private key in a row
+  of the application's own database is in every backup, every read replica and
+  every `pg_dump` somebody mailed themselves — one leaked backup was the whole
+  licensing system, permanently.
+* **The service refuses to start without it**, beside `DATABASE_URL` and
+  `PORTAL_SECRET`. A platform that quietly runs unlicensed looks perfectly
+  healthy and is not discovered until the revenue is.
+* **Rotation locks nobody out.** New key in `LICENCE_SIGNING_KEY`, outgoing one
+  in `LICENCE_SIGNING_KEY_PREVIOUS`; both verify, new leases use the new key,
+  and the old variable is dropped after one lease period. Rotating without that
+  overlap drops every desktop to read-only until it checks in.
+* `ALLOW_UNMANAGED_LICENCE_KEY=1` is the only way to run without one. It is
+  named so nobody sets it by accident, and the boot report says so in words.
+
+```
+[edusoft] offline licensing: on
+[edusoft] offline licensing: on (a key rotation is in flight — two keys verify)
+[edusoft] offline licensing: OFF — every installed desktop will run unlicensed.
+```
+
 ---
 
 ## 10d. Downloading is opting in
@@ -738,9 +833,16 @@ python3 cloud-python/tests/test_billing.py    # the engine, on the in-memory sto
 python3 cloud-python/tests/test_saas.py       # registration, routing and enforcement, on Postgres
 python3 cloud-python/tests/test_gateways.py   # the adapters, against a stand-in provider
 python3 cloud-python/tests/test_licensing.py  # leases, seats, activation, reminders
+python3 cloud-python/tests/test_attack.py     # trying to break it on purpose
 node    test/gateways.js                      # the desktop's adapters, and parity with the cloud's
 node    test/licence.js                       # the four ways people try to run an unpaid copy
 ```
+
+`test_attack.py` is the one to read first if you are changing anything here. It
+asks what happens when somebody who has read the source tries — one school
+reaching another's data, a school reaching the platform, a lease edited field
+by field, injection through the doors that take names, what the public
+endpoints give away, and whether the throttles hold.
 
 The Python suites are in `npm run test:online`; `test/gateways.js` is in
 `npm run test:regressions`.

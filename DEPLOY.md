@@ -110,6 +110,8 @@ files already say so.
 | `PORTAL_SECRET` | required | `openssl rand -hex 32`. Signs parent and teacher sessions — **changing it signs everyone out** |
 | `PLATFORM_ADMIN_KEY` | for enrolment | 24 characters or more, or it is treated as unset and the platform routes answer 404 |
 | `PORTAL_BASE_DOMAIN` | for addresses | the domain schools live under; see below |
+| `LICENCE_SIGNING_KEY` | **required** | Ed25519 private key, base64. The service refuses to start without it. Anybody holding it can mint a licence for any school for ever — keep it out of the repository, out of the database and out of your shell history |
+| `LICENCE_SIGNING_KEY_PREVIOUS` | while rotating | the outgoing key, for one lease period, so desktops that have not checked in yet are not locked out |
 | `PUBLIC_SITE_DOMAIN` | for the website | the domain the public website answers on; unset means `/welcome` only |
 | `CONSOLE_DOMAIN` | for the console | the domain the Superadmin console answers on; unset means `/console` only |
 | `ALLOW_MEMORY_STORE` | never set it in production | the in-memory store loses every school, account and receipt on each restart, and each worker keeps its own copy, so the same request succeeds or 401s depending on which one answers |
@@ -305,7 +307,8 @@ service itself has no address to miss.
 
 ```bash
 cd cloud-python
-DATABASE_URL="postgres://…?sslmode=require" PORTAL_SECRET=dev uvicorn app.main:app --reload
+DATABASE_URL="postgres://…?sslmode=require" PORTAL_SECRET=dev \
+  ALLOW_UNMANAGED_LICENCE_KEY=1 uvicorn app.main:app --reload
 ```
 
 and in another terminal:

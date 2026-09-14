@@ -14,8 +14,11 @@
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "dev": "concurrently \"npm:dev:renderer\" \"npm:dev:electron\"",
     "build:renderer": "vite build",
-    "build": "npm run build:renderer && npm run build:desk && electron-builder",
-    "build:win": "npm run build:renderer && npm run build:desk && electron-builder --win",
+    "build": "npm run build:renderer && npm run build:desk && npm run harden && electron-builder && npm run harden:restore",
+    "build:win": "npm run build:renderer && npm run build:desk && npm run harden && electron-builder --win && npm run harden:restore",
+    "harden": "node scripts/harden.mjs",
+    "harden:check": "node scripts/harden.mjs --check",
+    "harden:restore": "git checkout -- electron/licence/index.js electron/licence/sentinel.js electron/licence/integrity.js 2>/dev/null || true",
     "build:web": "node scripts/build-web.mjs",
     "serve:web": "node scripts/serve-web.mjs",
     "build:desk": "node scripts/build-desk.mjs",
@@ -29,7 +32,7 @@
     "test:regressions": "node test/regressions.js && node test/school_fees.js && node test/onboarding_workbook.js && node test/sync_conflicts.js && node test/payment_desk.js && node test/gateways.js && node test/licence.js && node test/access.js && node test/portals.js && node test/app_modules.mjs && node test/app_shell.mjs && node test/teacher_api.js && node test/office_api.js && node test/dashboards_api.js && node test/office_parity.js && node test/webapp.js && node test/desk_surface.js && node test/desk_api.js && node test/headless_host.js && node test/host_dialect.js && node test/host_postgres.js",
     "test:contrast": "node scripts/contrast.mjs",
     "test:cloud": "node cloud/test/e2e.js && node cloud/test/portal.js && node cloud/test/staff.js && node cloud/test/passwords.js",
-    "test:online": "cd cloud-python && python3 tests/test_platform.py && python3 tests/test_billing.py && python3 tests/test_saas.py && python3 tests/test_school.py && python3 tests/test_payments.py && python3 tests/test_gateways.py && python3 tests/test_licensing.py && python3 tests/test_dashboards.py && python3 tests/test_desk.py && python3 tests/test_portal.py && python3 tests/test_staff.py && cd .. && node scripts/desk-coverage.mjs --check",
+    "test:online": "cd cloud-python && python3 tests/test_platform.py && python3 tests/test_billing.py && python3 tests/test_saas.py && python3 tests/test_school.py && python3 tests/test_payments.py && python3 tests/test_gateways.py && python3 tests/test_licensing.py && python3 tests/test_attack.py && python3 tests/test_dashboards.py && python3 tests/test_desk.py && python3 tests/test_portal.py && python3 tests/test_staff.py && cd .. && node scripts/desk-coverage.mjs --check",
     "pretest": "npm run build:preload",
     "pretest:regressions": "npm run build:preload"
   },
@@ -55,6 +58,8 @@
     "concurrently": "^8.2.2",
     "electron": "^32.0.0",
     "electron-builder": "^25.0.0",
+    "@electron/fuses": "^1.8.0",
+    "bytenode": "^1.5.7",
     "electron-rebuild": "^3.2.9",
     "vite": "^5.4.0",
     "wait-on": "^8.0.0"
@@ -67,6 +72,21 @@
       "output": "dist-app",
       "buildResources": "resources"
     },
+    "//afterPack": [
+      "Flips the Electron fuses before signing. ASAR integrity validation plus",
+      "asar-only loading mean a build whose JavaScript has been edited will not",
+      "start, and flipping the fuses back breaks the code signature so the OS",
+      "refuses the binary. RunAsNode, --inspect and NODE_OPTIONS are turned off",
+      "because each is a way to run our own binary as a debugger against itself.",
+      "See scripts/fuses.mjs."
+    ],
+    "afterPack": "scripts/fuses.mjs",
+    "//asar": [
+      "Explicit, because OnlyLoadAppFromAsar has nothing to enforce without it:",
+      "an unpacked app/ directory beside the asar is precisely the fallback that",
+      "fuse exists to close."
+    ],
+    "asar": true,
     "files": [
       "electron/**/*",
       "dist/**/*",

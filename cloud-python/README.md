@@ -76,7 +76,8 @@ python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 
 # Dev (in-memory, explicit opt-in — data is discarded on exit):
-ALLOW_DEV_SECRET=1 ALLOW_MEMORY_STORE=1 uvicorn app.main:app --reload --port 8080
+ALLOW_DEV_SECRET=1 ALLOW_MEMORY_STORE=1 ALLOW_UNMANAGED_LICENCE_KEY=1 \
+  uvicorn app.main:app --reload --port 8080
 
 # Production (Neon):
 psql "$DATABASE_URL" -f schema.sql            # once

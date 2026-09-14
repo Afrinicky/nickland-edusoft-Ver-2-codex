@@ -3,6 +3,7 @@ const { getNextReceiptNumber } = require('../utils/idgen');
 const { postIncome } = require('./_ledger');
 const { autoReceiptForPayment, autoDeliverReceipt } = require('./receipts_engine');
 const billing = require('./_billing');
+const seals = require('../licence/seals');
 
 function registerFeesHandlers(ipcMain, db) {
   // ===== Templates =====
@@ -542,6 +543,9 @@ function recordFeesPayment(db, data) {
   const receiptCounter = getNextReceiptNumber(db);
   const year = new Date().getFullYear().toString().slice(-2);
   const receiptNo = `FE/${year}/${String(receiptCounter).padStart(5, '0')}`;
+  // Taken BEFORE the transaction so that a school which has run out still gets
+  // its receipt — the payment is the thing that must not fail here.
+  const seal = seals.sealFor(db, 'receipt', receiptNo);
   const payDate = data.payment_date || new Date().toISOString().slice(0, 10);
 
   const tx = db.transaction(() => {
@@ -599,7 +603,19 @@ function recordFeesPayment(db, data) {
     try { receipt = autoReceiptForPayment(db, 'fees', paymentId); } catch (_) {}
     let delivery = null;
     try { delivery = autoDeliverReceipt(db, 'fees', paymentId); } catch (_) {}
-    return { ok: true, id: paymentId, receipt_number: receiptNo, receipt_id: receipt?.id || null, delivered: delivery?.channels || [] };
+    return {
+      ok: true, id: paymentId, receipt_number: receiptNo,
+      receipt_id: receipt?.id || null, delivered: delivery?.channels || [],
+      // The verification code printed on the receipt. Anybody can check it at
+      // /verify and be told this school issued it — which is what a patched
+      // copy cannot produce, because minting a seal needs a key that is on the
+      // service and never on this computer (see electron/licence/seals.js).
+      //
+      // `null` when the school has run out. The receipt is still issued: a
+      // parent standing at the counter with cash is not turned away because we
+      // are out of stationery.
+      verification: seal ? seal.serial : null,
+    };
   } catch (e) {
     // Log the failure to the audit trail instead of swallowing it
     try {
