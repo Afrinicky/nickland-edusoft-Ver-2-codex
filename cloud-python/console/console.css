@@ -195,6 +195,20 @@ td.wrap { white-space: normal; }
 .grid2 { display: grid; grid-template-columns: 1.3fr .7fr; gap: 22px; align-items: start; }
 @media (max-width: 1000px) { .grid2 { grid-template-columns: minmax(0,1fr); } }
 
+/* ── Enrolling a school ────────────────────────────────────────────────── */
+/* A key that is shown once has to be readable and selectable in one go: the
+   operator is reading it down a telephone or pasting it into an email, and a
+   line that wraps mid-key is how a digit gets dropped. */
+.secret { flex: 1 1 260px; min-width: 0; display: block; padding: 9px 12px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: .9rem; letter-spacing: .02em; word-break: break-all;
+          background: var(--paper-deep); border: 1px solid var(--line-strong);
+          border-radius: 2px; color: var(--ink); user-select: all; }
+
+.steps { margin: 0; padding-left: 20px; font-size: .92rem; }
+.steps li { margin-bottom: 9px; }
+.steps li:last-child { margin-bottom: 0; }
+
 /* ── Waterfall (the revenue report) ────────────────────────────────────── */
 .waterfall { list-style: none; margin: 0; padding: 0; }
 .waterfall li { display: flex; justify-content: space-between; align-items: baseline;

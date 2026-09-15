@@ -154,6 +154,13 @@
 
   function input(attrs) { return el('input', attrs); }
 
+  function detail(label, value) {
+    return el('div', { class: 'row' }, [
+      el('span', { class: 'k', text: label }),
+      el('span', { class: 'v', text: String(value === null || value === undefined ? '—' : value) })
+    ]);
+  }
+
   function select(attrs, options, value) {
     var node = el('select', attrs);
     options.forEach(function (option) {
@@ -379,6 +386,329 @@
     });
   }
 
+  // ── enrolling a school ───────────────────────────────────────────────────
+  //
+  // The operator's twin of the website's registration form, for the school
+  // that signed up over the phone — which is every school until the website
+  // has been found by one. It posts to the same `/schools` the public form
+  // reaches, so a school enrolled from here and a school that registered
+  // itself are the same school, made the same way, with the same tenant
+  // schema, the same registry row and the same subscription.
+  //
+  // Two shapes, and the difference is one field. **With** an administrator's
+  // details it is a full registration: tenant, account, identity, subscription
+  // and somebody who can sign in this afternoon. **Without** them it is the
+  // tenant alone — which is what a school moving across from a desktop wants,
+  // because its staff accounts already exist there and arrive on the first
+  // sync.
+  //
+  // The sync key comes back once and is stored only as a hash. That is why the
+  // result below is a screen and not a toast: an operator who navigates away
+  // from a toast has lost the thing the school's desktop needs, and reissuing
+  // it stops a desktop that is already syncing.
+  function enrolDefaults() {
+    return { withAdmin: true };
+  }
+
+  PAGES.enrol = function (host) {
+    if (!state.cache.plans || !state.cache.settings) {
+      Promise.all([
+        state.cache.plans ? null : api('/plans'),
+        state.cache.settings ? null : api('/settings')
+      ]).then(function (answers) {
+        if (answers[0]) state.cache.plans = answers[0].plans || [];
+        if (answers[1]) state.cache.settings = answers[1].settings || {};
+        PAGES.enrol(host);
+      });
+      return;
+    }
+
+    var plans = (state.cache.plans || []).filter(function (p) { return p.is_active !== false; });
+    var chosen = enrolDefaults();
+
+    var nameInput = input({ type: 'text', id: 'enrolName', autocomplete: 'off',
+                            placeholder: 'e.g. Ave Maria School' });
+    var idInput = input({ type: 'text', id: 'enrolId', autocomplete: 'off',
+                          placeholder: 'left blank, it is made from the name' });
+    var fallback = (state.cache.settings || {}).default_plan;
+    if (!plans.some(function (p) { return p.plan_id === fallback; })) {
+      fallback = (plans[0] || {}).plan_id;
+    }
+    var planInput = select({ id: 'enrolPlan' }, plans.map(function (p) {
+      return { value: p.plan_id, label: p.name };
+    }), fallback);
+
+    var adminName = input({ type: 'text', id: 'enrolAdminName', autocomplete: 'off',
+                            placeholder: 'e.g. Grace Mensah' });
+    var adminEmail = input({ type: 'email', id: 'enrolEmail', autocomplete: 'off',
+                             placeholder: 'grace@avemaria.edu.gh' });
+    var adminUser = input({ type: 'text', id: 'enrolUsername', autocomplete: 'off',
+                            placeholder: 'left blank, it is made from the email' });
+    var adminPass = input({ type: 'text', id: 'enrolPassword', autocomplete: 'off',
+                            placeholder: 'at least 8 characters' });
+    var adminPhone = input({ type: 'tel', id: 'enrolPhone', autocomplete: 'off',
+                             placeholder: '024 000 0000' });
+    var adminRegion = input({ type: 'text', id: 'enrolRegion', autocomplete: 'off',
+                              placeholder: 'e.g. Greater Accra' });
+
+    // A password nobody can read is a password the operator cannot read out to
+    // the school over the telephone, which is how this account is handed over.
+    // It is shown, and it is the school's to change at first sign-in.
+    var suggest = el('button', { class: 'btn btn-outline btn-sm', type: 'button',
+                                 onclick: function () { adminPass.value = suggestPassword(); } },
+                     ['Suggest one']);
+
+    var adminToggle = el('input', { type: 'checkbox', id: 'enrolWithAdmin', checked: 'checked',
+                                    onchange: function () {
+                                      chosen.withAdmin = adminToggle.checked;
+                                      adminPanel.hidden = !chosen.withAdmin;
+                                      adminNote.hidden = chosen.withAdmin;
+                                    } });
+
+    var adminPanel = el('div', {}, [
+      el('div', { class: 'field-row' }, [
+        field('Their name', adminName, 'The person who will run the system at the school.'),
+        field('Their email', adminEmail, 'This is what they sign in with, here and on the app.')
+      ]),
+      el('div', { class: 'field-row' }, [
+        field('Username', adminUser, 'Optional. Their desktop sign-in name.'),
+        el('div', { class: 'field' }, [
+          el('label', { text: 'Password', for: 'enrolPassword' }),
+          el('div', { class: 'inline' }, [adminPass, suggest]),
+          el('p', { class: 'hint', text: 'Read it to them, and tell them to change it. ' +
+                                         'At least 8 characters.' })
+        ])
+      ]),
+      el('div', { class: 'field-row' }, [
+        field('Phone', adminPhone, 'Optional. For the renewal reminders.'),
+        field('Region', adminRegion, 'Optional.')
+      ])
+    ]);
+
+    var adminNote = el('div', { class: 'note', hidden: 'hidden' }, [
+      el('p', { text: 'The school will be created with no account in it. Nobody can sign ' +
+                      'in to it from a browser until its desktop syncs its staff across, ' +
+                      'or you enrol an administrator here. Use this only for a school ' +
+                      'that is already running on a desktop.' })
+    ]);
+
+    var submit = el('button', { class: 'btn btn-primary', type: 'submit' }, ['Enrol the school']);
+    var problem = el('div', { class: 'note bad', hidden: 'hidden' });
+
+    var form = el('form', { onsubmit: function (event) {
+      event.preventDefault();
+      enrol();
+    } }, [
+      problem,
+      panel('The school', el('div', {}, [
+        el('div', { class: 'field-row' }, [
+          field('Name', nameInput, 'As the school writes it. It goes on every report it prints.'),
+          field('Address (tenant id)', idInput, 'Optional, and permanent once set.')
+        ]),
+        field('Plan', planInput, 'Its free trial starts today, on this plan’s rules. ' +
+                                 'You can change the plan afterwards.')
+      ])),
+      panel('Its first administrator', el('div', {}, [
+        el('label', { class: 'switch', style: 'margin-bottom:14px' }, [
+          adminToggle, el('span', { text: 'Create an account they can sign in with' })
+        ]),
+        adminNote,
+        adminPanel
+      ])),
+      el('div', { class: 'inline' }, [
+        submit,
+        el('button', { class: 'btn btn-outline', type: 'button',
+                       onclick: function () { window.location.hash = '#schools'; } }, ['Cancel'])
+      ])
+    ]);
+
+    function enrol() {
+      problem.hidden = true;
+      var body = {
+        school_name: nameInput.value.trim(),
+        plan_id: planInput.value
+      };
+      var id = idInput.value.trim().toLowerCase();
+      if (id) body.school_id = id;
+
+      if (chosen.withAdmin) {
+        body.full_name = adminName.value.trim();
+        body.email = adminEmail.value.trim();
+        body.password = adminPass.value;
+        if (adminUser.value.trim()) body.username = adminUser.value.trim().toLowerCase();
+        if (adminPhone.value.trim()) body.phone = adminPhone.value.trim();
+        if (adminRegion.value.trim()) body.region = adminRegion.value.trim();
+      }
+
+      // Checked here as well as at the service, because the expensive half of
+      // enrolling a school is creating a Postgres schema with eighty-one tables
+      // in it, and doing that for a registration that a short password was
+      // always going to reject is how a database fills with rubbish.
+      var says = enrolComplaint(body, chosen.withAdmin);
+      if (says) {
+        problem.hidden = false;
+        problem.textContent = says;
+        return;
+      }
+
+      busy(submit, true, 'Enrolling…');
+      api('/schools', { method: 'POST', body: body }).then(function (result) {
+        busy(submit, false, 'Enrol the school');
+        if (!result.ok) {
+          problem.hidden = false;
+          problem.textContent = result.error || 'The school could not be enrolled.';
+          return;
+        }
+        state.cache.plans = null;            // its subscription changes the counts
+        toast('Enrolled.');
+        show(host, enrolled(result, body));
+        window.scrollTo(0, 0);
+      }).catch(function () {
+        busy(submit, false, 'Enrol the school');
+        problem.hidden = false;
+        problem.textContent = 'The console could not reach the service. Nothing was created.';
+      });
+    }
+
+    show(host, [
+      head('Enrol a school', 'It is created here exactly as it would be if the school ' +
+                             'had registered on the website itself.'),
+      form
+    ]);
+    nameInput.focus();
+  };
+
+  function enrolComplaint(body, withAdmin) {
+    if (body.school_name.length < 3) return 'Enter the school’s name.';
+    if (body.school_id && !/^[a-z0-9][a-z0-9-]{1,62}$/.test(body.school_id)) {
+      return 'An address is lowercase letters, digits and dashes — it becomes part of ' +
+             'the school’s web address.';
+    }
+    if (!withAdmin) return '';
+    if (!body.full_name) return 'Enter the administrator’s name.';
+    if (!/^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$/.test(body.email || '')) {
+      return 'Enter a valid email address for the administrator.';
+    }
+    if ((body.password || '').length < 8) {
+      return 'Choose a password of at least 8 characters for the administrator.';
+    }
+    if (body.username && !/^[a-z0-9._-]{3,32}$/.test(body.username)) {
+      return 'A username is 3–32 letters, digits, dot, dash or underscore.';
+    }
+    return '';
+  }
+
+  function suggestPassword() {
+    // Readable over a telephone line: no characters that are heard as another
+    // character, and no case to have to say out loud.
+    var words = ['accra', 'kumasi', 'tamale', 'takoradi', 'sunyani', 'cape', 'volta',
+                 'kakum', 'bosom', 'ankobra', 'tano', 'pra'];
+    var pick = function (list) { return list[Math.floor(Math.random() * list.length)]; };
+    return pick(words) + '-' + pick(words) + '-' + (100 + Math.floor(Math.random() * 900));
+  }
+
+  function secret(label, value, hint) {
+    var box = el('code', { class: 'secret', text: value });
+    var copy = el('button', { class: 'btn btn-outline btn-sm', type: 'button',
+                              onclick: function (event) {
+      var done = function () { toast(label + ' copied.'); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(done, function () { selectText(box); });
+      } else {
+        selectText(box);
+        toast('Press Ctrl+C to copy.');
+      }
+      event.preventDefault();
+    } }, ['Copy']);
+    return el('div', { class: 'field' }, [
+      el('label', { text: label }),
+      el('div', { class: 'inline' }, [box, copy]),
+      hint ? el('p', { class: 'hint', text: hint }) : null
+    ]);
+  }
+
+  function selectText(node) {
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    var selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  // What the operator reads out, emails, or writes on the form the school
+  // signed. Everything here except the sync key can be found again; the sync
+  // key cannot, and says so.
+  function enrolled(result, sent) {
+    var schoolId = result.school_id;
+    var key = result.sync_key || result.api_key;
+    var host = result.portal_host;
+    var address = result.app_url || (host ? 'https://' + host : null);
+    var administrator = result.administrator || null;
+    var subscription = result.subscription || null;
+
+    var rows = el('div', { class: 'rows' }, [
+      detail('School', (result.school && result.school.name) || sent.school_name),
+      detail('Its address', address || 'no domain configured — see PORTAL_BASE_DOMAIN'),
+      detail('Tenant id', schoolId),
+      administrator ? detail('Signs in with', administrator.email) : null,
+      administrator ? detail('Username', administrator.username) : null,
+      detail('Plan', (result.plan && result.plan.name) || sent.plan_id || '—'),
+      detail('Trial ends', result.trial_ends_at ? day(result.trial_ends_at) :
+                           (subscription && subscription.trial_ends_at
+                             ? day(subscription.trial_ends_at) : 'no trial on this plan'))
+    ]);
+
+    var keyPanel = key ? panel('Its sync key — shown once', el('div', {}, [
+      el('div', { class: 'note warn' }, [
+        el('p', { text: 'This is stored only as a hash and cannot be shown again. It goes ' +
+                        'into the school’s desktop at Settings → Cloud Sync, beside the ' +
+                        'tenant id. If it is lost, issue a new one from the school’s page — ' +
+                        'which stops the desktop that is using the old one.' })
+      ]),
+      secret('Sync key', key),
+      secret('Tenant id', schoolId)
+    ])) : null;
+
+    var next = panel('What the school does next', el('ol', { class: 'steps' }, [
+      el('li', { html: administrator
+        ? 'Signs in at <b>' + escapeHtml(address || 'the platform address') + '</b> with the ' +
+          'email and password above, and changes that password.'
+        : 'Keeps using its desktop. Its staff and pupils arrive here on the first sync.' }),
+      el('li', { html: 'Installs the Windows application from the platform’s ' +
+                       '<b>Download</b> page, and activates it with the same email and ' +
+                       'password.' }),
+      el('li', { html: 'On that desktop: <b>Settings → Cloud Sync</b> — the platform ' +
+                       'address, the tenant id and the sync key above — then switches ' +
+                       'it on.' }),
+      el('li', { html: 'Brings its records across: <b>Settings → Onboarding</b>, ' +
+                       'the twelve-tab workbook.' })
+    ]));
+
+    return [
+      head('Enrolled', 'The school exists, with its own database.', [
+        el('button', { class: 'btn btn-outline', type: 'button', onclick: function () {
+          window.location.hash = '#schools';
+        } }, ['All schools']),
+        el('button', { class: 'btn btn-primary', type: 'button', onclick: function () {
+          route();
+        } }, ['Enrol another'])
+      ]),
+      el('div', { class: 'note good' }, [
+        el('p', { text: ((result.school && result.school.name) || sent.school_name) +
+                        ' is enrolled and its database is ready.' })
+      ]),
+      panel('Give the school these', rows),
+      keyPanel,
+      next
+    ];
+  }
+
+  function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
   // ── schools ──────────────────────────────────────────────────────────────
   PAGES.schools = function (host) {
     api('/schools').then(function (data) {
@@ -420,13 +750,17 @@
               : el('span', { class: 'tag bad', title: s.problem || '', text: 'Incomplete' });
           } }
         ], rows, { onRow: function (s) { openSchool(s.school_id); },
-                   empty: 'No school matches that.' }))));
+                   empty: schools.length ? 'No school matches that.'
+                                         : 'No school is enrolled yet. Enrol the first one.' }))));
       }
 
       search.addEventListener('input', draw);
       show(host, [
         head('Schools', 'Every school on the platform. Click one to open it.',
-             [el('div', { class: 'field', style: 'min-width:240px' }, [search])]),
+             [el('div', { class: 'field', style: 'min-width:240px' }, [search]),
+              el('button', { class: 'btn btn-primary', type: 'button', onclick: function () {
+                window.location.hash = '#enrol';
+              } }, ['Enrol a school'])]),
         body
       ]);
       draw();
@@ -795,13 +1129,6 @@
           { label: 'By', key: 'actor' },
           { label: 'Detail', key: 'detail' }
         ], data.audit || [], { empty: 'Nothing recorded.' })))
-      ]);
-    }
-
-    function detail(label, value) {
-      return el('div', { class: 'row' }, [
-        el('span', { class: 'k', text: label }),
-        el('span', { class: 'v', text: String(value === null || value === undefined ? '—' : value) })
       ]);
     }
 

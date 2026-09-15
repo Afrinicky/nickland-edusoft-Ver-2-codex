@@ -353,6 +353,110 @@ def run(client, store, repo):
        client.post("/api/v1/school/students", headers=headers,
                    json={"surname": "X", "first_name": "Y"}).status_code == 200)
 
+    # ══ Enrolling a school FROM the console ════════════════════════════
+    #
+    # The other way a school comes into existence, and until a school has found
+    # the website it is the only way: an operator enrols it, from the console,
+    # for a head teacher who telephoned. It has to produce exactly what the
+    # public form produces — a tenant, an account, an identity and a
+    # subscription — because a school enrolled by Nickland and a school that
+    # registered itself must not be two different kinds of school.
+    print("\nEnrolling a school from the console")
+
+    enrolled_email = f"console-{uuid.uuid4().hex[:6]}@example.test"
+    enrolled = client.post("/api/v1/admin/schools", headers=ops, json={
+        "school_name": f"Console School {uuid.uuid4().hex[:5]}",
+        "full_name": "Kojo Owusu",
+        "email": enrolled_email,
+        "password": "a-good-enough-password",
+        "plan_id": "pro",
+        "phone": "0244000000",
+        "region": "Greater Accra",
+    }).json()
+    ck("an operator can enrol a school", enrolled.get("ok"), enrolled)
+    if enrolled.get("ok"):
+        made.append(enrolled["school_id"])
+    ck("...and is given the sync key, once", bool(enrolled.get("sync_key")))
+    ck("...and the address to hand over", bool(enrolled.get("portal_host")))
+    ck("...on the plan the operator chose",
+       (enrolled.get("subscription") or {}).get("plan_id") == "pro", enrolled.get("subscription"))
+    ck("...with its trial running",
+       (enrolled.get("subscription") or {}).get("status") == "TRIALING", enrolled.get("subscription"))
+
+    # The whole point of the administrator half: somebody can sign in this
+    # afternoon, from the front door, without being told their tenant id.
+    signed = client.post("/api/v1/public/login", json={
+        "email": enrolled_email, "password": "a-good-enough-password"}).json()
+    ck("the administrator it created can sign in at the front door",
+       signed.get("ok") and signed.get("school_id") == enrolled.get("school_id"), signed)
+    ck("...as a super admin of their own school",
+       client.get("/api/v1/school/me",
+                  headers={"Authorization": f'Bearer {signed.get("token")}'}).status_code == 200)
+
+    # The sync key is what the school's desktop authenticates with. An enrolment
+    # that hands over a key the desktop is refused is an enrolment that looks
+    # like it worked and is discovered on the Monday.
+    ck("the sync key it was given is the one its desktop is checked against",
+       client.get("/api/v1/sync/ping",
+                  headers={"x-school-key": enrolled["sync_key"]}).json().get("ok") is True)
+
+    # Enrolling the tenant alone, for a school already running on a desktop:
+    # no account, because its accounts are on that desktop and arrive on the
+    # first sync, and creating a second one here would be a second password for
+    # the same person.
+    bare_name = f"Bare School {uuid.uuid4().hex[:5]}"
+    bare = client.post("/api/v1/admin/schools", headers=ops,
+                       json={"school_name": bare_name}).json()
+    ck("a school can be enrolled with no administrator at all", bare.get("ok"), bare)
+    if bare.get("ok"):
+        made.append(bare["school_id"])
+    ck("...and still gets its own database",
+       bool(bare.get("schema")) and bool(bare.get("api_key")))
+    ck("...named as the school names itself, inside its own database",
+       sdb.SchoolDb(bare["school_id"]).get_setting("school_name") == bare_name)
+
+    # Every CREATE in the schema file reached the database. `provision` runs
+    # the whole file in one execute, so a statement Postgres rejects leaves a
+    # school missing one table and enrolled anyway — found later by a handler
+    # failing on a Tuesday. (That the file itself keeps up with the desktop's
+    # own schema is a different question, and is guarded by regenerating it in
+    # CI: see `node scripts/schema-to-postgres.mjs`.)
+    wanted = set()
+    with open(os.path.join(os.path.dirname(__file__), "..", "schema", "school.sql")) as fh:
+        for line in fh:
+            if line.startswith("CREATE TABLE IF NOT EXISTS "):
+                wanted.add(line.split()[5].strip())
+    got = {r["table_name"] for r in sdb.SchoolDb(bare["school_id"]).all(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = %s",
+        (sdb.schema_name(bare["school_id"]),))}
+    ck("...carrying every table its schema names, not most of them",
+       wanted and wanted <= got, sorted(wanted - got))
+
+    # Enrolling the same school twice is the double-click, and it is the one
+    # mistake an operator makes under a head teacher waiting on the telephone.
+    again = client.post("/api/v1/admin/schools", headers=ops,
+                        json={"school_name": "Whatever", "school_id": bare["school_id"]})
+    ck("the same id cannot be enrolled twice", again.json().get("ok") is False
+       and again.json().get("status", again.status_code) == 409, again.text)
+
+    second = client.post("/api/v1/admin/schools", headers=ops, json={
+        "school_name": "Another School", "full_name": "Kojo Owusu",
+        "email": enrolled_email, "password": "a-good-enough-password"}).json()
+    ck("...and one email does not quietly acquire a second school",
+       second.get("ok") is False and "already" in (second.get("error") or ""), second)
+
+    # A refusal must cost nothing. The expensive half of enrolling a school is
+    # a Postgres schema with eighty-one tables in it, and a rejected password
+    # must not leave one behind.
+    before_count = len(client.get("/api/v1/admin/schools", headers=ops).json()["schools"])
+    refused = client.post("/api/v1/admin/schools", headers=ops, json={
+        "school_name": "Short Password School", "full_name": "Someone",
+        "email": f"short-{uuid.uuid4().hex[:6]}@example.test", "password": "short"}).json()
+    ck("a password that was always going to be refused is refused",
+       refused.get("ok") is False, refused)
+    ck("...without leaving a school behind",
+       len(client.get("/api/v1/admin/schools", headers=ops).json()["schools"]) == before_count)
+
     run_report = client.post("/api/v1/admin/billing-run", headers=ops, json={}).json()
     ck("the billing run can be started by hand", run_report["ok"], run_report)
     ck("...and reports what it did",

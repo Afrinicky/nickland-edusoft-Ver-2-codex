@@ -28,7 +28,35 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+
+    # Enrolling a school IS the creation of a Postgres schema with eighty-one
+    # tables in it. Everything that follows from that — the tenant boundary,
+    # the offline licence a desktop runs on, what an attacker reaches, the
+    # billing repository against a real database — was covered by suites that
+    # skipped themselves here for want of one, so the first time any of it ran
+    # was on a deploy. A throwaway Postgres costs this job about a minute.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: edusoft
+          POSTGRES_DB: edusoft_test
+        ports:
+          - 5432:5432
+        # The job does not wait for a container, only for a port, so without
+        # this the first suite meets a database still starting up.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      # Used only by the steps below that name it. The suites above run without
+      # a database on purpose — that is what keeps them fast and what proves
+      # the desktop needs none.
+      EDUSOFT_TEST_DATABASE_URL: postgres://postgres:edusoft@127.0.0.1:5432/edusoft_test
 
     steps:
       - name: Checkout repository
@@ -118,26 +146,137 @@ jobs:
         run: python3 tests/test_staff.py
         working-directory: cloud-python
 
-      # Enrolling a school: who may create one, the id it keeps for good, and
-      # the hostname rules. The half that provisions a real schema needs
-      # Postgres and skips without it — but the half that decides who can
-      # create a school at all does not, and that is the half worth guarding
-      # on every pull request.
+      # Who may bring a school into existence, the id it keeps for good, and
+      # the hostname rules. Half of it provisions a real schema, so it is given
+      # the database below.
       - name: Enrolling a school (the platform's own admin)
         run: python3 tests/test_platform.py
         working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
 
       - name: Cross-language end-to-end (Node client → Python cloud)
         run: bash tests/cross_lang.sh
         working-directory: cloud-python
 
-      # The half of the hosted office contract that needs no database: the map,
-      # the refusals, and the two different answers a screen can be given for a
-      # channel that is not there. The half that needs Postgres runs under
-      # `npm run test:online`, against a real one.
+      # The online school's tables ARE the desktop's tables, generated from
+      # them. Nothing regenerates that file automatically, so a table or a
+      # setting added to the desktop stays out of every school provisioned
+      # online until somebody notices — which is how `sync_conflicts` and three
+      # payment gateways' settings came to be missing from one and present in
+      # the other. Regenerating here and refusing a difference is what makes
+      # the two the same product rather than two that were once the same.
+      - name: The online school's schema is the desktop's
+        run: |
+          set -euo pipefail
+          node scripts/schema-to-postgres.mjs
+          if ! git diff --quiet -- cloud-python/schema/; then
+            echo "::error::cloud-python/schema/ is behind the desktop's own schema."
+            echo "Run: node scripts/schema-to-postgres.mjs — and commit the result."
+            git --no-pager diff --stat -- cloud-python/schema/
+            exit 1
+          fi
+
+      # ── The half that needs a database ────────────────────────────────
+      #
+      # Everything above this line runs without one. These do not, and until
+      # now they ran nowhere: each skips itself politely when DATABASE_URL is
+      # unset, which reads as a pass and is not one.
+      #
+      # What they cover is the part of the product a school meets first and an
+      # operator does by hand, once, with a head teacher waiting on the
+      # telephone. It is not the thing to be finding out about on the day.
+
+      - name: Enrolling a school, tenancy and the shared sign-in
+        run: python3 tests/test_saas.py
+        working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      # The school's own eighty-one tables, hosted: admissions, fees, marks,
+      # the ledger. The same handlers the desktop runs, over Postgres.
+      - name: A school's own work, hosted
+        run: python3 tests/test_school.py
+        working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      # The hosted office contract: the channel map, the refusals, and the
+      # school-shaped half that needs a database to answer at all.
       - name: The office application, hosted
         run: python3 tests/test_desk.py
         working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      - name: Dashboards, the timetable and the school day
+        run: python3 tests/test_dashboards.py
+        working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      # A parent paying a school, and the school's own gateway keys — never
+      # Nickland's. The two payment paths share no table and no reference, and
+      # this is where that is checked.
+      - name: A parent paying a school
+        run: python3 tests/test_payments.py
+        working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      # The subscription engine against the real repository as well as the
+      # in-memory one. It also parses schema-saas.sql and asserts every table's
+      # columns match its spec, so a column added to one and forgotten in the
+      # other fails here rather than raising a KeyError on a Tuesday.
+      - name: The billing engine
+        run: python3 tests/test_billing.py
+        working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      # Leases, device seats, activation and the renewal reminders — the whole
+      # of what stops a school that has stopped paying from pulling out the
+      # network cable and running forever.
+      - name: Offline licensing
+        run: python3 tests/test_licensing.py
+        working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      # The payment adapters against a stand-in provider. No database needed,
+      # and it was not running here either.
+      - name: The payment gateways
+        run: python3 tests/test_gateways.py
+        working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      # Read this one first if you are changing any of the above: it is
+      # somebody who has read the source trying to break it on purpose — one
+      # school reaching another's pupils, a school reaching the platform, a
+      # lease edited field by field, injection through the doors that take
+      # names, and whether the throttles hold.
+      - name: Trying to break it on purpose
+        run: python3 tests/test_attack.py
+        working-directory: cloud-python
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+
+      # The desktop's own server, speaking to Postgres instead of its SQLite
+      # file — which is what a school running hosted rather than on an office
+      # PC actually does. It skips itself without a database, so it too has
+      # never run here.
+      # The suite reads a school that already exists, so the schema is made
+      # first — with the same script a school's own hosted database is made
+      # with, which is the point: if this fails, provisioning a school fails.
+      - name: The school's host, against Postgres
+        run: |
+          set -euo pipefail
+          node host/provision.js
+          node test/host_postgres.js
+        env:
+          DATABASE_URL: ${{ env.EDUSOFT_TEST_DATABASE_URL }}
+          DATABASE_SCHEMA: school_host_ci
 
       # Last, and here rather than with the JavaScript above: it compares the
       # application's own channel list against the hosted service's map, and it
