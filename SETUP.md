@@ -16,6 +16,11 @@ design, and it is worth knowing before you start:
 minutes of settings. C is the one with moving parts, and only Nickland sets it
 up — once, for every school.
 
+> **Doing all of this from a browser, with no terminal and no checkout?**
+> [`docs/ENROLLING_A_SCHOOL.md`](docs/ENROLLING_A_SCHOOL.md) is the same ground
+> as C, walked through GitHub and the hosting dashboards instead, and it ends
+> with enrolling a school from the console rather than from a command line.
+
 ---
 
 ## Prerequisites
@@ -122,12 +127,29 @@ image builds the app out of `mobile/` as well.
 | `PORTAL_SECRET` | generated | Signs parent and teacher sessions. Never change it later: every signed-in parent and teacher is signed out the moment you do. |
 | `PLATFORM_ADMIN_KEY` | generated | **Nickland's own key** — the only credential that can bring a school into existence. Copy it out of the dashboard and keep it apart from the school keys every desktop holds. Under 24 characters it is refused and the platform routes stay off. |
 | `PORTAL_BASE_DOMAIN` | **set it** | The domain the schools live under: `edusoft.gh`. One or several, comma-separated. |
+| `LICENCE_SIGNING_KEY` | **set it** | Signs the offline licences every installed desktop runs on. **The service refuses to start without it**, on purpose: a platform that quietly serves every desktop unlicensed looks perfectly healthy and is not discovered until the revenue is. How to make one is below. |
 
 Generating one by hand, if you are not on Render:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
+
+**`LICENCE_SIGNING_KEY` is not one of those.** It is an Ed25519 private key,
+not a random string, and a random string in that variable stops the service
+starting with a message saying so. Make one in the service's own shell, where
+it is generated on the machine that will use it and never travels:
+
+```bash
+python3 -c "from app.billing.licence import generate_key; print(generate_key())"
+```
+
+Anybody holding it can mint a licence granting any school permanent access on
+any machine for ever, and can forge document seals. Keep it out of the
+repository, out of the database and out of your shell history. Without a
+terminal at all, see
+[`docs/ENROLLING_A_SCHOOL.md`](docs/ENROLLING_A_SCHOOL.md), which does the whole
+of this from a browser.
 
 **Read the first five lines of the log after it starts.** They are there to be
 read, and each one is something that has been got wrong on a deploy and found

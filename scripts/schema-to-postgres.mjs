@@ -227,6 +227,26 @@ function quote(v) {
   return `'${String(v).replace(/'/g, "''")}'`;
 }
 
+// A seeded row's `created_at` is the moment the GENERATOR ran, which is not a
+// fact about anything. Written out, it made this file differ from itself on
+// every regeneration — and a file that always differs is a file whose real
+// differences nobody can see. That is how the `sync_conflicts` table and three
+// payment gateways' settings came to be missing from a school provisioned
+// online while being present on every desktop.
+//
+// So a timestamp column that the table fills in for itself is left out of the
+// INSERT. Postgres then writes the moment the SCHOOL was provisioned, which is
+// both reproducible here and truer there.
+function selfFilling(db, table) {
+  try {
+    return new Set(db.prepare(`PRAGMA table_info(${table})`).all()
+      .filter(c => /^(created_at|updated_at)$/i.test(c.name) && c.dflt_value !== null)
+      .map(c => c.name));
+  } catch (_) {
+    return new Set();
+  }
+}
+
 function renderSeed(db) {
   const lines = [];
   let rows = 0;
@@ -234,7 +254,8 @@ function renderSeed(db) {
     let all;
     try { all = db.prepare(`SELECT * FROM ${table}`).all(); } catch (_) { continue; }
     if (!all.length) continue;
-    const cols = Object.keys(all[0]);
+    const skip = selfFilling(db, table);
+    const cols = Object.keys(all[0]).filter(c => !skip.has(c));
     lines.push(`-- ${table} (${all.length})`);
     for (const row of all) {
       lines.push(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(c => quote(row[c])).join(', ')}) ON CONFLICT DO NOTHING;`);

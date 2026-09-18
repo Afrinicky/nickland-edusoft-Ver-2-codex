@@ -8,19 +8,19 @@
 -- exactly the designations, classes, subjects, grading bands and settings a
 -- school provisioned on a desktop does.
 --
--- 376 rows across 10 tables.
+-- 391 rows across 10 tables.
 
 -- designations (10)
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (1, 'Proprietor', 'Overall owner/director of the school. Full access to all modules.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (2, 'Super Admin', 'Overall authority over the system. Manages users, access, settings and every module.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (3, 'Head Teacher', 'Academic and administrative head. Full access except user management.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (4, 'Class Teacher', 'Assigned to a specific class. Access to Academics and Canteen.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (5, 'Subject Teacher', 'Teaches specific subjects. Access to Academics and Canteen.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (6, 'Accountant', 'Manages financial records. Access to Finance, Fees, and Payroll.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (7, 'Secretary', 'Administrative support. Access to Students, Notifications, and Reports.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (8, 'Cook', 'Canteen staff. Access to Canteen only.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (9, 'Security', 'Security staff. Access to Staff attendance clock-in only.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
-INSERT INTO designations (id, name, description, is_system, created_at) VALUES (10, 'Cleaner', 'Support staff. Minimal access.', 1, '2026-09-06 14:54:38') ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (1, 'Proprietor', 'Overall owner/director of the school. Full access to all modules.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (2, 'Super Admin', 'Overall authority over the system. Manages users, access, settings and every module.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (3, 'Head Teacher', 'Academic and administrative head. Full access except user management.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (4, 'Class Teacher', 'Assigned to a specific class. Access to Academics and Canteen.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (5, 'Subject Teacher', 'Teaches specific subjects. Access to Academics and Canteen.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (6, 'Accountant', 'Manages financial records. Access to Finance, Fees, and Payroll.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (7, 'Secretary', 'Administrative support. Access to Students, Notifications, and Reports.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (8, 'Cook', 'Canteen staff. Access to Canteen only.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (9, 'Security', 'Security staff. Access to Staff attendance clock-in only.', 1) ON CONFLICT DO NOTHING;
+INSERT INTO designations (id, name, description, is_system) VALUES (10, 'Cleaner', 'Support staff. Minimal access.', 1) ON CONFLICT DO NOTHING;
 SELECT setval(pg_get_serial_sequence('designations', 'id'), (SELECT COALESCE(MAX(id), 1) FROM designations));
 
 -- designation_permissions (100)
@@ -289,7 +289,7 @@ INSERT INTO notification_templates (id, name, channel, body, category, is_active
 INSERT INTO notification_templates (id, name, channel, body, category, is_active) VALUES (5, 'Report Card Ready', 'sms', 'Dear parent, the End of Term Report for {student_name} is ready. Please collect from the school. -{school_name}', 'academic', 1) ON CONFLICT DO NOTHING;
 SELECT setval(pg_get_serial_sequence('notification_templates', 'id'), (SELECT COALESCE(MAX(id), 1) FROM notification_templates));
 
--- settings (124)
+-- settings (139)
 INSERT INTO settings (key, value, category, description) VALUES ('vacation_date', '', 'signatures', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('reopening_date', '', 'signatures', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('current_exam_title', '', 'signatures', NULL) ON CONFLICT DO NOTHING;
@@ -320,6 +320,21 @@ INSERT INTO settings (key, value, category, description) VALUES ('paystack_secre
 INSERT INTO settings (key, value, category, description) VALUES ('paystack_public_key', '', 'payments', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('paystack_base_url', 'https://api.paystack.co', 'payments', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('paystack_callback_url', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('flutterwave_secret_key', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('flutterwave_public_key', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('flutterwave_secret_hash', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('flutterwave_base_url', 'https://api.flutterwave.com/v3', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('flutterwave_callback_url', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('hubtel_client_id', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('hubtel_client_secret', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('hubtel_merchant_account', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('hubtel_base_url', 'https://payproxyapi.hubtel.com', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('hubtel_status_url', 'https://api-txnstatus.hubtel.com', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('hubtel_callback_url', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('expresspay_merchant_id', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('expresspay_api_key', '', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('expresspay_base_url', 'https://expresspaygh.com/api', 'payments', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO settings (key, value, category, description) VALUES ('expresspay_callback_url', '', 'payments', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('cloud_sync_enabled', 'false', 'cloud', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('cloud_base_url', '', 'cloud', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('school_api_key', '', 'cloud', NULL) ON CONFLICT DO NOTHING;

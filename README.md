@@ -125,6 +125,12 @@ Step by step, from an empty PC to a school running online:
 **[`SETUP.md`](SETUP.md)**. Three parts, and they are independent — a school
 can run on the first alone, forever, with no internet at all.
 
+**Enrolling schools onto the platform**, using nothing but GitHub and a
+browser — no laptop, no terminal, no checkout:
+**[`docs/ENROLLING_A_SCHOOL.md`](docs/ENROLLING_A_SCHOOL.md)**. Standing the
+platform up is done once; enrolling each school after that is two minutes in
+the Superadmin console.
+
 ## Quick Start (Development)
 
 ```bash

@@ -1,0 +1,97 @@
+# Nickland Edusoft — make a licence signing key without a terminal.
+#
+# `LICENCE_SIGNING_KEY` is an Ed25519 private key, and the service refuses to
+# start without one. It is not a random string: Render's "Generate" button
+# produces something the service will reject, with a message saying so.
+#
+# THE BETTER WAY IS NOT THIS ONE. Open the service's own Shell tab on Render
+# and run:
+#
+#     python3 -c "from app.billing.licence import generate_key; print(generate_key())"
+#
+# The key is then made on the machine that will use it and never travels.
+#
+# This workflow is for a host with no shell. It writes the key into a build
+# artifact rather than the log, because a log is kept for ninety days and is
+# read by everyone with access to this repository — but an artifact is read by
+# them too. So: run it, download it, paste the key into the service, and press
+# the bin icon on the artifact. It expires by itself after a day.
+#
+# Anybody holding this key can mint a licence granting any school permanent
+# full access on any machine for ever, and can forge the seals that make a
+# school's receipts verifiable. Treat it as the thing being protected, because
+# it is.
+name: Make a licence signing key
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "yes" to confirm you will delete the artifact afterwards'
+        required: true
+        default: 'no'
+
+permissions:
+  contents: read
+
+jobs:
+  key:
+    name: Generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event.inputs.confirm == 'yes'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the crypto library
+        run: pip install 'cryptography>=41'
+
+      # The key goes to a file, never to stdout. The log gets the public half,
+      # which is safe to print and is the only way to tell two keys apart
+      # later — for instance to check which one a service is actually using.
+      - name: Generate
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "cloud-python")
+          from app.billing.licence import generate_key
+          import base64
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric import ed25519
+
+          key = generate_key()
+          raw = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
+          public = ed25519.Ed25519PrivateKey.from_private_bytes(raw).public_key()
+          fingerprint = base64.urlsafe_b64encode(public.public_bytes(
+              serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+          ).decode().rstrip("=")
+
+          with open("out/LICENCE_SIGNING_KEY.txt", "w") as fh:
+              fh.write(key + "\n")
+          print("A key was generated. Its PUBLIC half — safe to print, and the")
+          print("way to tell later which key a service is using:")
+          print("  " + fingerprint)
+          PY
+
+      - name: Upload it
+        uses: actions/upload-artifact@v4
+        with:
+          name: licence-signing-key
+          path: out/LICENCE_SIGNING_KEY.txt
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: What to do with it
+        run: |
+          echo "::notice::Download the 'licence-signing-key' artifact from this run,"
+          echo "::notice::set its contents as LICENCE_SIGNING_KEY on the service, then"
+          echo "::notice::DELETE the artifact from this page. It expires in a day regardless."
