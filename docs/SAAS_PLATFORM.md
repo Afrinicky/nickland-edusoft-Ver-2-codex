@@ -757,7 +757,7 @@ Daily is right. Running it twice in a minute does nothing the second time.
 | `PLATFORM_PAYSTACK_SECRET` | fallback | Nickland's gateway key — **not** a school's. Superseded by a gateway configured in the console |
 | `PLATFORM_PAYSTACK_PUBLIC` | fallback | the publishable key the browser needs |
 | `BILLING_CRON_SECRET` | for scheduling | ≥ 16 characters, or the cron routes are not there |
-| `LICENCE_SIGNING_KEY` | for offline licensing | Ed25519 private key, base64. Generated and stored in `platform_settings` if unset — which works, and is weaker, and the boot report says which |
+| `LICENCE_SIGNING_KEY` | **yes** | Ed25519 private key, base64. **The service refuses to start without it** — see §10g, which is the whole of why. `ALLOW_UNMANAGED_LICENCE_KEY=1` is the only way to run without one, and is for tests |
 
 Everything else — currency, tax, trial rules, grace periods, what a suspended
 school may do, which pupils are billable — is a **row** in `platform_settings`,
