@@ -525,7 +525,7 @@ jobs:
     name: Windows installer
     needs: [test, web]
     # Only build the installer for the release branches and version tags.
-    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/project-thread-2fypox'
     runs-on: windows-latest
     timeout-minutes: 30
 

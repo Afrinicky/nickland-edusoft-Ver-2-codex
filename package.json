@@ -71,20 +71,7 @@
       "output": "dist-app",
       "buildResources": "resources"
     },
-    "//afterPack": [
-      "Flips the Electron fuses before signing. ASAR integrity validation plus",
-      "asar-only loading mean a build whose JavaScript has been edited will not",
-      "start, and flipping the fuses back breaks the code signature so the OS",
-      "refuses the binary. RunAsNode, --inspect and NODE_OPTIONS are turned off",
-      "because each is a way to run our own binary as a debugger against itself.",
-      "See scripts/fuses.mjs."
-    ],
     "afterPack": "scripts/fuses.mjs",
-    "//asar": [
-      "Explicit, because OnlyLoadAppFromAsar has nothing to enforce without it:",
-      "an unpacked app/ directory beside the asar is precisely the fallback that",
-      "fuse exists to close."
-    ],
     "asar": true,
     "files": [
       "electron/**/*",
