@@ -21,7 +21,10 @@
 //     Without it, the above is trivially bypassed: Electron falls back to an
 //     unpacked `app/` directory beside the asar, and an attacker unpacks the
 //     asar, edits it, and deletes the asar. With it, there is no fallback.
-//     These two are only worth having TOGETHER.
+//     These two are only worth having TOGETHER — which is why package.json
+//     sets `"asar": true` explicitly in its build block rather than leaning on
+//     electron-builder's default: this fuse has nothing to enforce without it,
+//     and a default is the kind of thing that changes between major versions.
 //
 //   RunAsNode / EnableNodeCliInspectArguments / EnableNodeOptionsEnvironmentVariable
 //     Each is a way to start our own binary as a plain Node process, or attach
@@ -34,7 +37,10 @@
 //     no reason to leave it off.
 //
 // Run from `npm run build` (see package.json), after electron-builder has
-// produced the unpacked app and before it signs.
+// produced the unpacked app and before it signs: the build block's `afterPack`
+// names this file. That block is electron-builder's own configuration object
+// and it is schema-validated, so it rejects any key it does not recognise —
+// including a `//comment` one. Notes about it belong here, not in it.
 
 import { flipFuses, FuseVersion, FuseV1Options } from '@electron/fuses';
 
