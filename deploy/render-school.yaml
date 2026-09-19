@@ -1,0 +1,96 @@
+# Nickland Edusoft — one school's host, on Render.
+# Copyright © 2026 Nickland Sales. All rights reserved.
+#
+# A TEMPLATE. Do not point Render at this file: it describes a school called
+# SCHOOL-SLUG, which is nobody. Make a school's own copy of it with
+#
+#   npm run add-school -- --slug ave-maria --name "Ave Maria Preparatory School"
+#
+# which writes deploy/schools/ave-maria.yaml and tells you what to do next.
+#
+# ── Why a file per school ───────────────────────────────────────────────────
+#
+# One blueprint file can hold every school, and Render would create each new
+# one on a push. It would also re-deploy all of them for a change meant for
+# one, and a typo in the file would be a typo in every school at once. A file
+# per school is a blueprint instance per school: deployed, suspended, restored
+# and deleted on its own, on its own day, without the others noticing.
+#
+# All of them live in ONE Render workspace, which is what the bill is attached
+# to — one subscription, however many schools.
+#
+# ── What each school does NOT share ─────────────────────────────────────────
+#
+#   its service     one process serves one school; see electron/ipc/_registry.js
+#   its disk        report cards, receipts, photographs
+#   its schema      DATABASE_SCHEMA below — schools may share a Neon database,
+#                   a schema each, because every connection pins its own
+#   its secret      EDUSOFT_SECRET_KEY, generated per school
+#   its tenant      enrolled on the platform; see docs/ENROLLING_A_SCHOOL.md
+#
+# Everything else is the root render.yaml, which is the one that gets changed
+# when the way a host is built changes. test/host_blueprint.js fails if the two
+# drift apart on anything load-bearing.
+
+services:
+  - type: web
+    name: edusoft-SCHOOL-SLUG
+    runtime: node
+    plan: starter          # the free plan sleeps, and a sleeping school office is not a school office
+
+    # SAME REGION AS THE DATABASE. Measured: a screen takes about 100ms with
+    # Neon in the same region and over two seconds across continents.
+    region: frankfurt
+
+    buildCommand: >-
+      npm ci --no-audit --no-fund &&
+      npm ci --no-audit --no-fund --prefix mobile &&
+      npm install --no-save puppeteer &&
+      npm run build:web &&
+      npm run build:desk
+
+    # Creates this school's 82 tables the first time, and does nothing on every
+    # deploy after. Without it the host answers every request with
+    # `relation "settings" does not exist` and the deploy times out.
+    preDeployCommand: npm run host:provision -- --if-empty
+
+    startCommand: node host/server.js
+
+    healthCheckPath: /api/v1/desk/info
+
+    disk:
+      name: edusoft-SCHOOL-SLUG-files
+      mountPath: /var/data
+      sizeGB: 5
+
+    envVars:
+      - key: EDUSOFT_DATA_DIR
+        value: /var/data
+
+      # Set in the dashboard, not here — a database password does not belong in
+      # a repository. Either Neon string works; the host normalises a pooled
+      # one to the direct endpoint and says so in its log.
+      - key: DATABASE_URL
+        sync: false
+
+      # THIS SCHOOL'S schema, and nothing else reaches it. Schools can share
+      # one Neon database this way.
+      - key: DATABASE_SCHEMA
+        value: SCHOOL_SCHEMA
+
+      # Per school. Encrypts this school's stored backup credentials.
+      - key: EDUSOFT_SECRET_KEY
+        generateValue: true
+
+      - key: DATABASE_POOL
+        value: "3"
+
+      - key: DATABASE_CACHE_TTL_MS
+        value: "5000"
+
+      - key: NODE_VERSION
+        value: "22"
+
+    # One instance, deliberately: the read cache is exact only because this
+    # host is the only thing writing to this school. See host/db/cache.js.
+    numInstances: 1
