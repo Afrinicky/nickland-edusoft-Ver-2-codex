@@ -43,6 +43,16 @@ services:
       npm run build:web &&
       npm run build:desk
 
+    # Before every deploy, and a no-op after the first.
+    #
+    # The school's tables have to exist before the host answers anything — an
+    # unprovisioned database fails every request with `relation "settings"
+    # does not exist`, the health check with them, and the deploy times out.
+    # `--if-empty` looks, and does nothing at all when the school is already
+    # there, so this is safe to leave on for ever. It applies the schema
+    # GENERATED from the desktop's own, which is the only definition there is.
+    preDeployCommand: npm run host:provision -- --if-empty
+
     startCommand: node host/server.js
 
     healthCheckPath: /api/v1/desk/info

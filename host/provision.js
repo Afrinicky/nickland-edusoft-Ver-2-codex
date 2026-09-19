@@ -6,6 +6,9 @@
 //
 //   DATABASE_URL=postgresql://... npm run host:provision
 //
+// --if-empty makes it a no-op against a database that already holds the
+// school, which is what lets Render run it before every deploy.
+//
 // It applies the schema the repository ALREADY generates from the desktop's
 // own — scripts/schema-to-postgres.mjs builds the offline database in memory,
 // runs every migration exactly as a school's PC runs them, and reads the
@@ -39,6 +42,12 @@ const CONNECTION = process.env.DATABASE_URL;
 const SCHEMA = value('--schema', process.env.DATABASE_SCHEMA || 'public');
 const FORCE = has('--force');
 const SKIP_SEED = has('--no-seed');
+
+// For running this on every deploy: provision an empty database, and say
+// nothing and change nothing when the school is already there. Without it,
+// finding tables is a failure — which is right for somebody typing the command
+// by hand, and wrong for a pre-deploy step that runs before every boot.
+const IF_EMPTY = has('--if-empty');
 
 function fail(message) {
   console.error('\n' + message + '\n');
@@ -99,10 +108,15 @@ async function main() {
 
     const existing = await client.query(
       'SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = $1', [SCHEMA]);
+    if (existing.rows[0].n > 0 && !FORCE && IF_EMPTY) {
+      console.log(`· The school is already there — ${existing.rows[0].n} tables in schema "${SCHEMA}". Nothing to do.`);
+      return;
+    }
     if (existing.rows[0].n > 0 && !FORCE) {
       fail(`That database already holds ${existing.rows[0].n} tables in schema "${SCHEMA}".\n` +
            'Provisioning again would fail part-way through and leave it half-built.\n' +
-           'If this is a fresh start and the data can go, pass --force.');
+           'If this is a fresh start and the data can go, pass --force.\n' +
+           'If this is a deploy step that must not care either way, pass --if-empty.');
     }
 
     if (existing.rows[0].n > 0 && FORCE) {

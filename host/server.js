@@ -107,6 +107,31 @@ function start() {
       db._getResourcePath = getResourcePath;
       log('info', 'host', 'School database: Postgres' +
         (process.env.DATABASE_SCHEMA ? ` (schema ${process.env.DATABASE_SCHEMA})` : ''));
+
+      // Is the school actually in there?
+      //
+      // An unprovisioned database answers every single request with `relation
+      // "settings" does not exist` — the health check with them — and the log
+      // fills with that line for the eighteen minutes a host platform waits
+      // before giving up. It is worth one query at start-up to say the real
+      // thing once, at the top, where somebody will read it.
+      const schemaName = process.env.DATABASE_SCHEMA || null;
+      const tables = db.prepare(
+        `SELECT count(*) AS n FROM information_schema.tables
+          WHERE table_schema = COALESCE(?, current_schema())`).get(schemaName).n;
+      if (tables > 0) {
+        log('info', 'host', `The school's tables are there: ${tables}.`);
+      } else {
+        log('error', 'host',
+          `There are NO TABLES in schema "${schemaName || 'public'}" — this database has not been ` +
+          'provisioned, so every request will fail with `relation … does not exist`.');
+        log('error', 'host',
+          'Create the school\'s tables with:  DATABASE_URL=… DATABASE_SCHEMA=' +
+          `${schemaName || 'school'} npm run host:provision`);
+        log('error', 'host',
+          'On Render that runs itself — `preDeployCommand` in render.yaml — so a deploy from ' +
+          'before that line was added is the usual reason to be reading this.');
+      }
     } else {
       db = initDatabase(DATA_DIR, getResourcePath);
       log('info', 'host', 'School database: local SQLite');
