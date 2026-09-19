@@ -162,10 +162,29 @@ the files that go with them, and it must survive a restart.
 
 ## 4. First run
 
-1. Open `https://your-service.onrender.com/desk`.
-2. It will ask you to create the first administrator, exactly as the installer
-   does on a new machine.
-3. Sign in. Set the school's name, colours and crest under **Settings**.
+**The first administrator is created from a terminal, not from the browser.**
+
+`auth:bootstrap` asks for no credentials — on a desktop, the person running it
+is already sitting at the machine — so the browser is refused it
+(`electron/server/desk_api.js`). Over the internet that proof has to come from
+somewhere else, and running a command on the host is it:
+
+```bash
+# Render → the service → Shell, or anywhere with the same DATABASE_URL
+npm run host:create-admin -- --username nicholas --name "Nicholas Afrifa"
+```
+
+It asks for a password without echoing it, or takes `--generate` and prints a
+strong one once. It calls the application's own bootstrap handler, so the rules
+are the same ones the installer's first screen applies: Super Admin, the same
+bcrypt hash the sign-in checks, and a flat refusal once any account exists.
+
+Then:
+
+1. Open `https://your-service.onrender.com/desk` and sign in.
+2. Set the school's name, colours and crest under **Settings**.
+3. Add everybody else under **Settings → Users & Access**. The command above is
+   only for the very first account.
 4. Open `https://your-service.onrender.com/` to see the parents' and teachers'
    app against the same school.
 
