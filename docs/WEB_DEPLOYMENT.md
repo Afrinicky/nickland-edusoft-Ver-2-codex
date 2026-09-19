@@ -216,6 +216,36 @@ whichever school was provisioned first.
 What each school still needs of its own: a service, a disk (report cards and
 photographs), an `EDUSOFT_SECRET_KEY`, and its own tenant on the platform.
 
+### Adding one
+
+```bash
+npm run add-school -- --slug ave-maria --name "Ave Maria Preparatory School"
+```
+
+That writes `deploy/schools/ave-maria.yaml` from `deploy/render-school.yaml`
+— the service, its disk and its schema, all named for the school — and prints
+the seven steps that follow it, in order. Commit it, then **Render → New →
+Blueprint → this repository → Blueprint Path: `deploy/schools/ave-maria.yaml`**,
+in the same workspace as everything else.
+
+A file per school rather than one file holding all of them: a blueprint
+instance per school, so one is deployed, suspended or deleted on its own day
+without the others noticing, and a typo is one school's problem.
+
+`test/host_blueprint.js` fails if the template and the root `render.yaml` ever
+disagree about anything load-bearing — the pre-deploy that creates the tables,
+the health check, the single instance — so school number seven cannot quietly
+deploy differently from school number six.
+
+### One workspace, one subscription
+
+Render bills the **workspace**: one plan, one payment method, one invoice for
+every project, service, cron job and disk inside it. Projects are folders. So
+the platform, every school's host and the three billing crons belong in one
+workspace, and adding a school adds a line to that one bill rather than a
+second subscription. Check the workspace selector before clicking **Apply** on
+a blueprint — that is the only way to split the bill by accident.
+
 ---
 
 ## 5. The licence clock
@@ -358,6 +388,7 @@ TTL is safe with one instance and is not safe with two. The note in
 ```bash
 node test/host_dialect.js                       # SQL translation, no database
 node test/host_connection.js                    # which endpoint it dials, no database
+node test/host_blueprint.js                     # the school blueprints, and their drift
 
 DATABASE_URL=… DATABASE_SCHEMA=school \
   npm run host:backup                           # a restorable copy, and it says what it wrote
