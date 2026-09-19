@@ -20,16 +20,19 @@ const ck = (n, c, got) => {
 };
 
 const POOLED = 'postgresql://school:s3cr3t@ep-quiet-term-a1b2c3-pooler.eu-central-1.aws.neon.tech/edusoft?sslmode=require';
-const DIRECT = 'postgresql://school:s3cr3t@ep-quiet-term-a1b2c3.eu-central-1.aws.neon.tech/edusoft?sslmode=require';
+const DIRECT = 'postgresql://school:s3cr3t@ep-quiet-term-a1b2c3.eu-central-1.aws.neon.tech/edusoft?sslmode=verify-full';
+// The same pooled string once the sslmode has been made explicit, which
+// happens to every Neon string whether or not a schema is pinned.
+const POOLED_STRICT = POOLED.replace('sslmode=require', 'sslmode=verify-full');
 
 // == The failure this exists for ==
 {
   const r = conn.resolveConnection(POOLED, { schema: 'school' });
   ck('a pooled Neon string becomes the direct endpoint when a schema is pinned',
     r.connectionString === DIRECT, r.connectionString);
-  ck('...and the host says why', r.notes.length === 1 && /pooled/.test(r.notes[0]), JSON.stringify(r.notes));
+  ck('...and the host says why', r.notes.some(n => /pooled/.test(n)), JSON.stringify(r.notes));
   ck('...and nothing else about the string is touched',
-    r.connectionString.endsWith('/edusoft?sslmode=require') &&
+    r.connectionString.endsWith('/edusoft?sslmode=verify-full') &&
     r.connectionString.includes('school:s3cr3t@'), r.connectionString);
 }
 
@@ -37,18 +40,18 @@ const DIRECT = 'postgresql://school:s3cr3t@ep-quiet-term-a1b2c3.eu-central-1.aws
 {
   const r = conn.resolveConnection(POOLED, { schema: null });
   ck('without a schema the pooled endpoint is kept — pooling is not the problem',
-    r.connectionString === POOLED && r.notes.length === 0, r.connectionString);
+    r.connectionString === POOLED_STRICT && r.pooled === true, r.connectionString);
 }
 
 {
   const r = conn.resolveConnection(POOLED, { schema: 'public' });
-  ck('schema "public" needs no pinning, so the pooled endpoint is kept',
-    r.connectionString === POOLED && r.notes.length === 0, r.connectionString);
+  ck('schema "public" needs no search path, so the pooled endpoint is kept',
+    r.connectionString === POOLED_STRICT && r.pooled === true, r.connectionString);
 }
 
 {
   const r = conn.resolveConnection(DIRECT, { schema: 'school' });
-  ck('a direct string is already right and is passed through unchanged',
+  ck('a direct string that is already strict is passed through unchanged',
     r.connectionString === DIRECT && r.notes.length === 0, r.connectionString);
 }
 
@@ -84,11 +87,38 @@ const DIRECT = 'postgresql://school:s3cr3t@ep-quiet-term-a1b2c3.eu-central-1.aws
     r.connectionString === DIRECT + '&application_name=edusoft', r.connectionString);
 }
 
+// == sslmode, said plainly ==
+{
+  const r = conn.resolveConnection(POOLED, { schema: 'school' });
+  ck('sslmode=require becomes verify-full on Neon — what the driver does today',
+    /sslmode=verify-full/.test(r.connectionString) && !/sslmode=require/.test(r.connectionString),
+    r.connectionString);
+  ck('...and that is said too', r.notes.some(n => /verify-full/.test(n)), JSON.stringify(r.notes));
+}
+
+{
+  const local = 'postgresql://postgres:postgres@localhost:5432/edusoft?sslmode=require';
+  ck('a database that is not Neon keeps the sslmode it was given',
+    conn.resolveConnection(local, { schema: 'school' }).connectionString === local);
+}
+
+{
+  const chosen = 'postgresql://school:s3cr3t@ep-quiet-term-a1b2c3.eu-central-1.aws.neon.tech/edusoft?sslmode=verify-ca';
+  ck('an sslmode the operator chose deliberately is left alone',
+    conn.resolveConnection(chosen, { schema: 'school' }).connectionString === chosen,
+    conn.resolveConnection(chosen, { schema: 'school' }).connectionString);
+}
+
+ck('pinning only ever touches sslmode=require',
+  conn.pinSsl('postgresql://u:p@ep-x.eu-central-1.aws.neon.tech/db').pinned === false &&
+  conn.pinSsl('postgresql://u:p@ep-x.eu-central-1.aws.neon.tech/db?sslmode=disable').pinned === false &&
+  conn.pinSsl('postgresql://u:p@ep-x.eu-central-1.aws.neon.tech/db?sslmode=require').pinned === true);
+
 // == The escape hatch ==
 {
   const r = conn.resolveConnection(POOLED, { schema: 'school', keepPooled: true });
-  ck('DATABASE_POOLED=keep leaves the string alone',
-    r.connectionString === POOLED, r.connectionString);
+  ck('DATABASE_POOLED=keep leaves the endpoint alone',
+    r.connectionString === POOLED_STRICT && r.pooled === true, r.connectionString);
   ck('...and warns that the schema must then be the role\'s default',
     r.notes.some(n => /default/.test(n)), JSON.stringify(r.notes));
 }

@@ -86,6 +86,38 @@ function stripOptions(connectionString) {
   return { connectionString: join(p), stripped: true };
 }
 
+// ── `sslmode=require` does not mean what it looks like ──────────────────────
+//
+// node-postgres currently treats `require` as `verify-full`: the certificate
+// is checked and the host name with it. Its own warning says that in the next
+// major version `require` will take libpq's meaning instead — encrypted, but
+// nobody checked who answered — which on a school's records is a downgrade
+// worth nothing and risking everything.
+//
+// So for Neon, where the certificate is a real public one that verifies today,
+// this says the strict thing outright. Nothing changes now; what changes is
+// that an upgrade cannot quietly loosen it. Any other sslmode the operator
+// chose is theirs and is left alone, as is any host that is not Neon.
+function pinSsl(connectionString) {
+  const p = split(connectionString);
+  if (!p || !/(^|\.)neon\.tech(:|$)/i.test(p.hostport)) {
+    return { connectionString: String(connectionString || ''), pinned: false };
+  }
+  const q = p.rest.indexOf('?');
+  if (q < 0) return { connectionString: String(connectionString), pinned: false };
+  const head = p.rest.slice(0, q + 1);
+  const [query, ...hash] = p.rest.slice(q + 1).split('#');
+  let pinned = false;
+  const pairs = query.split('&').map((pair) => {
+    if (!/^sslmode=require$/i.test(pair)) return pair;
+    pinned = true;
+    return 'sslmode=verify-full';
+  });
+  if (!pinned) return { connectionString: String(connectionString), pinned: false };
+  p.rest = head + pairs.join('&') + (hash.length ? '#' + hash.join('#') : '');
+  return { connectionString: join(p), pinned: true };
+}
+
 // An identifier the school chose, said safely. `school` passes through as it
 // is; anything else is quoted rather than refused, because a schema name is
 // configuration and not a place to be clever.
@@ -113,6 +145,17 @@ function resolveConnection(connectionString, options = {}) {
     }
   }
 
+  {
+    const t = pinSsl(out);
+    out = t.connectionString;
+    if (t.pinned) {
+      notes.push(
+        'Asking for sslmode=verify-full rather than require. It is what the driver does ' +
+        'today; saying it means a future version cannot quietly stop checking who answered.'
+      );
+    }
+  }
+
   if (schema && isPooled(out) && !options.keepPooled) {
     out = unpooled(out);
     notes.push(
@@ -137,4 +180,4 @@ function keepPooledFromEnv(env = process.env) {
   return v === 'keep' || v === '1' || v === 'true' || v === 'yes';
 }
 
-module.exports = { resolveConnection, isPooled, unpooled, stripOptions, quoteIdent, keepPooledFromEnv };
+module.exports = { resolveConnection, isPooled, unpooled, stripOptions, pinSsl, quoteIdent, keepPooledFromEnv };

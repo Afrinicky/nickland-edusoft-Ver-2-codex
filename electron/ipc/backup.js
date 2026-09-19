@@ -100,6 +100,21 @@ async function snapshotDatabase(db, userDataPath, destPath) {
 // Core backup routine — used by the explicit "Create Backup" button and by the
 // automatic safety backups taken before restore / factory reset.
 async function createBackup(db, userDataPath, { label } = {}) {
+  // A backup here IS the SQLite file, zipped. The web host has no such file —
+  // its school is in Postgres (host/db/neon.js) — so rather than write a zip
+  // around a file that is not there, say so and name the thing that does work.
+  // The office PC never reaches this line.
+  if (db && db.name === 'neon') {
+    return {
+      ok: false,
+      error: 'This school\'s records are in Postgres, not in a file on this server, so this ' +
+             'kind of backup cannot be made here. On the server: `npm run host:backup` writes ' +
+             'a restorable copy of the whole school. Point-in-time recovery is your database ' +
+             'provider\'s own (Neon: Restore). The files — report cards, receipts, photographs — ' +
+             'are on the host\'s disk and are copied from there.',
+    };
+  }
+
   let PizZip;
   try {
     PizZip = require('pizzip');
