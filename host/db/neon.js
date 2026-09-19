@@ -22,6 +22,7 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const dialect = require('./dialect');
 const { createCache } = require('./cache');
+const { resolveConnection, keepPooledFromEnv } = require('./connection');
 
 // 32MB. A class register is kilobytes; this is sized for the largest thing a
 // school actually reads at once — the students sheet — with room to spare, and
@@ -29,6 +30,18 @@ const { createCache } = require('./cache');
 const DATA_BYTES = 32 * 1024 * 1024;
 
 function openNeonDatabase(connectionString, options = {}) {
+  // The school's schema has to be pinned on every connection, and Neon's
+  // POOLED endpoint will not carry it — see host/db/connection.js. The string
+  // the operator was given is accepted as it is and normalised here, rather
+  // than made their problem.
+  const resolved = resolveConnection(connectionString, {
+    schema: options.schema,
+    keepPooled: options.keepPooled !== undefined ? options.keepPooled : keepPooledFromEnv(),
+  });
+  const notice = typeof options.onNotice === 'function' ? options.onNotice : () => {};
+  resolved.notes.forEach(notice);
+  connectionString = resolved.connectionString;
+
   const control = new SharedArrayBuffer(16);
   const data = new SharedArrayBuffer(DATA_BYTES);
   const ctrl = new Int32Array(control);
