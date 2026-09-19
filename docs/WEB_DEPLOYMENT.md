@@ -193,6 +193,31 @@ as an installed app.
 
 ---
 
+## 4b. More than one school
+
+One Render **project** holds all of it — the platform service and every
+school's host, one bill, one dashboard. One **service** cannot: a process
+registers the application's channels once, against one database handle
+(`electron/ipc/_registry.js`), so one host is one school and always will be.
+Two schools means two services.
+
+The **database** is the part that shares well. Several schools can live in one
+Neon project, a schema each — `DATABASE_SCHEMA=ave_maria`,
+`DATABASE_SCHEMA=st_johns` — because every connection pins its own schema
+(`host/db/worker.js`) and nothing a host reads or writes can reach past it.
+That is how the platform holds its schools too.
+
+The one thing that does not share is the role's default search path, so
+`host/provision.js` sets it for the first school in a database and leaves it
+alone for every school after, and says which it did. In psql, say
+`SET search_path TO ave_maria;` before you look, or you will be reading
+whichever school was provisioned first.
+
+What each school still needs of its own: a service, a disk (report cards and
+photographs), an `EDUSOFT_SECRET_KEY`, and its own tenant on the platform.
+
+---
+
 ## 5. The licence clock
 
 **A new database has 30 days.** `electron/licence/index.js` gives an

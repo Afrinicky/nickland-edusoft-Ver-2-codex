@@ -126,23 +126,43 @@ async function main() {
       await client.query(`SET search_path TO ${schemaIdent}`);
     }
 
-    // Belt and braces, and it costs one statement.
+    // Belt and braces, and it costs one statement — but only when this
+    // database holds ONE school.
     //
-    // This makes the school's schema the connecting role's DEFAULT search
-    // path, which Postgres applies to every new session server-side. The host
-    // sets it per connection anyway, but a default that lives in the database
-    // also covers psql, a backup tool, and anyone who insists on the pooled
-    // endpoint — where a session setting cannot survive. Best-effort: a role
-    // that may not alter itself is not a reason to stop provisioning.
-    try {
-      const who = await client.query('SELECT current_user AS role, current_database() AS db');
-      await client.query(
-        `ALTER ROLE ${quoteIdent(who.rows[0].role)} IN DATABASE ${quoteIdent(who.rows[0].db)} ` +
-        `SET search_path TO ${schemaIdent}`);
-      console.log(`· "${SCHEMA}" is now the default search path for ${who.rows[0].role}.`);
-    } catch (e) {
-      console.log('· Could not set the role\'s default search path (' + ((e && e.message) || e) + ').');
-      console.log('  Not fatal: the host pins the schema on each connection itself.');
+    // It makes the school's schema the connecting role's DEFAULT search path,
+    // which Postgres applies to every new session server-side: psql, a backup
+    // tool, and the pooled endpoint, where a session setting cannot survive.
+    //
+    // Several schools CAN share one database, a schema each — that is how the
+    // platform holds them, and it is the cheap way to run more than one host
+    // off one Neon project. There, a role default is actively wrong: the last
+    // school provisioned would become every other school's default, and the
+    // next person to open psql would be looking at the wrong school's pupils.
+    // So the second school onwards leaves it alone and says why. Nothing is
+    // lost — the host pins the schema on every connection itself
+    // (host/db/worker.js), which is what makes sharing safe in the first place.
+    const neighbours = (await client.query(
+      `SELECT count(DISTINCT table_schema)::int AS n FROM information_schema.tables
+        WHERE table_name = 'settings'
+          AND table_schema NOT IN ('pg_catalog', 'information_schema')
+          AND table_schema <> $1`, [SCHEMA])).rows[0].n;
+
+    if (neighbours > 0) {
+      console.log(`· This database already holds ${neighbours} other school${neighbours === 1 ? '' : 's'}, ` +
+                  'so the role\'s default search path is left as it is.');
+      console.log('  Every host pins its own schema per connection, so the schools stay apart.');
+      console.log('  In psql, say `SET search_path TO ' + SCHEMA + ';` before you look.');
+    } else {
+      try {
+        const who = await client.query('SELECT current_user AS role, current_database() AS db');
+        await client.query(
+          `ALTER ROLE ${quoteIdent(who.rows[0].role)} IN DATABASE ${quoteIdent(who.rows[0].db)} ` +
+          `SET search_path TO ${schemaIdent}`);
+        console.log(`· "${SCHEMA}" is now the default search path for ${who.rows[0].role}.`);
+      } catch (e) {
+        console.log('· Could not set the role\'s default search path (' + ((e && e.message) || e) + ').');
+        console.log('  Not fatal: the host pins the schema on each connection itself.');
+      }
     }
 
     console.log(`· Creating the school's tables in schema "${SCHEMA}"…`);
