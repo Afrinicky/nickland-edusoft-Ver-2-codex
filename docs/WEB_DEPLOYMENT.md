@@ -50,7 +50,10 @@ use the office PC *or* the web copy for real work — not both.
    works** — the pooled string (with `-pooler` in the host name) is the one
    Neon offers first, and the host handles it. See *Pooled or direct* below for
    what it does with it and why.
-3. Create the school's tables:
+3. Create the school's tables. **On Render this happens by itself** — the
+   blueprint runs it before every deploy (`preDeployCommand`) and it does
+   nothing once the school is there — so this is only for deploying somewhere
+   else, or for running it early:
 
    ```bash
    DATABASE_URL='postgresql://…?sslmode=require' \
@@ -105,6 +108,22 @@ service.
 
 Then set **`DATABASE_URL`** in the dashboard. It is deliberately not in the
 file: a database password does not belong in a repository.
+
+### The tables create themselves, once
+
+```yaml
+preDeployCommand: npm run host:provision -- --if-empty
+```
+
+An unprovisioned database answers *every* request with `relation "settings"
+does not exist`, the health check included, and the deploy times out eighteen
+minutes later — so the blueprint provisions before the host starts. `--if-empty`
+looks first and does nothing at all when the school is already there, which is
+every deploy after the first. Without the flag, provisioning still refuses to
+touch a database that has tables; that has not changed.
+
+The host says which it found on start-up — `The school's tables are there: 82`,
+or the three lines telling you to provision.
 
 ### Put Render in the same region as Neon
 
