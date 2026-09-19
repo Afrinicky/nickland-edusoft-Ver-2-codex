@@ -61,6 +61,12 @@ services:
         value: /var/data
 
       # Set in the dashboard, not here.
+      #
+      # Either Neon string works. The pooled one (with `-pooler` in the host)
+      # cannot carry the school's schema — PgBouncer refuses `search_path` as
+      # a startup parameter and pools by transaction, so a session setting will
+      # not stay put — and the host normalises it to the direct endpoint and
+      # says so in its log. See docs/WEB_DEPLOYMENT.md, "Pooled or direct".
       - key: DATABASE_URL
         sync: false
 

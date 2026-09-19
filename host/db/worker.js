@@ -18,6 +18,7 @@
 
 const { parentPort, workerData } = require('node:worker_threads');
 const { Pool, types } = require('pg');
+const { quoteIdent } = require('./connection');
 
 // ── The one type that does not come back the way SQLite sends it ────────────
 //
@@ -52,8 +53,49 @@ const pool = new Pool({
   // Neon suspends an idle project. A short connect timeout turns "waking up"
   // into a clear error rather than a request that hangs for a minute.
   connectionTimeoutMillis: 15000,
-  ...(schema ? { options: `-c search_path=${schema}` } : {}),
 });
+
+// ── Where the school's tables are ───────────────────────────────────────────
+//
+// NOT the `options: '-c search_path=…'` startup parameter this used to pass.
+// Neon's pooled endpoint refuses that outright — "unsupported startup
+// parameter in options: search_path" — and refuses it on the first query, so
+// the host comes up, answers every request with that message and fails its
+// health check. host/db/connection.js is the whole story, and it is why the
+// connection string reaching this worker is already the direct endpoint.
+//
+// Said here instead, as an ordinary statement — the first one on each
+// connection, and finished before the query that asked for it. Done by taking
+// the client out of the pool and awaiting the SET rather than in a `connect`
+// listener: a listener would leave two queries in flight on one client, which
+// node-postgres already warns about and pg 9 removes.
+//
+// Remembered per client, because the setting lasts for the session and a
+// pooled client is handed out again and again. A connection that drops is a
+// new client object, and is set up again.
+//
+// The school's schema and NOTHING ELSE — not even public, as the startup
+// parameter this replaces also did. A fallback would mean a mistyped
+// DATABASE_SCHEMA quietly reading somebody else's tables instead of saying
+// the school's are not there.
+const searchPath = schema ? quoteIdent(schema) : null;
+const ready = new WeakSet();
+
+async function acquire() {
+  const client = await pool.connect();
+  if (!searchPath || ready.has(client)) return client;
+  try {
+    await client.query(`SET search_path TO ${searchPath}`);
+    ready.add(client);
+    return client;
+  } catch (e) {
+    client.release(e);
+    const err = new Error(
+      `Could not select the school's schema "${schema}": ${(e && e.message) || e}`);
+    err.code = e && e.code;
+    throw err;
+  }
+}
 
 // Only for the spike: models the round-trip to a Neon region so the blocking
 // cost can be measured against a local Postgres. Never set in production.
@@ -88,7 +130,7 @@ async function run(msg) {
     if (delay) await delay();
 
     if (kind === 'begin') {
-      txnClient = await pool.connect();
+      txnClient = await acquire();
       await txnClient.query('BEGIN');
       queryCount++;
       return reply({ ok: true });
@@ -103,9 +145,20 @@ async function run(msg) {
     if (kind === 'count') return reply({ ok: true, queries: queryCount });
     if (kind === 'reset-count') { queryCount = 0; return reply({ ok: true }); }
 
-    const runner = txnClient || pool;
     queryCount++;
-    const res = await runner.query(sql, params);
+    let res;
+    if (txnClient) {
+      res = await txnClient.query(sql, params);
+    } else {
+      // One query, one client, handed straight back. The main thread is
+      // blocked until this answers, so the pool never holds more than this.
+      const client = await acquire();
+      try {
+        res = await client.query(sql, params);
+      } finally {
+        client.release();
+      }
+    }
 
     if (kind === 'get') return reply({ ok: true, row: res.rows[0] || undefined });
     if (kind === 'all') return reply({ ok: true, rows: res.rows });

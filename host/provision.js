@@ -22,6 +22,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Client } = require('pg');
+const { resolveConnection, quoteIdent, keepPooledFromEnv } = require('./db/connection');
 
 const ROOT = path.resolve(__dirname, '..');
 const SCHEMA_SQL = path.join(ROOT, 'cloud-python', 'schema', 'school.sql');
@@ -75,14 +76,26 @@ async function main() {
 
   checkSchemaIsCurrent();
 
-  const client = new Client({ connectionString: CONNECTION });
+  // Provisioning is one long session that depends on `SET search_path`
+  // holding, and Neon's POOLED endpoint pools by transaction, so it would not.
+  // host/db/connection.js normalises the pooled string to the direct endpoint;
+  // the string that was given does not have to change.
+  const resolved = resolveConnection(CONNECTION, {
+    schema: SCHEMA,
+    keepPooled: keepPooledFromEnv(),
+  });
+  resolved.notes.forEach((n) => console.log('· ' + n));
+
+  const client = new Client({ connectionString: resolved.connectionString });
   await client.connect();
+
+  const schemaIdent = quoteIdent(SCHEMA);
 
   try {
     if (SCHEMA !== 'public') {
-      await client.query(`CREATE SCHEMA IF NOT EXISTS ${JSON.stringify(SCHEMA).replace(/"/g, '"')}`);
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${schemaIdent}`);
     }
-    await client.query(`SET search_path TO ${SCHEMA}`);
+    await client.query(`SET search_path TO ${schemaIdent}`);
 
     const existing = await client.query(
       'SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = $1', [SCHEMA]);
@@ -94,9 +107,28 @@ async function main() {
 
     if (existing.rows[0].n > 0 && FORCE) {
       console.log(`· Dropping schema "${SCHEMA}" and everything in it (--force).`);
-      await client.query(`DROP SCHEMA ${SCHEMA} CASCADE`);
-      await client.query(`CREATE SCHEMA ${SCHEMA}`);
-      await client.query(`SET search_path TO ${SCHEMA}`);
+      await client.query(`DROP SCHEMA ${schemaIdent} CASCADE`);
+      await client.query(`CREATE SCHEMA ${schemaIdent}`);
+      await client.query(`SET search_path TO ${schemaIdent}`);
+    }
+
+    // Belt and braces, and it costs one statement.
+    //
+    // This makes the school's schema the connecting role's DEFAULT search
+    // path, which Postgres applies to every new session server-side. The host
+    // sets it per connection anyway, but a default that lives in the database
+    // also covers psql, a backup tool, and anyone who insists on the pooled
+    // endpoint — where a session setting cannot survive. Best-effort: a role
+    // that may not alter itself is not a reason to stop provisioning.
+    try {
+      const who = await client.query('SELECT current_user AS role, current_database() AS db');
+      await client.query(
+        `ALTER ROLE ${quoteIdent(who.rows[0].role)} IN DATABASE ${quoteIdent(who.rows[0].db)} ` +
+        `SET search_path TO ${schemaIdent}`);
+      console.log(`· "${SCHEMA}" is now the default search path for ${who.rows[0].role}.`);
+    } catch (e) {
+      console.log('· Could not set the role\'s default search path (' + ((e && e.message) || e) + ').');
+      console.log('  Not fatal: the host pins the schema on each connection itself.');
     }
 
     console.log(`· Creating the school's tables in schema "${SCHEMA}"…`);

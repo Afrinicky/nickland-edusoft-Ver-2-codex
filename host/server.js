@@ -99,6 +99,9 @@ function start() {
         cacheTtlMs: parseInt(process.env.DATABASE_CACHE_TTL_MS || '5000', 10),
         cache: process.env.DATABASE_CACHE !== 'off',
         latencyMs: parseInt(process.env.SPIKE_LATENCY_MS || '0', 10),
+        // Anything the adapter had to change about the connection string is
+        // said out loud, in the host's log, rather than happening quietly.
+        onNotice: (m) => log('info', 'host', m),
       });
       db._userDataPath = DATA_DIR;
       db._getResourcePath = getResourcePath;

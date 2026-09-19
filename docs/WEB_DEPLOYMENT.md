@@ -46,8 +46,10 @@ use the office PC *or* the web copy for real work — not both.
 ## 2. Neon
 
 1. Create a project, and **note the region**. Everything below depends on it.
-2. Copy the **pooled** connection string — the one with `-pooler` in the host
-   name — ending `?sslmode=require`.
+2. Copy either connection string, ending `?sslmode=require`. **Either one
+   works** — the pooled string (with `-pooler` in the host name) is the one
+   Neon offers first, and the host handles it. See *Pooled or direct* below for
+   what it does with it and why.
 3. Create the school's tables:
 
    ```bash
@@ -64,6 +66,35 @@ use the office PC *or* the web copy for real work — not both.
    It refuses to run against a database that already has tables rather than
    half-building one. `--force` drops and rebuilds, if that is genuinely what
    you want.
+
+### Pooled or direct
+
+The school's tables live in their own Postgres schema, so **every connection
+has to be told where to look** — `search_path`. Neon's pooled endpoint is
+PgBouncer, and it will not carry that:
+
+```
+unsupported startup parameter in options: search_path
+```
+
+It refuses on the first query, which means a perfectly good deploy comes up,
+answers every request with that line, fails its health check and times out
+after eighteen minutes with nothing else wrong. Saying `SET search_path` after
+connecting does not rescue it either: the pooled endpoint pools by
+*transaction*, so the next statement is likely handed a different server
+connection that never saw the setting. A session setting needs a session.
+
+So when a schema is pinned, the host talks to Neon's **direct** endpoint — the
+same host name without `-pooler` — and says so in its log on start-up. Give it
+the pooled string; it normalises it. Nothing is lost: the host blocks on every
+query (that is what makes 1,631 synchronous call sites work unchanged), so one
+instance can only ever have a single query in flight and its pool is three
+connections at its widest. The pooler exists for the opposite problem.
+
+`host/provision.js` also makes the schema the connecting role's default search
+path, which lives in the database and so survives any endpoint. If you must
+stay on the pooled one, set `DATABASE_POOLED=keep` — and provision first, or
+nothing will find the school's tables.
 
 ---
 
@@ -194,6 +225,7 @@ TTL is safe with one instance and is not safe with two. The note in
 |---|---|
 | `DATABASE_URL` | Neon. **Absent means local SQLite** — that is the LAN host, unchanged. |
 | `DATABASE_SCHEMA` | The Postgres schema holding the school's tables. `school`. |
+| `DATABASE_POOLED` | `keep` to use the connection string exactly as given. Otherwise a pooled Neon string is normalised to the direct endpoint, because the pooled one cannot hold `search_path`. |
 | `DATABASE_POOL` | Connections. Default 3. |
 | `DATABASE_CACHE_TTL_MS` | How long a read may be remembered. Default 5000. |
 | `DATABASE_CACHE` | `off` disables the cache, for diagnosis. |
@@ -208,6 +240,7 @@ TTL is safe with one instance and is not safe with two. The note in
 
 ```bash
 node test/host_dialect.js                       # SQL translation, no database
+node test/host_connection.js                    # which endpoint it dials, no database
 
 DATABASE_URL=… DATABASE_SCHEMA=school \
   node test/host_postgres.js                    # the adapter, against a real database
