@@ -26,6 +26,7 @@
     "host": "node host/server.js",
     "host:provision": "node host/provision.js",
     "host:create-admin": "node host/create-admin.js",
+    "host:backup": "node host/backup.js",
     "dev:desk": "vite --config vite.desk.config.js",
     "desk:coverage": "node scripts/desk-coverage.mjs",
     "rebuild": "electron-builder install-app-deps",

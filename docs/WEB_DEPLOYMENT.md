@@ -193,7 +193,61 @@ as an installed app.
 
 ---
 
-## 5. Vercel — optional, and probably unnecessary
+## 5. The licence clock
+
+**A new database has 30 days.** `electron/licence/index.js` gives an
+installation that has never collected a licence a month of full use from its
+first run; after that `licence.allows(db, 'edit')` fails, every request that is
+not a GET answers **402**, and the school is read-only — staff can look up a
+pupil and cannot record a payment.
+
+That was written for a desktop, where somebody sees the banner. Nobody watches
+a server, so the host says it on every start:
+
+```
+warn  licence — Not licensed yet — 30 days left, then this school becomes READ-ONLY.
+error licence — Not licensed yet — 4 days left, …          (inside a week)
+error licence — READ-ONLY (expired). Staff can look but cannot save anything.
+```
+
+To clear it, this school has to collect a licence from the platform service —
+`cloud-python`, with `LICENCE_SIGNING_KEY` and the school enrolled there (see
+`DEPLOY.md`). The collecting itself works from the browser: **/desk → Settings
+→ Cloud sync**, because the `licence:*` and `cloud:*` channels are exempt from
+the gate they would otherwise be locked behind.
+
+---
+
+## 6. Backups
+
+**The office PC's backup button does not work here, on purpose.** It copies a
+SQLite *file* into a zip, and this school has no file — it is in Postgres. Ask
+for one and it says so, and names what to do instead.
+
+```bash
+DATABASE_URL=… DATABASE_SCHEMA=school npm run host:backup
+```
+
+That writes one `.sql` file to `<EDUSOFT_DATA_DIR>/backups`: the schema, every
+row, and the identity counters set past the highest id, so a restored school
+issues the *next* receipt number rather than one a parent already holds. It
+restores into an empty database with a single `psql -f`. Flags: `--gzip`,
+`--keep N` (prune older ones), `--out PATH`, `--data-only`.
+
+Three different things, and you want all three:
+
+| | What it covers | How |
+|---|---|---|
+| **Point in time** | the school as it was at 10:32 this morning | Neon's own restore — check the retention your plan gives you |
+| **A copy you hold** | moving provider, an auditor, the day the account is the problem | `npm run host:backup`, kept somewhere else |
+| **The files** | report cards, receipts, photographs | the Render disk at `/var/data` — not in either of the above |
+
+The backup prints how many files are on that disk, so their absence from the
+`.sql` is never a surprise.
+
+---
+
+## 7. Vercel — optional, and probably unnecessary
 
 Render already serves both applications. Vercel only puts the *screens* on a
 CDN while the API stays on Render.
@@ -213,7 +267,7 @@ one fewer thing to keep in step.
 
 ---
 
-## 6. Keeping Neon usage low
+## 8. Keeping Neon usage low
 
 One Students screen — seven channels, forty pupils:
 
@@ -257,7 +311,7 @@ TTL is safe with one instance and is not safe with two. The note in
 
 ---
 
-## 7. Environment
+## 9. Environment
 
 | Variable | What it does |
 |---|---|
@@ -274,11 +328,14 @@ TTL is safe with one instance and is not safe with two. The note in
 
 ---
 
-## 8. Checking it
+## 10. Checking it
 
 ```bash
 node test/host_dialect.js                       # SQL translation, no database
 node test/host_connection.js                    # which endpoint it dials, no database
+
+DATABASE_URL=… DATABASE_SCHEMA=school \
+  npm run host:backup                           # a restorable copy, and it says what it wrote
 
 DATABASE_URL=… DATABASE_SCHEMA=school \
   node test/host_postgres.js                    # the adapter, against a real database
@@ -292,7 +349,7 @@ do. Point it at a throwaway database — it creates and deletes rows.
 
 ---
 
-## 9. What is known to be true, and what is not
+## 11. What is known to be true, and what is not
 
 **Verified** against a real PostgreSQL 16 holding the school's own 81-table
 schema: all 65 read channels answer; writes, transactions and rollbacks behave;

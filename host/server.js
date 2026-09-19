@@ -170,6 +170,35 @@ function start() {
     log('info', 'host', 'All modules registered');
   }
 
+  // ── What this school is allowed to do, and for how long ───────────────────
+  //
+  // A new database gets 30 days before it needs a licence
+  // (electron/licence/index.js); after that every write answers 402 and the
+  // school is read-only. On a desktop somebody sees the banner on the screen.
+  // Nobody watches a server, so the state and the days left are said here, on
+  // every start, and loudly when the end is close.
+  try {
+    const licence = require(path.join(ROOT, 'electron/licence'));
+    const now = licence.state(db);
+    const left = now.days_left;
+    if (now.access === 'full' && now.reason === 'activation') {
+      const how = left <= 7 ? 'error' : 'warn';
+      log(how, 'licence',
+        `Not licensed yet — ${left} day${left === 1 ? '' : 's'} left, then this school ` +
+        'becomes READ-ONLY. Connect it at /desk → Settings → Cloud sync.');
+    } else if (now.access === 'full') {
+      log('info', 'licence', `Licensed${now.verified ? '' : ' (unverified)'}` +
+        (left ? `, ${left} day${left === 1 ? '' : 's'} left on this lease` : '') + '.');
+    } else if (now.access === 'read_only') {
+      log('error', 'licence',
+        `READ-ONLY (${now.reason}). Staff can look but cannot save anything. ${now.message || ''}`);
+    } else {
+      log('error', 'licence', `Blocked (${now.reason}). ${now.message || ''}`);
+    }
+  } catch (e) {
+    log('warn', 'licence', `Could not read the licence state: ${(e && e.message) || e}`);
+  }
+
   if (!process.env.EDUSOFT_SECRET_KEY) {
     log('warn', 'host',
       'EDUSOFT_SECRET_KEY is not set — backup destination passwords will be stored in the clear.');
