@@ -188,7 +188,8 @@ function registerDashboardRoutes({ add, db, json, can, API, getSetting }) {
       JOIN students s ON s.id = cds.student_id
       LEFT JOIN class_groups cg ON cg.id = s.current_class_id
       WHERE cds.status = 'unpaid' AND cds.date >= ? AND cds.date <= ?
-      GROUP BY s.id ORDER BY unpaid_days DESC LIMIT 5
+      -- cg.short_code is from a JOINED table, so Postgres wants it named.
+      GROUP BY s.id, cg.short_code ORDER BY unpaid_days DESC LIMIT 5
     `).all(rate, startD, endD), []);
 
     return json(res, 200, {
@@ -414,7 +415,7 @@ function registerDashboardRoutes({ add, db, json, can, API, getSetting }) {
       LEFT JOIN student_bills sb ON sb.student_id = s.id AND sb.term_id = ?
                                 AND COALESCE(sb.status, 'active') = 'active'
       WHERE cg.is_active = 1
-      GROUP BY cg.id HAVING student_count > 0 ORDER BY cg.level_order
+      GROUP BY cg.id HAVING COUNT(DISTINCT sb.student_id) > 0 ORDER BY cg.level_order
     `).all(term.id), []);
 
     return json(res, 200, {
@@ -477,7 +478,8 @@ function registerDashboardRoutes({ add, db, json, can, API, getSetting }) {
       JOIN students s ON s.id = cds.student_id
       LEFT JOIN class_groups cg ON cg.id = s.current_class_id
       WHERE cds.status = 'unpaid' AND cds.date >= ? AND cds.date <= ?
-      GROUP BY s.id ORDER BY unpaid_days DESC LIMIT 10
+      -- as above: the class columns come from a JOIN, so they are named.
+      GROUP BY s.id, cg.short_code, cg.name ORDER BY unpaid_days DESC LIMIT 10
     `).all(rate, from, to), []);
 
     const recentPayments = safe(() => db.prepare(`

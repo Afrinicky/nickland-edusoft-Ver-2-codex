@@ -28,6 +28,7 @@ import NotificationsIndex from './pages/Notifications/Index.jsx';
 import MessagesIndex from './pages/Messages/Index.jsx';
 import SettingsIndex from './pages/Settings/Index.jsx';
 import RequirePermission from './components/RequirePermission.jsx';
+import ScreenBoundary from './components/ScreenBoundary.jsx';
 import { mediaUrl } from './lib/media.js';
 
 // ── App state phases ──────────────────────────────────────
@@ -239,12 +240,17 @@ function HomepageShell() {
 
 // ── App shell (with sidebar) ──────────────────────────────
 function AppShell() {
+  // Keyed by the address, so walking to another screen clears a failure
+  // rather than carrying it around the building.
+  const location = useLocation();
   return (
     <div className="app-shell">
       <Topbar />
       <Sidebar />
       <main className="content">
-        <Outlet />
+        <ScreenBoundary key={location.pathname}>
+          <Outlet />
+        </ScreenBoundary>
       </main>
       <StatusBar />
     </div>

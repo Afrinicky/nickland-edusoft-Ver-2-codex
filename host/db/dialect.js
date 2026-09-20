@@ -71,15 +71,37 @@ const DATE_FUNCTIONS = [
   [/julianday\(\s*([^()]+?)\s*\)\s*-\s*julianday\(\s*([^()]+?)\s*\)/gi,
    "(EXTRACT(EPOCH FROM (($1)::timestamp - ($2)::timestamp)) / 86400.0)"],
 
-  // datetime('now')  /  datetime('now', '-90 days')
+  // datetime('now')  /  date('now')  — and the same with a modifier.
+  //
+  // TEXT, in the shape SQLite writes, and that is the whole point.
+  //
+  // These used to become NOW() and CURRENT_DATE, which are a timestamp and a
+  // date. Every column they are written to is TEXT — the offline schema has no
+  // timestamp columns, and the generator renders its defaults as
+  // to_char(now(), 'YYYY-MM-DD HH24:MI:SS') for exactly that reason — and
+  // Postgres will not put a timestamp in a text column or compare one against
+  // it. So `UPDATE api_tokens SET last_used_at = datetime('now')` failed, and
+  // so did every "due before now" read. Both are silent: one is inside a
+  // try/catch, the other answers an empty list.
+  //
+  // UTC, like the desktop, so a school's record does not shift by an hour
+  // depending on which machine wrote it.
   [/datetime\(\s*'now'\s*,\s*'([+-]?\d+)\s+(day|days|hour|hours|minute|minutes|month|months|year|years)'\s*\)/gi,
-   (_m, n, unit) => `(NOW() + INTERVAL '${n} ${unit.replace(/s$/, '')}')`],
-  [/datetime\(\s*'now'\s*\)/gi, 'NOW()'],
+   (_m, n, unit) => `to_char((NOW() AT TIME ZONE 'UTC') + INTERVAL '${n} ${unit.replace(/s$/, '')}', 'YYYY-MM-DD HH24:MI:SS')`],
+  [/datetime\(\s*'now'\s*\)/gi, "to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"],
 
-  // date('now')  /  date('now', '-30 days')
   [/date\(\s*'now'\s*,\s*'([+-]?\d+)\s+(day|days|month|months|year|years)'\s*\)/gi,
-   (_m, n, unit) => `(CURRENT_DATE + INTERVAL '${n} ${unit.replace(/s$/, '')}')`],
-  [/date\(\s*'now'\s*\)/gi, 'CURRENT_DATE'],
+   (_m, n, unit) => `to_char((NOW() AT TIME ZONE 'UTC') + INTERVAL '${n} ${unit.replace(/s$/, '')}', 'YYYY-MM-DD')`],
+  [/date\(\s*'now'\s*\)/gi, "to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD')"],
+
+  // The modifier as a PARAMETER: date('now', ?) — the staff app asks for "the
+  // last N days" that way. SQLite's modifiers ('-30 days') are Postgres
+  // intervals word for word, so the parameter travels unchanged.
+  // Still a `?` at this point — placeholders are numbered last, see translate().
+  [/datetime\(\s*'now'\s*,\s*\?\s*\)/gi,
+   "to_char((NOW() AT TIME ZONE 'UTC') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')"],
+  [/date\(\s*'now'\s*,\s*\?\s*\)/gi,
+   "to_char((NOW() AT TIME ZONE 'UTC') + (?)::interval, 'YYYY-MM-DD')"],
 
   [/\bIFNULL\s*\(/gi, 'COALESCE('],
 ];
@@ -154,10 +176,44 @@ function translateStrftime(sql) {
   });
 }
 
+// ROUND(x, 2)
+//
+// SQLite rounds a float to a number of places. Postgres has round(numeric, int)
+// and round(double precision) — and NOT round(double precision, int), so an
+// average of anything, which is a double, fails with "function round(double
+// precision, integer) does not exist". That is the whole of what broke the
+// academics dashboard. One-argument ROUND is left alone: it is the same
+// function in both.
+function translateRound(sql) {
+  // Written to a name this pass does not look for, then named back at the end.
+  // Emitting ROUND( here would be found again on the next turn of the loop,
+  // and the guard in replaceCall would stop it 200 casts later.
+  const out = replaceCall(sql, 'round', (args) => {
+    if (args.length !== 2) return null;
+    return `__pg_round__((${args[0]})::numeric, ${args[1]})`;
+  });
+  return out.replace(/__pg_round__/g, 'ROUND');
+}
+
+// date(a_column) — the one-argument form over something that is not 'now'.
+//
+// The dates are TEXT, and Postgres has no date(text). `(x)::date` is the same
+// question asked in its own language. date('now') is already gone by here.
+function translateDateCast(sql) {
+  return replaceCall(sql, 'date', (args) => {
+    if (args.length !== 1) return null;
+    const arg = args[0].trim();
+    if (/^'/.test(arg)) return null;          // a literal; not ours to touch
+    return `((${arg})::date)`;
+  });
+}
+
 function translateDates(sql) {
   let out = sql;
   for (const [pattern, replacement] of DATE_FUNCTIONS) out = out.replace(pattern, replacement);
   out = translateStrftime(out);
+  out = translateDateCast(out);
+  out = translateRound(out);
   return out;
 }
 

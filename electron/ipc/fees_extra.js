@@ -100,7 +100,7 @@ module.exports = function registerFeesExtraHandlers(ipcMain, db) {
                                 AND COALESCE(sb.status, 'active') = 'active'
       WHERE cg.is_active = 1
       GROUP BY cg.id
-      HAVING student_count > 0
+      HAVING COUNT(DISTINCT sb.student_id) > 0
       ORDER BY cg.level_order
     `).all(term.id);
 

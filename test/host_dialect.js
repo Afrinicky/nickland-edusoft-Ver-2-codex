@@ -68,15 +68,20 @@ ck('a SELECT is never given RETURNING',
   !/RETURNING/.test(t('SELECT * FROM students')), t('SELECT * FROM students'));
 
 // == Dates and times, as the handlers actually write them ==
+// NOT NOW(). `users.last_login` is TEXT, like every date column the offline
+// schema has, and Postgres will not put a timestamp in a text column — so this
+// statement, which is how a sign-in is recorded, failed against Postgres for
+// as long as it said NOW(). See the block near the end of this file.
 ck("datetime('now')", t("UPDATE users SET last_login = datetime('now') WHERE id = ?")
-  === 'UPDATE users SET last_login = NOW() WHERE id = $1',
+  === "UPDATE users SET last_login = to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') WHERE id = $1",
   t("UPDATE users SET last_login = datetime('now') WHERE id = ?"));
 
 ck("datetime('now', '-90 days')",
   /INTERVAL '-90 day'/.test(t("DELETE FROM api_tokens WHERE created_at < datetime('now', '-90 days')")),
   t("DELETE FROM api_tokens WHERE created_at < datetime('now', '-90 days')"));
 
-ck("date('now')", t("SELECT date('now') AS d") === 'SELECT CURRENT_DATE AS d',
+ck("date('now')", t("SELECT date('now') AS d")
+  === "SELECT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS d",
   t("SELECT date('now') AS d"));
 
 ck('julianday difference becomes days between two dates',
@@ -103,6 +108,60 @@ ck('INSERT OR IGNORE becomes ON CONFLICT DO NOTHING',
 const twice = 'SELECT * FROM students WHERE a = ? AND b = ?';
 ck('translating the same statement twice gives the same result',
   t(twice) === t(twice), t(twice));
+
+
+// == Dates are TEXT, because every column they touch is ==
+//
+// These went in as NOW() and CURRENT_DATE, which are a timestamp and a date.
+// The school's columns are TEXT — the generated schema has no timestamp column
+// anywhere — so Postgres refused to write one and refused to compare one, and
+// both failures were silent: a token's last-used time inside a try/catch, a
+// "due before now" list that simply came back empty.
+ck("datetime('now') is written as the text SQLite writes",
+  t("UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?")
+    === "UPDATE api_tokens SET last_used_at = to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') WHERE id = $1",
+  t("UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?"));
+
+ck("date('now') likewise, to the day",
+  /to_char\(NOW\(\) AT TIME ZONE 'UTC', 'YYYY-MM-DD'\)/.test(t("SELECT * FROM t WHERE d = date('now')")),
+  t("SELECT * FROM t WHERE d = date('now')"));
+
+ck("a modifier is kept: datetime('now', '-90 days')",
+  /INTERVAL '-90 day'/.test(t("SELECT * FROM t WHERE at > datetime('now', '-90 days')")),
+  t("SELECT * FROM t WHERE at > datetime('now', '-90 days')"));
+
+ck("a modifier passed as a PARAMETER becomes an interval",
+  t("SELECT * FROM attendance WHERE student_id = ? AND date >= date('now', ?)")
+    === "SELECT * FROM attendance WHERE student_id = $1 AND date >= to_char((NOW() AT TIME ZONE 'UTC') + ($2)::interval, 'YYYY-MM-DD')",
+  t("SELECT * FROM attendance WHERE student_id = ? AND date >= date('now', ?)"));
+
+// == ROUND ==
+//
+// Postgres has round(numeric, int) and round(double precision) and NOT
+// round(double precision, int) — so rounding an average, which is the only
+// way anybody rounds anything here, failed outright.
+ck('ROUND(x, n) casts to numeric',
+  t('SELECT ROUND(AVG(score), 2) AS avg FROM exam_scores')
+    === 'SELECT ROUND((AVG(score))::numeric, 2) AS avg FROM exam_scores',
+  t('SELECT ROUND(AVG(score), 2) AS avg FROM exam_scores'));
+
+ck('...and does not rewrite its own output for ever',
+  (t('SELECT ROUND(AVG(a), 1) FROM t').match(/::numeric/g) || []).length === 1,
+  t('SELECT ROUND(AVG(a), 1) FROM t'));
+
+ck('one-argument ROUND is the same in both and is left alone',
+  t('SELECT ROUND(x) FROM t') === 'SELECT ROUND(x) FROM t');
+
+ck('two ROUNDs in one statement are both translated',
+  (t('SELECT ROUND(AVG(a),1), ROUND(SUM(b),2) FROM t').match(/::numeric/g) || []).length === 2,
+  t('SELECT ROUND(AVG(a),1), ROUND(SUM(b),2) FROM t'));
+
+// == date(a column) ==
+ck('date(column) becomes a cast, because Postgres has no date(text)',
+  t('SELECT source_file, date(imported_at) FROM workbook_import_log')
+    === 'SELECT source_file, ((imported_at)::date) FROM workbook_import_log',
+  t('SELECT source_file, date(imported_at) FROM workbook_import_log'));
+
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
