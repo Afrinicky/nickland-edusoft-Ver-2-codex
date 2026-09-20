@@ -145,7 +145,9 @@ The last row is unusable. Choose the Neon region first, then match it in
 ```
 npm ci                          the host and the office application
 npm ci --prefix mobile          the parents' app has its own dependencies
-npm install --no-save puppeteer report cards, receipts, payslips
+npm install --no-save puppeteer sharp
+                                puppeteer — report cards, receipts, payslips
+                                sharp     — pupils' and staff photographs
 npm run build:web               → the parents' app, served at /
 npm run build:desk              → the office application, served at /desk
 ```

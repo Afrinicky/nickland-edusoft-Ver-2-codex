@@ -139,21 +139,42 @@ function openNeonDatabase(connectionString, options = {}) {
     return idTables.has(table);
   }
 
+  // A statement, and what it wants bound to it: `?` in order, or `@name` by
+  // name. Cached together, because both are worked out once per statement.
   function toPostgres(sql) {
     let out = translated.get(sql);
     if (out === undefined) {
-      out = dialect.translate(sql, hasIdColumn);
+      out = dialect.translateWithNames(sql, hasIdColumn);
       translated.set(sql, out);
     }
     return out;
   }
 
   // better-sqlite3 takes parameters as (a, b, c) OR as one object for named
-  // parameters. Every site in this application uses the positional form.
-  function positional(args) {
+  // parameters, and this application uses both: the ledger — which every
+  // payment goes through — writes with @named ones.
+  //
+  // Refusing them used to be this adapter's answer, on the strength of an
+  // audit that had gone out of date. What a school saw was a payment taken at
+  // the counter and then refused by the system.
+  function bind(statement, args) {
+    if (statement.names.length) {
+      const given = args[0];
+      if (!given || typeof given !== 'object' || Array.isArray(given)) {
+        throw new Error(
+          `This statement is written with named parameters (${statement.names.join(', ')}) ` +
+          'and wants one object holding them.');
+      }
+      return statement.names.map((name) => {
+        const v = given[name];
+        return v === undefined ? null : v;
+      });
+    }
     if (args.length === 1 && args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])
-        && !(args[0] instanceof Date)) {
-      throw new Error('Named parameters are not supported by the Neon adapter; this application does not use them.');
+        && !(args[0] instanceof Date) && !Buffer.isBuffer(args[0])) {
+      throw new Error(
+        'An object was bound to a statement that has no named parameters in it. ' +
+        'Either the statement is missing its @names or the value should not be an object.');
     }
     return args.map(v => (v === undefined ? null : v));
   }
@@ -193,9 +214,9 @@ function openNeonDatabase(connectionString, options = {}) {
     prepare(sql) {
       const pg = toPostgres(sql);
       return {
-        get: (...args) => read('get', pg, positional(args)),
-        all: (...args) => read('all', pg, positional(args)),
-        run: (...args) => write(pg, positional(args)),
+        get: (...args) => read('get', pg.text, bind(pg, args)),
+        all: (...args) => read('all', pg.text, bind(pg, args)),
+        run: (...args) => write(pg.text, bind(pg, args)),
       };
     },
 
@@ -223,7 +244,7 @@ function openNeonDatabase(connectionString, options = {}) {
       };
     },
 
-    exec(sql) { ask({ kind: 'all', sql: toPostgres(sql), params: [] }); },
+    exec(sql) { ask({ kind: 'all', sql: toPostgres(sql).text, params: [] }); },
 
     // Answered rather than executed. PRAGMA is SQLite's; Postgres has its own
     // settings and the handlers only ever set journal/synchronous, which mean

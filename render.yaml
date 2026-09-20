@@ -39,7 +39,7 @@ services:
     buildCommand: >-
       npm ci --no-audit --no-fund &&
       npm ci --no-audit --no-fund --prefix mobile &&
-      npm install --no-save puppeteer &&
+      npm install --no-save puppeteer sharp &&
       npm run build:web &&
       npm run build:desk
 

@@ -163,5 +163,42 @@ ck('date(column) becomes a cast, because Postgres has no date(text)',
   t('SELECT source_file, date(imported_at) FROM workbook_import_log'));
 
 
+
+// == Named parameters ==
+//
+// better-sqlite3 takes @name as well as ?, and the adapter refused them on the
+// strength of an audit that had gone out of date by two call sites — both in
+// the ledger, which every payment goes through. A school took money at the
+// counter and the system then refused to record it.
+{
+  const n = dialect.translateWithNames(
+    'INSERT INTO income_records (receipt_number, amount, date) VALUES (@receipt_number, @amount, @date)',
+    hasId);
+  ck('@name becomes $1, $2 in the order they appear',
+    n.text.includes('VALUES ($1, $2, $3)'), n.text);
+  ck('...and the names come back in that same order',
+    n.names.join(',') === 'receipt_number,amount,date', n.names.join(','));
+  ck('...and an INSERT still asks for its id back', /RETURNING id/.test(n.text), n.text);
+}
+
+{
+  const n = dialect.translateWithNames('UPDATE t SET a = @x, b = @y, c = @x WHERE id = @id', hasId);
+  ck('a name used twice is ONE placeholder, as better-sqlite3 binds it once',
+    n.text === 'UPDATE t SET a = $1, b = $2, c = $1 WHERE id = $3', n.text);
+  ck('...and is named once', n.names.join(',') === 'x,y,id', n.names.join(','));
+}
+
+{
+  const n = dialect.translateWithNames("SELECT * FROM staff WHERE email = 'head@school.gh' AND id = ?", hasId);
+  ck('an @ inside a quoted string is a school\'s email, not a parameter',
+    n.text === "SELECT * FROM staff WHERE email = 'head@school.gh' AND id = $1" && n.names.length === 0,
+    n.text + ' names:' + n.names.join(','));
+}
+
+ck('a statement with no names is translated exactly as before',
+  dialect.translateWithNames('SELECT * FROM students WHERE id = ?', hasId).text
+    === t('SELECT * FROM students WHERE id = ?'));
+
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
