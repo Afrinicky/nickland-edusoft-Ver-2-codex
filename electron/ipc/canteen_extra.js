@@ -214,7 +214,11 @@ module.exports = function registerCanteenExtraHandlers(ipcMain, db) {
       JOIN students s ON s.id = cds.student_id
       LEFT JOIN class_groups cg ON cg.id = s.current_class_id
       WHERE cds.status = 'unpaid' AND cds.date >= ? AND cds.date <= ?
-      GROUP BY s.id
+      -- cg.* are named here because they come from a JOINED table: SQLite
+      -- allows a bare column beside an aggregate, Postgres only allows one
+      -- that hangs off the grouped table's own key. s.id still decides the
+      -- rows, so this groups exactly as it always did.
+      GROUP BY s.id, cg.short_code, cg.name
       ORDER BY unpaid_days DESC
       LIMIT 10
     `).all(dailyRate, term.start_date, term.end_date);

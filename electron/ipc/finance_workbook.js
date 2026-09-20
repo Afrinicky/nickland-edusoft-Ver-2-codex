@@ -61,10 +61,14 @@ module.exports = function registerFinanceWorkbookHandlers(ipcMain, db, app, user
     let lastImport = null;
     try {
       lastImport = db.prepare(`
-        SELECT source_file, imported_at, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
+        -- MAX(imported_at), not a bare one: the group is a whole day's
+        -- import, so "when" is the last row in it. SQLite would hand back an
+        -- arbitrary row's value and Postgres refuses the question outright.
+        SELECT source_file, MAX(imported_at) AS imported_at,
+               COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total
         FROM workbook_import_log
         GROUP BY source_file, date(imported_at)
-        ORDER BY imported_at DESC LIMIT 1
+        ORDER BY MAX(imported_at) DESC LIMIT 1
       `).get() || null;
     } catch (_) {}
     let built = null;
