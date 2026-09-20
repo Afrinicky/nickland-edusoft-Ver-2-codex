@@ -12,7 +12,10 @@
 // stored covers exactly this (see index.js — a fortnight, by default).
 
 const { httpJson } = require('../server/gateways/http');
-const { getSetting } = require('../utils/idgen');
+// setSetting as well as getSetting: activate() writes the three cloud settings
+// back, and without it the licence arrived, the school was told "Server error",
+// and the lease it had just been granted was thrown away.
+const { getSetting, setSetting } = require('../utils/idgen');
 const licence = require('./index');
 const sentinel = require('./sentinel');
 

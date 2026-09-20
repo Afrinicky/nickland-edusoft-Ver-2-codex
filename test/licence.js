@@ -217,5 +217,91 @@ const DAY = 86400000;
     licence.deviceId(db) === licence.deviceId(db) && licence.deviceId(db).length === 32);
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// ── Activation, against a portal that answers ───────────────────────────────
+//
+// The whole of it, because the failure this guards happened at the very last
+// step: the platform granted the lease, answered 200, and the school was told
+// "Server error" and stayed unlicensed. activate() writes three cloud settings
+// back when it succeeds, and `setSetting` was never imported into that file —
+// which nothing caught, because nothing here had ever run the successful path.
+(async () => {
+  const http = require('http');
+  const db = makeDb();
+
+  // A portal, in twenty lines: it signs a lease for whoever asks properly.
+  const key = crypto.generateKeyPairSync('ed25519');
+  const publicRaw = key.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32)
+    .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const b64url = (buf) => Buffer.from(buf).toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  // The lease's shape: base64url(payload).base64url(signature), and the
+  // signature is over the payload's OWN bytes — not over its encoding. Getting
+  // that backwards is how a lease verifies nowhere.
+  const sign = (payload) => {
+    const raw = Buffer.from(JSON.stringify(payload), 'utf8');
+    return `${b64url(raw)}.${b64url(crypto.sign(null, raw, key.privateKey))}`;
+  };
+
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (d) => { raw += d; });
+    req.on('end', () => {
+      const sent = raw ? JSON.parse(raw) : {};
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/api/v1/licence/key') {
+        return res.end(JSON.stringify({ ok: true, public_key: publicRaw }));
+      }
+      const payload = {
+        school_id: 'ave-maria', school_name: 'Ave Maria',
+        device: sent.device, issued_at: new Date().toISOString(),
+        not_after: new Date(Date.now() + 30 * 86400000).toISOString(),
+        plan_name: 'Pro', status_label: 'On trial',
+      };
+      res.end(JSON.stringify({
+        ok: true, school: { id: 'ave-maria', name: 'Ave Maria' },
+        school_id: 'ave-maria', device_token: 'sk_device_issued',
+        token: sign(payload), licence: payload, returning: false,
+      }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const refresh = require(path.join(ROOT, 'electron/licence/refresh.js'));
+  // What Settings → Cloud sync writes: the portal's address and the school's
+  // sync key. Both, because the key is fetched with the school's credential —
+  // which is why a school connects sync BEFORE it activates, and why doing it
+  // the other way round leaves a lease that works and is not verified.
+  setSetting(db, 'cloud_base_url', base, 'cloud');
+  setSetting(db, 'school_api_key', 'sk_school_enrolment_key', 'cloud');
+
+  // The boot sequence, in order: a machine collects the VERIFYING key before it
+  // has a lease to check with it. Without this the lease is accepted unverified
+  // — which is the deliberate behaviour for a build that shipped without a key,
+  // and not what a school connected to a portal should be running on.
+  const gotKey = await refresh.fetchPublicKey(db);
+  ck('the verifying key is collected from the portal', gotKey && gotKey.ok === true,
+    JSON.stringify(gotKey));
+
+  const result = await refresh.activate(db, {
+    email: 'head@avemaria.edu.gh', password: 'head-teacher-password', schoolId: 'ave-maria',
+  });
+
+  ck('activation succeeds against a portal that grants one', result && result.ok === true,
+    JSON.stringify(result).slice(0, 160));
+  ck('...and the lease is stored, so the school is licensed',
+    licence.state(db).access === 'full' && licence.state(db).reason === 'ok',
+    JSON.stringify(licence.state(db)).slice(0, 120));
+  ck('...and it is VERIFIED, not merely accepted', licence.state(db).verified === true);
+  ck('...and the device credential the portal issued is kept',
+    getSetting(db, 'school_api_key', '') === 'sk_device_issued',
+    getSetting(db, 'school_api_key', ''));
+  ck('...and so is the school it belongs to',
+    getSetting(db, 'cloud_school_id', '') === 'ave-maria');
+
+  server.close();
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
+
