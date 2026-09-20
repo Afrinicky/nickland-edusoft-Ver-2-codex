@@ -39,7 +39,7 @@ const db = openNeonDatabase(process.env.DATABASE_URL, {
 
 function cleanup() {
   try { db.prepare("DELETE FROM students WHERE index_number LIKE 'PGT/%'").run(); } catch (_) {}
-  try { db.prepare("DELETE FROM settings WHERE key = 'pgtest_marker'").run(); } catch (_) {}
+  try { db.prepare("DELETE FROM settings WHERE key IN ('pgtest_marker', 'pgtest_named')").run(); } catch (_) {}
 }
 
 try {
@@ -148,6 +148,29 @@ try {
 
   // == Deleting ==
   const removed = db.prepare("DELETE FROM students WHERE index_number LIKE 'PGT/%'").run();
+  // == Named parameters, against the real thing ==
+  //
+  // The ledger writes with @named ones, and every payment goes through the
+  // ledger. This is that shape, end to end.
+  {
+    db.prepare(
+      'INSERT INTO settings (key, value, category) VALUES (@key, @value, @category)'
+    ).run({ key: 'pgtest_named', value: 'named', category: 'custom' });
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('pgtest_named');
+    ck('an @named INSERT writes what it was handed', row && row.value === 'named',
+      JSON.stringify(row));
+
+    db.prepare('UPDATE settings SET value = @value WHERE key = @key')
+      .run({ key: 'pgtest_named', value: 'named-again' });
+    ck('...and an @named UPDATE finds the same row',
+      db.prepare('SELECT value FROM settings WHERE key = ?').get('pgtest_named').value === 'named-again');
+
+    let refused = false;
+    try { db.prepare('SELECT value FROM settings WHERE key = @key').get('pgtest_named'); }
+    catch (_) { refused = true; }
+    ck('a named statement handed a bare value says so rather than guessing', refused);
+  }
+
   ck('.run() on a DELETE reports how many went', removed.changes >= 4, `${removed.changes} removed`);
 
   cleanup();

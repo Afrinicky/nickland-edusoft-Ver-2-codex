@@ -276,6 +276,52 @@ function addReturningId(sql, hasIdColumn) {
 // because it belongs to a handler, and the handlers are not this adapter's to
 // edit.
 
+// ── Named parameters ────────────────────────────────────────────────────────
+//
+// better-sqlite3 takes `@name` as well as `?`, and this adapter used to refuse
+// the named form outright, on the strength of an audit that said the
+// application never used it. The audit was out of date by two call sites, and
+// both of them are in the LEDGER — so every payment taken on a web host failed
+// with "Named parameters are not supported", after the money had been counted
+// and while a parent stood at the counter.
+//
+// So they are supported, because wearing better-sqlite3's shape is this
+// adapter's whole job. A name used twice becomes ONE placeholder, as
+// better-sqlite3 binds it once.
+//
+// `@name` only. SQLite also allows `:name` and `$name`; this does not, and
+// deliberately: `:` is how Postgres writes a cast (`::numeric` — which this
+// very file emits) and `$` is how it writes a placeholder. Refusing to guess
+// beats corrupting a statement that looked fine.
+const NAMED = /^@([A-Za-z_][A-Za-z0-9_]*)/;
+
+function namedParameters(sql) {
+  const names = [];
+  const text = mapOutsideStrings(String(sql), (text_, i) => {
+    if (text_[i] !== '@') return null;
+    const m = NAMED.exec(text_.slice(i));
+    if (!m) return null;
+    let at = names.indexOf(m[1]);
+    if (at === -1) { names.push(m[1]); at = names.length - 1; }
+    return { text: `$${at + 1}`, length: m[0].length };
+  });
+  return { text, names };
+}
+
+// What a statement becomes, and what it wants bound to it.
+function translateWithNames(sql, hasIdColumn) {
+  const named = namedParameters(sql);
+  if (named.names.length) {
+    // A named statement has no `?` to number, and numbering would renumber the
+    // placeholders this just wrote.
+    let out = translateInsertOr(named.text);
+    out = translateDates(out);
+    out = addReturningId(out, hasIdColumn);
+    return { text: out, names: named.names };
+  }
+  return { text: translate(sql, hasIdColumn), names: [] };
+}
+
 function translate(sql, hasIdColumn) {
   let out = String(sql);
   out = translateInsertOr(out);
@@ -286,6 +332,6 @@ function translate(sql, hasIdColumn) {
 }
 
 module.exports = {
-  translate, numberPlaceholders, translateDates, translateInsertOr, addReturningId,
+  translate, translateWithNames, namedParameters, numberPlaceholders, translateDates, translateInsertOr, addReturningId,
   mapOutsideStrings, replaceCall, splitArguments, translateStrftime,
 };
