@@ -2,6 +2,7 @@
 // Copyright © 2026 Nickland Sales. All rights reserved.
 //
 const fs = require('fs');
+const { DOCUMENT_CSP } = require('./_html');
 const path = require('path');
 const { getSetting } = require('../utils/idgen');
 const platform = require('../platform');
@@ -318,7 +319,7 @@ async function exportClassPdf(db, classId, savePath) {
     return `<tr><td class="pd">${esc(p.label)}<div class="t">${esc(p.start_time)}–${esc(p.end_time)}</div></td>${cells}</tr>`;
   }).join('');
 
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+  const html = `<!doctype html><html><head>${DOCUMENT_CSP}<meta charset="utf-8"><style>
     @page { size: A4 landscape; margin: 12mm; }
     body { font-family: Arial, sans-serif; color:#111827; }
     h1 { color:#1B3A6B; text-align:center; margin:0; font-size:22px; }

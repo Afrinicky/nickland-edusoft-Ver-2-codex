@@ -1,6 +1,7 @@
 // Nickland Edusoft — Student Attendance & Events IPC
 // Copyright © 2026 Nickland Sales. All rights reserved.
 const fs = require('fs');
+const { DOCUMENT_CSP } = require('./_html');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const { enqueueStudentSnapshot } = require('../server/sync/outbox');
@@ -451,7 +452,7 @@ function buildAttendanceRegisterHtml(register, getResourcePath) {
   `).join('');
 
   return `<!doctype html>
-<html><head><meta charset="utf-8"><style>
+<html><head>${DOCUMENT_CSP}<meta charset="utf-8"><style>
   @page { size: A4 landscape; margin: 10mm; }
   body { font-family: Arial, sans-serif; color: #111827; }
   .header { display: flex; align-items: center; justify-content: center; gap: 18px; text-align: center; border-bottom: 3px solid #1B3A6B; padding-bottom: 8px; margin-bottom: 10px; }

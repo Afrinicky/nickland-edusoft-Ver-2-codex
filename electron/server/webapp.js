@@ -146,6 +146,43 @@ function cacheHeaderFor(pathname) {
   return 'no-cache';
 }
 
+
+// ── The headers every document this server hands out should carry ───────────
+//
+// This server was sending `X-Content-Type-Options` and nothing else, so the
+// office application and the parents' app were served to a browser with no
+// framing protection, no referrer policy and no limit on which browser
+// features a page could reach for. On the school Wi-Fi that is a smaller
+// problem than on the internet — but `host/server.js` serves these very same
+// files ON the internet, where it is not.
+//
+// What is here is the set the guidance calls low-risk and deploys in parallel
+// with a CSP, plus the non-script half of a CSP:
+//
+//   frame-ancestors / X-Frame-Options  nobody frames the school's office
+//   object-src 'none'                  no plugin-based code execution
+//   base-uri 'none'                    no <base> hijacking of relative URLs
+//   form-action 'self'                 a form cannot post to another origin
+//   Referrer-Policy                    the school's own LAN address is not
+//                                      leaked to whatever a page links to
+//   Permissions-Policy                 the features neither app asks for
+//   COOP                               a malicious opener cannot poke at it
+//
+// NOT `script-src`. The office application declares its own in desk.html
+// (`script-src 'self'`, no unsafe-inline). The parents' app is an Expo bundle
+// that ships no policy of its own, and asserting one here without a built copy
+// in front of me risks a blank page in every parent's browser for a protection
+// I cannot verify. That one is named as outstanding rather than guessed at.
+const DOCUMENT_SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Content-Security-Policy':
+    "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",
+};
+
 function send(res, status, filePath, pathname, cacheHeader) {
   const ext = path.extname(filePath).toLowerCase();
   const body = fs.readFileSync(filePath);
@@ -153,7 +190,7 @@ function send(res, status, filePath, pathname, cacheHeader) {
     'Content-Type': TYPES[ext] || 'application/octet-stream',
     'Content-Length': body.length,
     'Cache-Control': cacheHeader || cacheHeaderFor(pathname),
-    'X-Content-Type-Options': 'nosniff',
+    ...DOCUMENT_SECURITY_HEADERS,
   });
   res.end(body);
 }
@@ -176,6 +213,7 @@ function serveWebApp(req, res, pathname) {
         res.writeHead(200, {
           'Content-Type': TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream',
           'Cache-Control': cacheHeaderFor(pathname),
+          ...DOCUMENT_SECURITY_HEADERS,
         });
         return res.end(), true;
       }
@@ -223,7 +261,7 @@ function serveDeskApp(req, res, pathname) {
     res.writeHead(503, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff',
+      ...DOCUMENT_SECURITY_HEADERS,
     });
     res.end(req.method === 'HEAD' ? '' : body);
     return true;
@@ -239,6 +277,7 @@ function serveDeskApp(req, res, pathname) {
         res.writeHead(200, {
           'Content-Type': TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream',
           'Cache-Control': deskCacheHeaderFor(rel),
+          ...DOCUMENT_SECURITY_HEADERS,
         });
         return res.end(), true;
       }
@@ -266,4 +305,5 @@ function deskCacheHeaderFor(rel) {
 module.exports = {
   serveWebApp, isAvailable, webAppRoot, forgetWebAppRoot,
   serveDeskApp, isDeskAvailable, deskAppRoot,
+  DOCUMENT_SECURITY_HEADERS,
 };

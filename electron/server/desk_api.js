@@ -220,7 +220,7 @@ function sweepStaging(dir) {
   } catch (_) { /* nothing staged yet */ }
 }
 
-function registerDeskRoutes({ add, db, json, API, rateLimited, userDataPath }) {
+function registerDeskRoutes({ add, db, json, API, rateLimited, rpcRateLimited, userDataPath }) {
   const auth = require('../ipc/auth');
   const stagingDir = userDataPath ? path.join(userDataPath, 'desk-staging') : null;
 
@@ -301,9 +301,22 @@ function registerDeskRoutes({ add, db, json, API, rateLimited, userDataPath }) {
   }, { public: true });
 
   // Everything else. One route, every channel.
-  add('POST', `${API}/desk/call`, async (ctx, req, res, params, body) => {
+  add('POST', `${API}/desk/call`, async (ctx, req, res, params, body, ip) => {
     if (!ctx || ctx.role !== 'staff') {
       return json(res, 403, { ok: false, error: 'The office application is for school staff.' });
+    }
+
+    // The sign-in route is throttled and this one — which carries every one of
+    // the four hundred channels — was not. A valid token could therefore drive
+    // any channel as fast as the host would answer: a way to brute-force a
+    // pupil's details through a lookup channel, and a way for one stuck browser
+    // to starve every other desk in the school. Keyed by the account rather
+    // than the address, because two people at one NAT'd school share an address
+    // and must not share a budget — and on its OWN budget (600/min), not the
+    // sign-in limiter, which allows twenty a minute and would have tripped on
+    // the first screen the application drew.
+    if (rpcRateLimited && rpcRateLimited(`desk:${ctx.user.id}`)) {
+      return json(res, 429, { ok: false, error: 'Too many requests. Wait a moment and try again.' });
     }
 
     const channel = String(body.channel || '');

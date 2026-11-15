@@ -11,6 +11,7 @@
 // when the school wants fully bespoke stationery.
 
 const fs = require('fs');
+const { DOCUMENT_CSP } = require('./_html');
 const path = require('path');
 const { getSetting } = require('../utils/idgen');
 const platform = require('../platform');
@@ -303,7 +304,7 @@ function renderReceiptHtml(school, m, paperSize) {
          </div>
        </div>`;
 
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  return `<!doctype html><html><head>${DOCUMENT_CSP}<meta charset="utf-8"><style>
     ${pageCss}
     * { box-sizing: border-box; }
     body { font-family: 'Segoe UI', Arial, sans-serif; color:#111; font-size:${baseFont}; margin:0; }

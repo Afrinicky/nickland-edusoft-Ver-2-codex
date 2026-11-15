@@ -44,6 +44,15 @@ function json(res, code, obj) {
     'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Cache-Control': 'no-store',
+    // Every JSON answer this server gives, including the ones carrying a
+    // pupil's fee ledger. `nosniff` was on the HTML and the file downloads and
+    // not on here, so a browser was still free to sniff a JSON body into
+    // something it would execute. It costs nothing and the Content-Type above
+    // is already correct, which is what makes it enforceable.
+    'X-Content-Type-Options': 'nosniff',
+    // This is an API, not an embeddable resource. No page should be pulling a
+    // school's data in as a subresource.
+    'Cross-Origin-Resource-Policy': 'same-site',
   });
   res.end(body);
 }
@@ -114,6 +123,34 @@ function bump(key, now) {
   rec.n++;
   attempts.set(key, rec);
   return rec.n > MAX_PER_WINDOW;
+}
+
+// ── A separate, generous budget for the office application's RPC ────────────
+//
+// The limiter above is sized for sign-in attempts: twenty a minute, and it
+// bumps BOTH the address bucket and the identity bucket. Reusing it for
+// /desk/call would have been a self-inflicted outage — the office application
+// makes 467 calls across 94 screens and would trip twenty within the first
+// screen, and every tripped call would also eat into the budget that protects
+// the sign-in route.
+//
+// So this is its own map with its own threshold: ten calls a second sustained,
+// per ACCOUNT. Generous enough that no screen can reach it by being used, tight
+// enough that a script driving a lookup channel in a loop is stopped.
+const RPC_WINDOW_MS = 60000;
+const RPC_MAX_PER_WINDOW = 600;
+const rpcCalls = new Map();
+
+function rpcRateLimited(key) {
+  const now = Date.now();
+  if (rpcCalls.size > 500) {
+    for (const [k, v] of rpcCalls) if (now - v.t > RPC_WINDOW_MS) rpcCalls.delete(k);
+  }
+  const rec = rpcCalls.get(key) || { n: 0, t: now };
+  if (now - rec.t > RPC_WINDOW_MS) { rec.n = 0; rec.t = now; }
+  rec.n++;
+  rpcCalls.set(key, rec);
+  return rec.n > RPC_MAX_PER_WINDOW;
 }
 
 function rateLimited(ip, identifier) {
@@ -673,6 +710,13 @@ function createApiServer(db, opts = {}) {
 
   add('POST', `${API}/auth/logout`, async (ctx, req, res, params, body, ip, tokenId) => {
     if (tokenId) tokens.revokeToken(db, tokenId);
+    // Revoking the token server-side is the half that matters. This is the
+    // other half: a shared office or library machine otherwise keeps the
+    // signed-out account's cached pages and whatever the app left in
+    // localStorage — including, until this, the bearer token itself. All three
+    // directives are named, because omitting any one leaves that category
+    // behind.
+    res.setHeader('Clear-Site-Data', '"cookies", "storage", "cache"');
     return json(res, 200, { ok: true });
   });
 
@@ -1687,7 +1731,7 @@ function createApiServer(db, opts = {}) {
   // The office application itself, over the network — one route carrying every
   // channel the installed application has. See electron/server/desk_api.js for
   // why it is one route and not four hundred.
-  registerDeskRoutes({ add, db, json, API, rateLimited,
+  registerDeskRoutes({ add, db, json, API, rateLimited, rpcRateLimited,
     userDataPath: opts.userDataPath || db._userDataPath || null });
 
   // There is no payment webhook here any more, and no checkout to answer for.

@@ -17,8 +17,19 @@
         application's own index.html is UNCHANGED and still allows nothing
         but itself.
   -->
+  <!-- script-src is 'self' with NO 'unsafe-inline'.
+       It used to carry 'unsafe-inline', which meant the policy did not stop the
+       thing a CSP is mainly for: Report.jsx hands the report-card HTML to
+       dangerouslySetInnerHTML inside this very renderer, and this renderer holds
+       window.api — the whole IPC surface, as whoever is signed in. An injected
+       <script> or onerror= in a pupil's name therefore ran with that account's
+       permissions. Both builds emit a single external module script and zero
+       inline script blocks (checked), so 'unsafe-inline' bought nothing.
+       style-src keeps it: React writes inline styles, and the report carries its
+       own <style> block. object-src/base-uri/frame-ancestors/form-action are the
+       directives a CSP is incomplete without. -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://rsms.me; font-src 'self' https://fonts.gstatic.com https://rsms.me; img-src 'self' data: blob:; connect-src 'self' http: https:;" />
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://rsms.me; font-src 'self' https://fonts.gstatic.com https://rsms.me; img-src 'self' data: blob:; connect-src 'self' http: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none';" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Lato:wght@400;700&family=Open+Sans:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet" />
 </head>

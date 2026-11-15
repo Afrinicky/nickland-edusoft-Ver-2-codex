@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getSetting } = require('../utils/idgen');
+const { escapeHtml, cssColor, imageDataUri, escapeNames, DOCUMENT_CSP } = require('./_html');
 const platform = require('../platform');
 
 function registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath) {
@@ -70,11 +71,18 @@ function registerReportsHandlers(ipcMain, db, userDataPath, getResourcePath) {
 
 function renderCardHtml(db, getResourcePath, { studentId, termId, colorMode = 'color' }) {
   const header = getSchoolHeader(db, getResourcePath, colorMode);
-  const student = db.prepare(`
+  const studentRaw = db.prepare(`
     SELECT s.*, c.name AS class_name, c.short_code AS class_short FROM students s
     LEFT JOIN class_groups c ON c.id = s.current_class_id WHERE s.id = ?
   `).get(studentId);
-  if (!student) return { ok: false, error: 'Student not found' };
+  if (!studentRaw) return { ok: false, error: 'Student not found' };
+  // NOT escaped here. The rule in this file is that the function which BUILDS
+  // the markup escapes its own inputs (see reportCardHtml below), so a row is
+  // escaped exactly once however many builders it passes through — escaping it
+  // twice would render `&amp;` as `&amp;amp;` on a pupil named O'Brien & Sons.
+  // `meta` is read as TEXT by the app and the cloud projection, so it keeps the
+  // raw values. See ipc/_html.js.
+  const student = studentRaw;
   const term = db.prepare(`
     SELECT t.*, ay.label AS year_label FROM terms t
     JOIN academic_years ay ON ay.id = t.academic_year_id WHERE t.id = ?
@@ -99,9 +107,9 @@ function renderCardHtml(db, getResourcePath, { studentId, termId, colorMode = 'c
     html: inner,
     styles,
     meta: {
-      student_name: `${student.surname || ''} ${student.first_name || ''}`.trim(),
-      index_number: student.index_number,
-      class_name: student.class_name || student.class_short,
+      student_name: `${studentRaw.surname || ''} ${studentRaw.first_name || ''}`.trim(),
+      index_number: studentRaw.index_number,
+      class_name: studentRaw.class_name || studentRaw.class_short,
       scores_count: filteredScores.length,
     },
   };
@@ -116,7 +124,7 @@ function reportCardDocument(db, getResourcePath, { studentId, termId, colorMode 
   return {
     ok: true,
     meta: r.meta,
-    document: `<!doctype html><html><head><meta charset="utf-8"><title>Report card — ${
+    document: `<!doctype html><html><head>${DOCUMENT_CSP}<meta charset="utf-8"><title>Report card — ${
       String(r.meta.student_name || 'Pupil').replace(/[<>&"]/g, '')
     }</title><style>${r.styles}</style></head><body>${r.html}</body></html>`,
   };
@@ -139,7 +147,30 @@ function getSchoolHeader(db, getResourcePath, colorMode = 'color') {
     const ext = path.extname(logoPath).slice(1).toLowerCase() || 'png';
     logoData = `data:image/${ext};base64,${buf.toString('base64')}`;
   }
-  return { name, motto, address, digital, email, phone1, phone2, logoData, primaryColor, accentColor, colorMode };
+  // ── Escaped HERE, once, rather than at each interpolation ────────────────
+  //
+  // This object is drawn into the letterhead of every document this file
+  // produces — ten of them — and those templates interpolated it raw. The
+  // school's own name, motto and address are typed by somebody holding
+  // Settings:edit, and the document ends up in the office PC's renderer, in a
+  // same-origin iframe in a parent's browser, and in the cloud. See ipc/_html.js.
+  //
+  // The two colours are NOT html-escaped: they land inside a `style` attribute,
+  // where `escapeHtml` touches nothing that matters and `}` would close the
+  // rule early. They are validated against the colour grammar instead.
+  return {
+    name: escapeHtml(name),
+    motto: escapeHtml(motto),
+    address: escapeHtml(address),
+    digital: escapeHtml(digital),
+    email: escapeHtml(email),
+    phone1: escapeHtml(phone1),
+    phone2: escapeHtml(phone2),
+    logoData: imageDataUri(logoData),
+    primaryColor: cssColor(primaryColor, '#1B3A6B'),
+    accentColor: cssColor(accentColor, '#C9961A'),
+    colorMode,
+  };
 }
 
 function schoolHeaderHtml(header) {
@@ -249,7 +280,7 @@ async function generateReportCards(db, userDataPath, getResourcePath, params) {
   }
 
   const html = `
-    <!doctype html><html><head><style>${baseStyles()}${reportCardStyles(header)}</style></head>
+    <!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}${reportCardStyles(header)}</style></head>
     <body>${pages.join('')}</body></html>
   `;
   const filename = `report_cards_${Date.now()}.${format === 'docx' ? 'html' : 'pdf'}`;
@@ -506,6 +537,9 @@ function enrichSummaryLive(db, studentId, termId, classGroupId, base) {
 
 // Render one student's terminal report as a single .page block.
 function reportCardHtml(header, student, scores, summary, term, signatures, examWeight = 60) {
+  // The pupil's own name, the class and the term label all land in markup below. Escaped on the way in, once, because this builder has more
+  // interpolations of it than anybody will reliably remember. ipc/_html.js.
+  student = escapeNames(student);
   const sig = signatures || {};
   const fullName = `${student.surname || ''} ${student.first_name || ''} ${student.other_names || ''}`
     .replace(/\s+/g, ' ').trim().toUpperCase();
@@ -896,7 +930,7 @@ async function generateBillsPdf(db, userDataPath, getResourcePath, params) {
     ).all(id);
     pages.push(billHtml(header, bill, items));
   }
-  const html = `<!doctype html><html><head><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
+  const html = `<!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
   const outPath = path.join(userDataPath, 'reports', `bills_${Date.now()}.pdf`);
   if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
   await htmlToPdf(html, outPath);
@@ -960,7 +994,7 @@ async function generateCanteenBills(db, userDataPath, getResourcePath, params) {
     }));
   }
 
-  const html = `<!doctype html><html><head><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
+  const html = `<!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
   const outPath = path.join(userDataPath, 'reports', `canteen_bills_${Date.now()}.pdf`);
   if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
   await htmlToPdf(html, outPath);
@@ -1005,7 +1039,7 @@ async function generateBooksBills(db, userDataPath, getResourcePath, params) {
     }));
   }
 
-  const html = `<!doctype html><html><head><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
+  const html = `<!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`;
   const outPath = path.join(userDataPath, 'reports', `books_bills_${Date.now()}.pdf`);
   if (!fs.existsSync(path.dirname(outPath))) fs.mkdirSync(path.dirname(outPath), { recursive: true });
   await htmlToPdf(html, outPath);
@@ -1020,6 +1054,9 @@ function termFullLabel(term) {
 
 /** The identity block every bill in this system opens with. */
 function billIdentityHtml(student, extra) {
+  // Shared by every bill document, so escaping here covers all of them. Escaped on the way in, once, because this builder has more
+  // interpolations of it than anybody will reliably remember. ipc/_html.js.
+  student = escapeNames(student);
   const fullName = `${student.surname || ''} ${student.first_name || ''} ${student.other_names || ''}`.trim();
   return `
     <table style="margin-bottom:2.5mm; border:0.5pt solid #bbb;">
@@ -1195,6 +1232,8 @@ function tint(hex) {
 //   PART C: books (academic-year-level)
 //   PART D: supplementary charges raised during the term
 function billHtml(header, bill, items) {
+  // Escaped on the way in, once, like every other builder in this file.
+  bill = escapeNames(bill);
   const fullName = `${bill.surname || ''} ${bill.first_name || ''} ${bill.other_names || ''}`.trim();
 
   // Split bill_line_items by charge type. `charge_type` is authoritative;
@@ -1414,7 +1453,7 @@ async function generatePayslip(db, userDataPath, getResourcePath, salaryId, opti
   `).get(salaryId);
   if (!sal) return { ok: false, error: 'Salary record not found' };
   const html = `
-    <!doctype html><html><head><style>${baseStyles()}</style></head><body>
+    <!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}</style></head><body>
     <div class="page">
       ${schoolHeaderHtml(header)}
       <div style="text-align:center; background:${header.primaryColor}; color:#fff; padding:4px 0; font-size:11pt; font-weight:700; letter-spacing:1px; margin-bottom:4mm;">
@@ -1461,7 +1500,7 @@ async function generateReceipt(db, userDataPath, getResourcePath, paymentId, opt
   if (!p) return { ok: false, error: 'Payment not found' };
 
   const html = `
-    <!doctype html><html><head><style>${baseStyles()}</style></head><body>
+    <!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}</style></head><body>
     <div class="page">
       ${schoolHeaderHtml(header)}
       <div style="text-align:center; background:${header.primaryColor}; color:#fff; padding:4px 0; font-size:12pt; font-weight:700;">
@@ -1518,7 +1557,7 @@ async function generateDebtorsList(db, userDataPath, getResourcePath, termId, op
     </tr>
   `).join('');
   const html = `
-    <!doctype html><html><head><style>${baseStyles()}</style></head><body>
+    <!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}</style></head><body>
     <div class="page">
       ${schoolHeaderHtml(header)}
       <div style="text-align:center; background:${header.primaryColor}; color:#fff; padding:4px 0; font-size:11pt; font-weight:700; margin-bottom:4mm;">
@@ -1564,7 +1603,7 @@ async function generateClassList(db, userDataPath, getResourcePath, classId, opt
     </tr>
   `).join('');
   const html = `
-    <!doctype html><html><head><style>${baseStyles()}</style></head><body>
+    <!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}</style></head><body>
     <div class="page">
       ${schoolHeaderHtml(header)}
       <div style="text-align:center; background:${header.primaryColor}; color:#fff; padding:4px 0; font-size:11pt; font-weight:700; margin-bottom:4mm;">
@@ -1605,13 +1644,17 @@ async function generateStudentProfile(db, userDataPath, getResourcePath, student
 function studentProfileDocument(db, getResourcePath, studentId, options = {}) {
   const colorMode = options.colorMode || 'color';
   const header = getSchoolHeader(db, getResourcePath, colorMode);
-  const s = db.prepare(`
+  const sRaw = db.prepare(`
     SELECT s.*, c.name AS class_name, c.short_code AS class_code
     FROM students s
     LEFT JOIN class_groups c ON c.id = s.current_class_id
     WHERE s.id = ?
   `).get(studentId);
-  if (!s) return { ok: false, error: 'Student not found' };
+  if (!sRaw) return { ok: false, error: 'Student not found' };
+  // Escaped for the markup below; `sRaw` is kept because the download filename
+  // is built from the real name further down (safeName), and a filename wants
+  // the pupil's name, not `&amp;`. See ipc/_html.js.
+  const s = escapeNames(sRaw);
 
   // Helper to compute age from DOB
   function ageFromDob(dob) {
@@ -1643,7 +1686,7 @@ function studentProfileDocument(db, getResourcePath, studentId, options = {}) {
 
   const row = (label, value) => `<tr><td style="width:40%; color:#555; padding:2mm 4mm;">${label}</td><td style="padding:2mm 4mm; font-weight:600;">${value ?? '—'}</td></tr>`;
 
-  const html = `<!doctype html><html><head><style>${baseStyles()}</style></head><body>
+  const html = `<!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}</style></head><body>
     <div class="page">
       ${schoolHeaderHtml(header)}
       <div style="text-align:center; background:${header.primaryColor}; color:#fff; padding:5px 0; font-size:11pt; font-weight:700; letter-spacing:1px; margin-bottom:4mm;">
@@ -1711,7 +1754,7 @@ function studentProfileDocument(db, getResourcePath, studentId, options = {}) {
     </div>
   </body></html>`;
 
-  const safeName = `${(s.surname || 'student').replace(/[^a-z0-9]/gi, '_')}_${s.first_name || ''}`.toLowerCase();
+  const safeName = `${(sRaw.surname || 'student').replace(/[^a-z0-9]/gi, '_')}_${sRaw.first_name || ''}`.toLowerCase();
   return {
     ok: true,
     document: html,
@@ -1776,7 +1819,7 @@ async function generateAttestation(db, userDataPath, getResourcePath, studentId,
   };
   const body = bodies[kind] || bodies.attestation;
 
-  const html = `<!doctype html><html><head><style>${baseStyles()}
+  const html = `<!doctype html><html><head>${DOCUMENT_CSP}<style>${baseStyles()}
     .cert-body { font-size: 11.5pt; line-height: 1.9; margin: 6mm 6mm; text-align: justify; }
     .cert-title { text-align:center; font-size: 18pt; font-weight: 800; letter-spacing: 4px;
                   margin: 10mm 0 6mm 0; color: ${header.primaryColor}; }
@@ -1934,7 +1977,7 @@ async function generateExamPaper(db, userDataPath, getResourcePath, paperId, opt
     'quiz':        'QUIZ',
   }[paper.exam_type] || 'EXAMINATION';
 
-  const html = `<!doctype html><html><head><style>
+  const html = `<!doctype html><html><head>${DOCUMENT_CSP}<style>
     ${baseStyles()}
     body { font-family: 'Times New Roman', 'Cambria', serif; font-size: 11.5pt; line-height: 1.5; }
     .gh-paper-header { text-align: center; margin-bottom: 4mm; }
@@ -2060,12 +2103,9 @@ async function generateExamPaper(db, userDataPath, getResourcePath, paperId, opt
   return { ok: true, path: outPath, total_questions: totalQ, total_marks: totalMarks };
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
+// escapeHtml, cssColor and imageDataUri now live in ipc/_html.js, shared with
+// every other document generator — receipts, the register, the timetable —
+// which had the same gap for the same reason.
 
 function formatInstructions(text) {
   // If the instructions already start with "1." or "1)" treat as a list,
@@ -2128,7 +2168,7 @@ module.exports.billsDocument = function billsDocument(db, getResourcePath, { bil
   if (!pages.length) return { ok: false, error: 'None of those bills exist.' };
   return {
     ok: true, count: pages.length,
-    document: `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
+    document: `<!doctype html><html><head>${DOCUMENT_CSP}<meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
   };
 };
 
@@ -2202,7 +2242,7 @@ module.exports.canteenBillsDocument = function canteenBillsDocument(db, getResou
   if (!pages.length) return { ok: false, error: 'Nobody to bill.' };
   return {
     ok: true, count: pages.length,
-    document: `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
+    document: `<!doctype html><html><head>${DOCUMENT_CSP}<meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
   };
 };
 
@@ -2239,7 +2279,7 @@ module.exports.booksBillsDocument = function booksBillsDocument(db, getResourceP
   if (!pages.length) return { ok: false, error: 'Nobody to bill.' };
   return {
     ok: true, count: pages.length,
-    document: `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
+    document: `<!doctype html><html><head>${DOCUMENT_CSP}<meta charset="utf-8"><style>${baseStyles()}${billStyles()}</style></head><body>${pages.join('')}</body></html>`,
   };
 };
 

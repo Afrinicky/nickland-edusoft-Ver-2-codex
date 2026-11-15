@@ -169,6 +169,37 @@ function get(base, p, method = 'GET') {
   }
   ck('path traversal cannot read outside the office build either', true);
 
+  // ── every document carries the browser-side defences ──────────────────────
+  //
+  // This server used to send X-Content-Type-Options and nothing else, so both
+  // applications were handed to a browser with no framing protection, no
+  // referrer policy and no limit on the browser features a page could reach
+  // for. It matters more than it sounds: host/server.js serves these very same
+  // files on the INTERNET.
+  //
+  // Asserted on the parents' app, the office app AND the 503 page, because a
+  // header set that is on some responses and not others is the gap it was
+  // meant to close.
+  for (const [label, url] of [
+    ["the parents' app", '/'],
+    ['the office app', '/desk/'],
+  ]) {
+    r = await get(base, url);
+    const h = r.headers || {};
+    ck(`${label} refuses to be framed`,
+      h['x-frame-options'] === 'DENY' && /frame-ancestors 'none'/.test(h['content-security-policy'] || ''));
+    ck(`${label} blocks plugins and <base> hijacking`,
+      /object-src 'none'/.test(h['content-security-policy'] || '')
+      && /base-uri 'none'/.test(h['content-security-policy'] || ''));
+    ck(`${label} does not leak the school's address in a referrer`,
+      h['referrer-policy'] === 'strict-origin-when-cross-origin');
+    ck(`${label} turns off the browser features neither app asks for`,
+      /camera=\(\)/.test(h['permissions-policy'] || '') && /geolocation=\(\)/.test(h['permissions-policy'] || ''));
+    ck(`${label} is not MIME-sniffed`, h['x-content-type-options'] === 'nosniff');
+    ck(`${label} cannot be poked at by an opener`,
+      h['cross-origin-opener-policy'] === 'same-origin');
+  }
+
   server.close();
   try {
     fs.rmSync(root, { recursive: true, force: true });

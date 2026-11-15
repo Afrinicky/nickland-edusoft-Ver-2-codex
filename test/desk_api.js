@@ -384,6 +384,23 @@ const call = (base, token, channel, ...args) =>
     !r.json.channels.some(c => c.startsWith('app:')));
 
   server.close();
+  // ── the RPC budget is generous enough to use the application ──────────────
+  //
+  // /desk/call carries all 408 channels and had no limit at all. Giving it the
+  // SIGN-IN limiter instead would have been an outage: that one allows twenty
+  // a minute, and the office application makes 467 calls across 94 screens.
+  // So this drives far more calls than any screen does and requires that none
+  // of them is refused.
+  {
+    let refused = 0;
+    for (let i = 0; i < 120; i++) {
+      const r = await call(base, admin.token, 'settings:list-classes');
+      if (r.status === 429) refused++;
+    }
+    ck('120 calls in a row — more than any screen makes — are all answered', refused === 0,
+      refused ? `${refused} were refused` : '');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

@@ -122,7 +122,7 @@ function footer(extra) {
 }
 
 function page(title, bodyHtml) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${CSS}</style></head>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><title>${esc(title)}</title><style>${CSS}</style></head>
     <body><div class="sheet">${bodyHtml}</div></body></html>`;
 }
 
@@ -238,6 +238,29 @@ function ensureFrame() {
   frame = document.createElement('iframe');
   frame.setAttribute('aria-hidden', 'true');
   frame.setAttribute('title', 'Print');
+  // ── Why this iframe is sandboxed ──────────────────────────────────────────
+  //
+  // printInFrame() below does doc.write(html) with a document built by the
+  // school's own report generator. That generator escaped its table cells and
+  // not its names, its letterhead or its term labels, so a pupil admitted as
+  // `<img src=x onerror=…>` by anybody holding Students:create became script —
+  // running on THIS page, same-origin, where localStorage holds a bearer token
+  // good for up to thirty days.
+  //
+  // The escaping is fixed and the documents now carry their own
+  // `script-src 'none'`, but neither of those is a reason to hand the next
+  // missed escape an unsandboxed frame.
+  //
+  //   allow-same-origin  the parent has to reach contentWindow.document to
+  //                      write into it, and to call print() on it
+  //   allow-modals       window.print() opens a modal; without this the
+  //                      print dialog never appears
+  //
+  // 'allow-scripts' is deliberately absent, which is what makes this a
+  // defence: a document in here cannot run script at all. Note that
+  // allow-scripts AND allow-same-origin together would let a frame remove its
+  // own sandbox, so the pair is never used.
+  frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
   frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
   document.body.appendChild(frame);
   return frame;
@@ -285,7 +308,12 @@ function openInTab(html) {
   try {
     const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
-    const w = window.open(url, '_blank');
+    // `noopener` severs window.opener. A blob: URL inherits the creating
+    // origin, so a document opened this way is same-origin with the app — and
+    // without this, script in it could reach back through window.opener to the
+    // page holding the token. The document's own `script-src 'none'` is the
+    // first line; this is the second.
+    const w = window.open(url, '_blank', 'noopener');
     if (!w) { URL.revokeObjectURL(url); return { ok: false, error: 'Your browser blocked the document. Allow pop-ups for this site and try again.' }; }
     setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 60000);
     return { ok: true };
