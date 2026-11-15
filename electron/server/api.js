@@ -378,7 +378,11 @@ function createApiServer(db, opts = {}) {
   add('GET', `${API}/info`, async (ctx, req, res) => json(res, 200, {
     ok: true,
     school: { name: getSetting(db, 'school_name', 'School'), motto: getSetting(db, 'school_motto', ''), phone: getSetting(db, 'school_phone_1', '') },
-    parent_self_register: getSetting(db, 'mobile_parent_self_register', 'true') === 'true',
+    // Always false. Self-registration was removed (see server/parents.js), and
+    // the field is kept rather than dropped so an older build of the app reads
+    // a definite "no" and hides the button, instead of reading `undefined`
+    // from a field it still expects.
+    parent_self_register: false,
     // Whether this school takes money through the app. False unless a gateway
     // is configured AND the school has switched it on, so a school that has
     // pasted a test key is not quietly live. A client that is told false shows
@@ -437,19 +441,23 @@ function createApiServer(db, opts = {}) {
     });
   }, { public: true });
 
+  // Staff sign-in over the network.
+  //
+  // This used to compare the password itself, with its own bcrypt call and no
+  // account throttle at all — so of the three ways into a staff account, the
+  // two that answer over a network were the two with the weakest brake on
+  // guessing. One implementation of "check a staff password" now, the same one
+  // the office PC's window uses (electron/ipc/auth.js): the same throttle, the
+  // same audit row, the same hashes.
   add('POST', `${API}/auth/login`, async (ctx, req, res, params, body, ip) => {
     if (rateLimited(ip, body.username)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
-    let bcrypt; try { bcrypt = require('bcryptjs'); } catch { return json(res, 500, { ok: false, error: 'auth unavailable' }); }
-    const u = db.prepare(`
-      SELECT u.*, d.name AS designation FROM users u LEFT JOIN designations d ON d.id = u.designation_id
-      WHERE u.username = ? AND u.is_active = 1
-    `).get(body.username);
-    if (!u || !u.password_hash || !bcrypt.compareSync(String(body.password || ''), u.password_hash)) {
-      return json(res, 401, { ok: false, error: 'Invalid username or password.' });
-    }
-    const t = tokens.issueToken(db, 'user', u.id, { deviceName: body.device, platform: body.platform });
+    const r = require('../ipc/auth').authenticate(db, {
+      username: body.username, password: body.password, source: ip,
+    });
+    if (!r.ok) return json(res, /too many/i.test(r.error || '') ? 429 : 401, { ok: false, error: r.error });
+    const t = tokens.issueToken(db, 'user', r.user.id, { deviceName: body.device, platform: body.platform });
     return json(res, 200, { ok: true, token: t.token, expires_at: t.expires_at,
-      user: { id: u.id, full_name: u.full_name, designation: u.designation, role: 'staff' } });
+      user: { id: r.user.id, full_name: r.user.fullName, designation: r.user.designation, role: 'staff' } });
   }, { public: true });
 
   // Passwords, for a phone on the school Wi-Fi. The same module the desktop's
@@ -477,21 +485,27 @@ function createApiServer(db, opts = {}) {
     return json(res, r.ok ? 200 : 400, r);
   }, { public: true });
 
+  // Self-registration is gone. See electron/server/parents.js for why: a phone
+  // number is not proof that you are that child's parent, and the number is not
+  // a secret.
+  //
+  // The route is kept, and answers the same refusal it already had when a
+  // school switched the feature off — because a phone with an older build of
+  // the app still has the button, and a 404 reads as "the school's system is
+  // broken" while this reads as what it is. It consults no setting: there is
+  // no longer a setting that can turn it back on.
   add('POST', `${API}/auth/parent/register`, async (ctx, req, res, params, body, ip) => {
     if (rateLimited(ip, body.phone || body.email)) return json(res, 429, { ok: false, error: 'Too many attempts.' });
-    if (getSetting(db, 'mobile_parent_self_register', 'true') !== 'true') {
-      return json(res, 403, { ok: false, error: 'Self-registration is disabled. Ask the school to register you.' });
-    }
-    const r = parents.registerParent(db, body);
-    if (!r.ok) return json(res, 400, r);
-    const t = tokens.issueToken(db, 'parent', r.parent_id, { deviceName: body.device, platform: body.platform });
-    return json(res, 200, { ok: true, token: t.token, expires_at: t.expires_at, linked: r.linked });
+    return json(res, 403, { ok: false, error: 'Ask the school to set up your account.' });
   }, { public: true });
 
   add('POST', `${API}/auth/parent/login`, async (ctx, req, res, params, body, ip) => {
     if (rateLimited(ip, body.identifier)) return json(res, 429, { ok: false, error: 'Too many attempts.' });
-    const r = parents.loginParent(db, body);
-    if (!r.ok) return json(res, 401, r);
+    // The source address is what keeps the throttle from being a way to lock a
+    // parent out: failures are counted per (account, source). See
+    // server/parents.js.
+    const r = parents.loginParent(db, { ...body, source: ip });
+    if (!r.ok) return json(res, r.throttled ? 429 : 401, r);
     const t = tokens.issueToken(db, 'parent', r.parent.id, { deviceName: body.device, platform: body.platform });
     return json(res, 200, { ok: true, token: t.token, expires_at: t.expires_at, parent: r.parent });
   }, { public: true });
@@ -512,23 +526,37 @@ function createApiServer(db, opts = {}) {
     if (rateLimited(ip, identifier)) return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
     if (!identifier || !body.password) return json(res, 400, { ok: false, error: 'Enter your username or phone, and your password.' });
 
-    let bcrypt = null;
-    try { bcrypt = require('bcryptjs'); } catch (_) {}
-    if (bcrypt) {
-      const u = db.prepare(`
-        SELECT u.*, d.name AS designation FROM users u LEFT JOIN designations d ON d.id = u.designation_id
-        WHERE u.username = ? AND u.is_active = 1
-      `).get(identifier);
-      if (u && u.password_hash && bcrypt.compareSync(String(body.password), u.password_hash)) {
-        const t = tokens.issueToken(db, 'user', u.id, { deviceName: body.device, platform: body.platform });
+    // Staff first, and through the one function that checks a staff password
+    // (electron/ipc/auth.js) rather than a second bcrypt call of its own — so
+    // this box is held to the same throttle and writes the same audit row as
+    // every other way in.
+    //
+    // Only when the identifier IS a staff username, though. This box also
+    // takes a parent's phone number, and running every parent's sign-in
+    // through the staff throttle would fill the security log with failures
+    // that are not failures and could lock a staff account out on a number
+    // that was never theirs.
+    const staffRow = db.prepare(
+      'SELECT id FROM users WHERE username = ? AND is_active = 1').get(identifier);
+    if (staffRow) {
+      const r = require('../ipc/auth').authenticate(db, {
+        username: identifier, password: body.password, source: ip,
+      });
+      if (r.ok) {
+        const t = tokens.issueToken(db, 'user', r.user.id, { deviceName: body.device, platform: body.platform });
         return json(res, 200, {
           ok: true, role: 'staff', token: t.token, expires_at: t.expires_at,
-          user: { id: u.id, full_name: u.full_name, designation: u.designation, role: 'staff' },
+          user: { id: r.user.id, full_name: r.user.fullName, designation: r.user.designation, role: 'staff' },
         });
       }
+      if (/too many/i.test(r.error || '')) return json(res, 429, { ok: false, error: r.error });
+      // A real username with the wrong password stops here rather than being
+      // tried against the parents' table as well. One credential, one account.
+      return json(res, 401, { ok: false, error: 'Those details did not match an account. Check and try again.' });
     }
 
-    const r = parents.loginParent(db, { identifier, password: body.password });
+    const r = parents.loginParent(db, { identifier, password: body.password, source: ip });
+    if (r.throttled) return json(res, 429, { ok: false, error: r.error });
     if (r.ok) {
       const t = tokens.issueToken(db, 'parent', r.parent.id, { deviceName: body.device, platform: body.platform });
       return json(res, 200, { ok: true, role: 'parent', token: t.token, expires_at: t.expires_at, parent: r.parent });

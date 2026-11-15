@@ -999,17 +999,22 @@ CREATE TABLE IF NOT EXISTS settings (
   description TEXT
 );
 
-CREATE TABLE IF NOT EXISTS audit_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  table_name TEXT,
-  record_id INTEGER,
-  action TEXT,
-  field_name TEXT,
-  old_value TEXT,
-  new_value TEXT,
-  changed_by TEXT,
-  changed_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+-- There was a SECOND audit_log here: a different table of the same name, with
+-- table_name/record_id/field_name/old_value/new_value/changed_by/changed_at.
+-- Being a CREATE TABLE IF NOT EXISTS after the real one at the top of this
+-- file, it has never done anything on any installation — SQLite saw the name
+-- already taken and moved on. No database has those columns and no code reads
+-- them (checked: nothing references any of the seven).
+--
+-- Removed rather than left as harmless, because what it actually did was make
+-- the schema ambiguous to anybody reading it, including the Postgres generator
+-- (scripts/schema-to-postgres.mjs) which renders this file for the cloud. Two
+-- definitions, one winner decided by line order, is the sort of thing that is
+-- harmless right up until somebody reorders the file.
+--
+-- The real audit_log — entity_type, entity_id, action, user_id, justification,
+-- before_data, after_data, severity, created_at — is defined above and is what
+-- every writer in the application uses.
 
 CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1537,7 +1542,6 @@ function runMigrations(db) {
     ins.run('mobile_server_enabled', 'false');   // start the embedded API server
     ins.run('mobile_server_port', '4747');        // TCP port for the API
     ins.run('mobile_server_bind', 'lan');         // 'lan' (0.0.0.0) | 'localhost'
-    ins.run('mobile_parent_self_register', 'true'); // parents may self-register if their phone matches a student
     ins.run('mobile_token_ttl_days', '30');
   });
 

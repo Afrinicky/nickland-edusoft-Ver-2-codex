@@ -105,10 +105,10 @@ function makeDesktopDb() {
 
   // ── Full chain: desktop provisions a parent → projects auth → website login ──
   const parents = require(path.join(ROOT, 'electron/server/parents.js'));
-  const prov = parents.provisionParent(db, { full_name: 'Mama', phone: '0209998887', password: 'pass12', studentIds: [1] });
+  const prov = parents.provisionParent(db, { full_name: 'Mama', phone: '0209998887', password: 'pass123456', studentIds: [1] });
   ck('desktop provisions a parent', prov.ok);
   await client.push(db); // projects parent_auth (+ the student snapshot is already up)
-  const login = await httpJson(`${base}/api/v1/portal/login`, { method: 'POST', body: { school_id, identifier: '0209998887', password: 'pass12' } });
+  const login = await httpJson(`${base}/api/v1/portal/login`, { method: 'POST', body: { school_id, identifier: '0209998887', password: 'pass123456' } });
   ck('parent logs into the website (auth projected from desktop)', login.json && login.json.ok && !!login.json.token);
   const kids = await httpJson(`${base}/api/v1/portal/children`, { headers: { Authorization: 'Bearer ' + login.json.token } });
   ck('website shows the child pushed from the desktop', kids.json.ok && kids.json.children.length === 1 && kids.json.children[0].fees.balance === 260);

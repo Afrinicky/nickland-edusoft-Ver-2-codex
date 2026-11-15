@@ -120,22 +120,33 @@ def main():
         "school_id": school_id, "username": "adjei", "password": "pass1234"}).json()["token"]
     staff_auth = {"Authorization": "Bearer " + staff_token}
 
-    # ── a parent registers against the record the school already holds ──────
-    r = client.post("/api/v1/school/parent/register", json={
-        "school_id": school_id, "full_name": "Mrs Ansu", "phone": "0244111222",
-        "password": "parent1234"})
-    ck("a parent registers because the school already has her number", r.json().get("linked") == 1)
+    # ── the pupil's mother, set up BY THE SCHOOL ────────────────────────────
+    #
+    # This used to call /parent/register, which no longer exists: matching a
+    # typed phone number against a pupil's guardian contacts proved only that
+    # the caller knew the number, and the number is not a secret. A parent
+    # account is created by the school now, so the test creates one the way the
+    # school does — the row and the link, explicitly.
+    parent_id = db.insert("parents", {
+        "full_name": "Mrs Ansu", "phone": parents.norm_phone("0244111222"),
+        "password_hash": parents.hash_password("parent1234"), "is_active": 1,
+    })
+    db.run("""INSERT INTO parent_students (parent_id, student_id, relationship)
+                   VALUES (%s,%s,%s) ON CONFLICT DO NOTHING""",
+           (parent_id, mine, "Mother"))
+
+    r = client.post("/api/v1/school/parent/signin", json={
+        "school_id": school_id, "identifier": "0244111222", "password": "parent1234"})
+    ck("the parent the school set up can sign in", r.status_code == 200 and r.json().get("token"))
     token = r.json()["token"]
     auth = {"Authorization": "Bearer " + token}
 
+    # And the door that was removed stays shut, whatever an older app sends it.
     r = client.post("/api/v1/school/parent/register", json={
-        "school_id": school_id, "full_name": "Nobody", "phone": "0209999999",
+        "school_id": school_id, "full_name": "Nobody", "phone": "0244111222",
         "password": "parent1234"})
-    ck("...and somebody the school has never heard of cannot", r.status_code == 400)
-    r = client.post("/api/v1/school/parent/register", json={
-        "school_id": school_id, "full_name": "Mrs Ansu", "phone": "0244111222", "password": "1234"})
-    ck("...and a four-character password is refused, which the offline system allows",
-       r.status_code == 400)
+    ck("...and self-registration is refused outright, even with a number the school holds",
+       r.status_code == 403)
 
     r = client.get("/api/v1/school/parent/children", headers=auth)
     ck("she sees her own child", len(r.json()["children"]) == 1)

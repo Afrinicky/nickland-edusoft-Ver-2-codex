@@ -44,7 +44,7 @@ const SETTINGS_READABLE = [
   'school_location', 'school_digital_address', 'school_phone_1', 'school_phone_2',
   'school_email', 'school_website', 'school_whatsapp',
   'payment_currency', 'canteen_daily_rate', 'vacation_date', 'reopening_date',
-  'current_exam_title', 'mobile_parent_self_register', 'mobile_token_ttl_days',
+  'current_exam_title', 'mobile_token_ttl_days',
   'payment_gateway', 'paystack_public_key', 'paystack_base_url', 'paystack_callback_url',
   'online_payments_enabled', 'online_payment_min', 'online_payment_max',
   'flutterwave_public_key', 'flutterwave_base_url', 'flutterwave_callback_url',
@@ -55,12 +55,38 @@ const SETTINGS_READABLE = [
 // that a screenshot can carry out of the building. Hubtel's API ID and
 // ExpressPay's key are here for the same reason their partners are: an id that
 // is half of a credential pair is a credential.
+//
+// The list itself moved to ipc/_secrets.js. It used to live here, which is how
+// the IPC channel settings:get-all came to hand out every one of these to any
+// signed-in account: this file knew they were secrets and that one did not.
+// One list, read by everything that shows settings to anybody.
+//
+// Only the keys this route is willing to accept are named here — the SMS, mail
+// and cloud credentials are secrets too, but they are not set from the system
+// settings screen, and a route should not start accepting a key because it was
+// added to a list somewhere else.
 const SETTINGS_WRITE_ONLY = [
   'paystack_secret_key',
   'flutterwave_secret_key', 'flutterwave_secret_hash',
   'hubtel_client_id', 'hubtel_client_secret',
   'expresspay_api_key',
 ];
+
+// Every key this route accepts as a secret must be one ipc/_secrets.js knows
+// is a secret, or it would be writable here and readable through
+// settings:get-all. Checked rather than assumed, because the two lists exist
+// for different reasons — that one is "never read this out", this one is "this
+// screen may set this" — and a key can be added to one and forgotten in the
+// other. A mismatch is a programming error and says so at load.
+{
+  const { isSecret } = require('../ipc/_secrets');
+  const stray = SETTINGS_WRITE_ONLY.filter(k => !isSecret(k));
+  if (stray.length) {
+    throw new Error(
+      `admin_api: ${stray.join(', ')} is written here as a secret but ipc/_secrets.js ` +
+      'does not list it, so settings:get-all would hand it back. Add it there.');
+  }
+}
 const SETTINGS_WRITABLE = new Set([...SETTINGS_READABLE, ...SETTINGS_WRITE_ONLY]);
 
 function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, media, audit }) {
@@ -845,12 +871,12 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     if (designationId && !db.prepare('SELECT id FROM designations WHERE id = ?').get(designationId)) {
       return bad(res, 'That role does not exist.');
     }
-    let bcrypt; try { bcrypt = require('bcryptjs'); } catch { return json(res, 500, { ok: false, error: 'auth unavailable' }); }
+    try { require('bcryptjs'); } catch { return json(res, 500, { ok: false, error: 'auth unavailable' }); }
     const r = db.prepare(`
       INSERT INTO users (username, password_hash, full_name, designation_id, staff_id,
         is_active, must_change_password, created_by)
       VALUES (?, ?, ?, ?, ?, 1, 1, ?)
-    `).run(username, bcrypt.hashSync(password, 10), fullName, designationId,
+    `).run(username, require('../ipc/_hashing').hashPassword(password), fullName, designationId,
       body.staffId ? parseInt(body.staffId, 10) : null, ctx.user.id);
     // The account has to be able to sign in off-LAN from the moment it is
     // made, so the projection goes up with it rather than at the next sync.
@@ -1017,11 +1043,20 @@ function registerAdminRoutes({ add, db, json, can, API, getSetting, setSetting, 
     if (!systemGate(ctx, res)) return undefined;
     const patch = body.settings || body;
     const written = [];
+    const kept = [];
     for (const [key, value] of Object.entries(patch)) {
       if (!SETTINGS_WRITABLE.has(key)) continue;
-      setSetting(db, key, value == null ? '' : String(value));
+      const str = value == null ? '' : String(value);
+      // An empty secret box means "the one already saved", not "no key" — the
+      // same rule the IPC channel enforces (see ipc/settings.js). The screen
+      // is never given the stored secret to send back, so an empty one here is
+      // a form that was not filled in, not an instruction to wipe the key that
+      // takes the school's money.
+      if (!str.length && require('../ipc/_secrets').isSecret(key)) { kept.push(key); continue; }
+      setSetting(db, key, str);
       written.push(key);
     }
+    if (!written.length && kept.length) return json(res, 200, { ok: true, written: [], kept });
     if (!written.length) return bad(res, 'Nothing there that can be changed from here.');
     try { require('./sync/outbox').enqueueSchoolProfile(db); } catch (_) {}
     // The values are not logged: one of them is a gateway secret, and an audit

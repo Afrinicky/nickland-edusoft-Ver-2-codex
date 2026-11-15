@@ -314,7 +314,6 @@ export const api = {
     MODE === 'cloud'
       ? request('/staff/login', { method: 'POST', body: { school_id: SCHOOL_ID, username, password } })
       : request('/auth/login', { method: 'POST', body: { username, password, device } }),
-  parentRegister: (data) => request('/auth/parent/register', { method: 'POST', body: data }),
 
   // ── One sign-in box ──
   // The credential decides which surface this is, not a tab the person had to

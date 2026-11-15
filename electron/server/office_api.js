@@ -1908,14 +1908,16 @@ module.exports = function registerOfficeRoutes({ add, db, json, html, can, API, 
     if (!gate(ctx, res, 'settings', 'edit')) return undefined;
     const password = String(body.password || '');
     if (password.length < 6) return bad(res, 'A password must be at least six characters.');
-    let bcrypt; try { bcrypt = require('bcryptjs'); } catch (_) {
+    // The availability check stays; the binding is gone, because hashing now
+    // goes through ipc/_hashing.js (one cost factor, one place).
+    try { require('bcryptjs'); } catch (_) {
       return json(res, 500, { ok: false, error: 'Password hashing is unavailable.' });
     }
     const id = int(params.id);
     const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(id);
     if (!user) return missing(res, 'No such account.');
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?')
-      .run(bcrypt.hashSync(password, 10), id);
+      .run(require('../ipc/_hashing').hashPassword(password), id);
     audit(db, ctx, 'user', id, 'reset_password', user.username, 'high');
     return json(res, 200, { ok: true });
   });

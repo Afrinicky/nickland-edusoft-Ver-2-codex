@@ -92,41 +92,19 @@ def match_students(db, phone=None, email=None):
     return [{"student_id": k, "relationship": v} for k, v in found.items()]
 
 
-def register(db, full_name, phone=None, email=None, password=None):
-    """Self-registration, which only works if the school already has you.
-
-    A parent whose number is not on any pupil's record is told to ask the
-    school. That is deliberate: the alternative is an account that claims a
-    child by asserting a relationship nobody checked.
-    """
-    if not password or len(str(password)) < 8:
-        return {"ok": False, "status": 400, "error": "A password must be at least 8 characters."}
-    if not phone and not email:
-        return {"ok": False, "status": 400, "error": "A phone number or an email is required."}
-    if db.get_setting("mobile_parent_self_register", "true") != "true":
-        return {"ok": False, "status": 403,
-                "error": "Registration is closed. Ask the school to set up your account."}
-
-    matches = match_students(db, phone, email)
-    if not matches:
-        return {"ok": False, "status": 400,
-                "error": "We could not find a pupil with those contact details. Ask the school."}
-
-    np = norm_phone(phone) if phone else None
-    if np and db.one("SELECT id FROM parents WHERE phone = %s", (np,)):
-        return {"ok": False, "status": 400, "error": "An account already exists for this number."}
-
-    parent_id = db.insert("parents", {
-        "full_name": full_name or "Parent", "phone": np,
-        "email": (email or "").strip().lower() or None,
-        "password_hash": hash_password(password), "is_active": 1,
-    })
-    for m in matches:
-        db.run("""INSERT INTO parent_students (parent_id, student_id, relationship)
-                       VALUES (%s,%s,%s) ON CONFLICT DO NOTHING""",
-               (parent_id, m["student_id"], m["relationship"]))
-    return {"ok": True, "parent_id": parent_id, "linked": len(matches)}
-
+# ── Self-registration has been removed ──────────────────────────────────────
+#
+# There used to be a `register` here, matching a typed phone number or email
+# against every pupil's guardian contacts and linking the new account to any
+# child that matched. Nothing in it proved the person held the number they
+# typed, and a parent's number is not a secret — so knowing one was enough to
+# read that child's fees, marks, attendance, timetable and homework. The
+# setting that governed it defaulted to on.
+#
+# Parent accounts are created by the school now, by somebody who knows which
+# child belongs to whom. `match_students` is kept: it suggests the children
+# when the OFFICE sets a parent up, which is a different act by a different
+# person.
 
 def sign_in(db, identifier, password):
     np = norm_phone(identifier)

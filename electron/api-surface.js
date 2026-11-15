@@ -543,6 +543,11 @@ function buildApi(invoke) {
     settings: {
       getAll:            ()                    => invoke('settings:get-all'),
       set:               (key, value)          => invoke('settings:set', { key, value }),
+      // Removing a saved credential. A separate call because an empty box no
+      // longer means "delete this" — it means "keep the one already saved",
+      // which is what lets a secret be redacted on the way out without the
+      // next Save wiping it. See electron/ipc/_secrets.js.
+      clearSecret:       (key)                 => invoke('settings:clear-secret', key),
       uploadLogo:        (src)                 => invoke('settings:upload-logo', src),
       uploadSignature:   (data)                => invoke('settings:upload-signature', data),
       removeSignature:   (role)                => invoke('settings:remove-signature', role),

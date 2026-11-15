@@ -28,6 +28,12 @@ export default function NotificationsConfig() {
     setData(settings.notifications || {});
   }, [settings]);
 
+  // Which credentials are saved. The values never reach this screen —
+  // settings:get-all redacts them (electron/ipc/_secrets.js) — so an empty box
+  // with this placeholder means "a key is set", not "no key".
+  const savedSecrets = settings._secrets_configured || {};
+  const savedHint = (key, fallback) => (savedSecrets[key] ? '•••••••••• (saved)' : fallback);
+
   function set(k, v) { setData(prev => ({ ...prev, [k]: v })); }
 
   async function save() {
@@ -90,7 +96,7 @@ export default function NotificationsConfig() {
         </div>
         <Field label="API key">
           <input className="input" type="password" value={data.sms_api_key || ''}
-            onChange={e => set('sms_api_key', e.target.value)} placeholder="From your Arkesel dashboard" />
+            onChange={e => set('sms_api_key', e.target.value)} placeholder={savedHint('sms_api_key', 'From your Arkesel dashboard')} />
         </Field>
         <div className="text-xs text-muted" style={{ marginTop: 4 }}>
           The sender ID is what a parent sees the message as coming from. Arkesel allows at most 11 characters
@@ -119,7 +125,7 @@ export default function NotificationsConfig() {
           <>
             <Field label="Resend API key">
               <input className="input" type="password" value={data.resend_api_key || ''}
-                onChange={e => set('resend_api_key', e.target.value)} placeholder="re_..." />
+                onChange={e => set('resend_api_key', e.target.value)} placeholder={savedHint('resend_api_key', 're_...')} />
             </Field>
             <div className="text-xs text-muted" style={{ marginTop: 4 }}>
               The From address has to be at a domain you have verified with Resend, or the message is rejected.
@@ -141,7 +147,9 @@ export default function NotificationsConfig() {
                 <input className="input" value={data.email_smtp_user || ''} onChange={e => set('email_smtp_user', e.target.value)} />
               </Field>
               <Field label="SMTP password">
-                <input className="input" type="password" value={data.email_smtp_pass || ''} onChange={e => set('email_smtp_pass', e.target.value)} />
+                <input className="input" type="password" value={data.email_smtp_pass || ''}
+                  placeholder={savedHint('email_smtp_pass', '')}
+                  onChange={e => set('email_smtp_pass', e.target.value)} />
               </Field>
             </div>
             <div className="text-xs text-muted" style={{ marginTop: 4 }}>

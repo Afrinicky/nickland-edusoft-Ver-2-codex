@@ -1,0 +1,17 @@
+# Nickland Edusoft cloud — what the TESTS need on top of requirements.txt.
+#
+# Kept separate so the deployed image does not carry a test client it will
+# never use, and declared at all because it was not: every one of the twelve
+# suites in tests/ imports fastapi.testclient, which imports httpx, which was
+# in nobody's requirements file. A fresh checkout therefore failed all twelve
+# at the import line with "No module named 'httpx'" — which reads as the
+# service being broken rather than as a missing test dependency.
+#
+#   pip install -r requirements.txt -r requirements-test.txt
+#
+# Six of the suites also need a real Postgres in DATABASE_URL (test_saas,
+# test_school, test_payments, test_licensing, test_attack, test_dashboards).
+# Without one they fail at start-up rather than reporting a pass, so a CI job
+# that does not provide a database is not running them — and test_attack is the
+# security suite.
+httpx>=0.27

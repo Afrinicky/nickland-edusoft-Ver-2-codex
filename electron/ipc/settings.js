@@ -1,6 +1,8 @@
 // Settings IPC handlers — covers school identity, classes, terms, subjects, grading, and theming.
 const fs = require('fs');
 const path = require('path');
+const secrets = require('./_secrets');
+const security = require('./_security');
 
 // Settings the parent and teacher apps read: the school's name, its crest, and
 // the numbers the "Message the school" button dials. When one of them changes,
@@ -19,6 +21,17 @@ function reprojectSchool(db) {
 
 function registerSettingsHandlers(ipcMain, db, getResourcePath) {
   // ===== Generic key-value settings =====
+  //
+  // This channel is in ALWAYS_ALLOWED (ipc/_policy.js) and has to stay there:
+  // the sign-in screen draws the school's crest, name and colours BEFORE
+  // anybody has signed in, and those live in here. What it must not also do is
+  // hand out the school's credentials, which is exactly what it did — the
+  // gateway secret, the SMS key and the cloud sync key, to any signed-in
+  // account, at the office PC and over /desk/call on the school Wi-Fi.
+  //
+  // Making the channel safe is the fix, not taking the permission away: the
+  // branding has to be readable, and a secret has no business being readable
+  // from anywhere. See ipc/_secrets.js.
   ipcMain.handle('settings:get-all', () => {
     const rows = db.prepare('SELECT key, value, category FROM settings').all();
     const grouped = {};
@@ -26,10 +39,27 @@ function registerSettingsHandlers(ipcMain, db, getResourcePath) {
       if (!grouped[r.category]) grouped[r.category] = {};
       grouped[r.category][r.key] = r.value;
     }
-    return grouped;
+    return secrets.redactGrouped(grouped);
   });
 
   ipcMain.handle('settings:set', (_e, { key, value }) => {
+    // ── An empty secret means "the one already saved" ────────────────────────
+    //
+    // This is what makes the redaction above safe, and it is not optional.
+    // Settings → Payments and Settings → Notifications both load every field
+    // into a form and write every field back on Save. Redacting a secret to ''
+    // without this would mean: open the screen, press Save, and the school's
+    // Paystack key is gone — silently, with the toast still saying "saved".
+    //
+    // Cloud.jsx has always done this in the screen (it only sends the key when
+    // the box is non-empty) and Payments.jsx has always documented it as
+    // already true. It is enforced here instead of in each screen, because the
+    // next screen somebody writes will not remember.
+    //
+    // Clearing one is therefore an explicit act: settings:clear-secret below.
+    if (secrets.isSecret(key) && !String(value ?? '').length) {
+      return { ok: true, unchanged: true };
+    }
     // Upsert
     const existing = db.prepare('SELECT key FROM settings WHERE key = ?').get(key);
     if (existing) {
@@ -40,6 +70,25 @@ function registerSettingsHandlers(ipcMain, db, getResourcePath) {
     }
     if (PROJECTED_KEYS.has(key)) reprojectSchool(db);
     return { ok: true };
+  });
+
+  // Removing a credential on purpose, which an empty box no longer does.
+  //
+  // Guarded by the policy table like any other settings write, and audited at
+  // high severity: taking the gateway key out of a school stops it taking
+  // money, and somebody should be able to find out when that happened.
+  ipcMain.handle('settings:clear-secret', (_e, key) => {
+    if (!secrets.isSecret(key)) {
+      return { ok: false, error: 'That is not a credential this clears.' };
+    }
+    db.prepare('UPDATE settings SET value = ? WHERE key = ?').run('', key);
+    try {
+      db.prepare(`
+        INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+        VALUES ('settings', NULL, 'clear_secret', ?, ?, 'high')
+      `).run(security.getCurrentUserId(), `Cleared ${key}`);
+    } catch (_) { /* auditing a write must never be what fails it */ }
+    return { ok: true, cleared: key };
   });
 
   // Save logo from chosen file path

@@ -34,7 +34,7 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
   const { school_id } = await store.createSchool({ name: 'Ave Maria School' });
   // Projected auth + a child snapshot (as if pushed from a desktop).
   await store.upsertSnapshot(school_id, { entity_type: 'parent_auth', entity_key: 'parent:1', uuid: 'u1', version: 1,
-    payload: { parent_id: 1, full_name: 'Papa', phone: '233244123456', email: 'papa@mail.com', password_hash: makeHash('pass12'), is_active: 1, student_keys: ['student:1'] } });
+    payload: { parent_id: 1, full_name: 'Papa', phone: '233244123456', email: 'papa@mail.com', password_hash: makeHash('pass123456'), is_active: 1, student_keys: ['student:1'] } });
   await store.upsertSnapshot(school_id, { entity_type: 'student_snapshot', entity_key: 'student:1', uuid: 'u2', version: 1,
     payload: { student_id: 1, name: 'ANSU MONA', index_number: 'AVE/17/00001', class_name: 'Basic 5', term: 'Third Term', fees: { billed: 410, paid: 150, balance: 260 }, canteen: { unpaid_days: 3, amount_owed: 15 }, attendance: { present: 40, absent: 2, total: 42 }, report: { term: 'Third Term', subjects: [{ subject: 'Mathematics', total: 82, grade: 'Advanced' }], average: 78.5, rank: 3, number_on_roll: 30, remarks: 'Good work' }, updated_at: new Date().toISOString() } });
   await store.upsertSnapshot(school_id, { entity_type: 'receipt', entity_key: 'receipt:FE/26/00001', uuid: 'u3', version: 1,
@@ -81,7 +81,7 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
   r = await req(base, 'POST', '/api/v1/portal/login', { body: { school_id, identifier: '0244123456', password: 'wrong' } });
   ck('wrong password → 401', r.status === 401);
 
-  r = await req(base, 'POST', '/api/v1/portal/login', { body: { school_id, identifier: '0244123456', password: 'pass12' } });
+  r = await req(base, 'POST', '/api/v1/portal/login', { body: { school_id, identifier: '0244123456', password: 'pass123456' } });
   ck('login (by phone) ok + token', r.status === 200 && r.json.ok && r.json.token);
   const token = r.json.token;
 
@@ -110,7 +110,7 @@ let pass = 0, fail = 0; const ck = (n, c) => { (c ? pass++ : fail++); console.lo
   ck('me reflects updated name immediately', r.json.parent.full_name === 'Papa Ansu' && r.json.parent.email === 'new@mail.com');
 
   // Login by email works too
-  r = await req(base, 'POST', '/api/v1/portal/login', { body: { school_id, identifier: 'new@mail.com', password: 'pass12' } });
+  r = await req(base, 'POST', '/api/v1/portal/login', { body: { school_id, identifier: 'new@mail.com', password: 'pass123456' } });
   ck('login by (updated) email ok', r.status === 200 && r.json.ok);
 
   console.log(`\n${pass} passed, ${fail} failed`);

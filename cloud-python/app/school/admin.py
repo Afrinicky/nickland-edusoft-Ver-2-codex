@@ -25,7 +25,7 @@ about it than the desktop is, deliberately:
 """
 import datetime
 
-from . import access, security, session
+from . import access, secrets_policy, security, session
 from .billing import round2
 
 # The settings a portal may read and write. A whitelist, not a filter: the
@@ -62,6 +62,25 @@ SETTINGS_READABLE = [
 # screenshot can carry out of the building.
 SETTINGS_WRITE_ONLY = ["paystack_secret_key"]
 SETTINGS_WRITABLE = set(SETTINGS_READABLE) | set(SETTINGS_WRITE_ONLY)
+
+# Every key this screen accepts as a secret must be one secrets_policy knows is
+# a secret, or it would be writable here and readable through settings:get-all.
+# The two lists are different questions — "never read this out" there, "this
+# screen may set this" here — so a key can be added to one and forgotten in the
+# other. A mismatch is a programming error and says so at import.
+_stray = [k for k in SETTINGS_WRITE_ONLY if not secrets_policy.is_secret(k)]
+if _stray:
+    raise RuntimeError(
+        f"admin.py: {', '.join(_stray)} is written here as a secret but "
+        "secrets_policy.py does not list it, so settings:get-all would hand it "
+        "back. Add it there.")
+
+# And nothing readable may be a secret, which is the same mistake said the
+# other way round.
+_leaky = [k for k in SETTINGS_READABLE if secrets_policy.is_secret(k)]
+if _leaky:
+    raise RuntimeError(
+        f"admin.py: {', '.join(_leaky)} is a secret and is in SETTINGS_READABLE.")
 
 
 def _today():
@@ -470,17 +489,46 @@ def settings(db, actor):
 
 def save_settings(db, actor, patch):
     written = []
+    kept = []
     for key, value in (patch or {}).items():
         if key not in SETTINGS_WRITABLE:
+            continue
+        # An empty secret means "the one already saved", not "no key". The
+        # screens load every field and write every field back on Save, so
+        # without this, redacting a secret on read (see secrets_policy.py)
+        # would mean: open Settings, press Save, and the school's gateway key
+        # is gone — with the toast still saying it saved.
+        if secrets_policy.keeps_existing(key, value):
+            kept.append(key)
             continue
         db.set_setting(key, "" if value is None else str(value))
         written.append(key)
     if not written:
+        if kept:
+            return {"ok": True, "written": [], "kept": kept}
         return {"ok": False, "status": 400, "error": "Nothing there that can be changed from here."}
     # The values are not logged: one of them is a gateway secret, and an audit
     # trail that quotes secrets is a second place they can be read from.
     security.audit(db, actor, "settings", None, "change_settings", ", ".join(written), "high")
     return {"ok": True, "written": written}
+
+
+def clear_secret(db, actor, key):
+    """Remove a saved credential, on purpose.
+
+    An empty box no longer does this — that means "keep the one already
+    saved", which is what lets a secret be redacted on the way out without the
+    next Save wiping it (see secrets_policy.py). So removing one has to be an
+    act of its own.
+
+    Audited high, because taking the gateway key out of a school stops it
+    taking money and somebody should be able to find out when that happened.
+    """
+    if not secrets_policy.is_secret(key):
+        return {"ok": False, "status": 400, "error": "That is not a credential this clears."}
+    db.set_setting(key, "", "payments")
+    security.audit(db, actor, "settings", None, "clear_secret", f"Cleared {key}", "high")
+    return {"ok": True, "cleared": key}
 
 
 def approvals(db, actor):

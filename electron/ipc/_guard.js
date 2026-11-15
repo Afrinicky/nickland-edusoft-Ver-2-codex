@@ -74,6 +74,26 @@ const ACTION_LABEL = {
   view: 'view', create: 'add to', edit: 'change', delete: 'delete from',
 };
 
+// A channel the policy table has no rule for, recorded once per process.
+//
+// This is not a denial and is not the person's fault: they called something
+// the application offers. It is a note that the application offered it without
+// a permission behind it, which is a thing to fix in _policy.js and a thing
+// nobody could previously discover.
+const unruledSeen = new Set();
+
+function noteUnruled(db, channel) {
+  if (unruledSeen.has(channel)) return;
+  unruledSeen.add(channel);
+  try {
+    db.prepare(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
+      VALUES ('security', NULL, 'channel_unguarded', ?, ?, 'high')
+    `).run(security.getCurrentUserId(),
+      `${channel} ran with no permission rule. Add it to _policy.js.`.slice(0, 500));
+  } catch (_) { /* a note about a gap must not become the gap */ }
+}
+
 function deny(db, channel, message) {
   try {
     db.prepare(`
@@ -145,7 +165,21 @@ function guardedIpcMain(ipcMain, db) {
         // outright, which is what this did at first, broke every non-admin
         // account on screens nobody had got round to listing.
         const rule = POLICY[channel] || fallbackRule(channel);
-        if (!rule) return handler(event, ...args);
+        if (!rule) {
+          // No rule, so this runs with no permission behind it.
+          //
+          // Kept as allow rather than refuse, for the reason the fallback
+          // exists at all: refusing unlisted channels outright is what broke
+          // every non-admin account the first time this file was written. What
+          // changes is that it is no longer SILENT. Four `auth:` channels sat
+          // here for months handing the user list to anybody who could sign
+          // in, and nothing anywhere said so.
+          //
+          // Once per channel per process: enough for somebody to find it in
+          // the security log, not enough to bury the log in repeats.
+          noteUnruled(db, channel);
+          return handler(event, ...args);
+        }
 
         const [module, action, scopeRule] = rule;
         if (!security.checkPermission(db, module, action)) {

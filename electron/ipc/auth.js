@@ -10,43 +10,90 @@ function bcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
 const passwords = require('../server/passwords');
 const security = require('./_security');
 const { SUPER_ADMIN, isElevated, isSupervisor } = require('./_portals');
+const hashing = require('./_hashing');
 const { setSetting } = require('../utils/idgen');
 
 // ── Failed-login throttling ─────────────────────────────
-// Per-username, in memory: five wrong passwords buys a 60-second lockout that
-// keeps extending while the guessing continues. Cleared on a successful login
-// and on app restart, which is the right trade-off for a single-machine app.
-const MAX_LOGIN_FAILURES = 5;
+//
+// Five wrong passwords buys a 60-second lockout that keeps extending while the
+// guessing continues, cleared on a successful login and on restart.
+//
+// Counted per (account, SOURCE), with a higher per-account backstop — not per
+// account alone, which is what this did. On one machine in a locked office the
+// difference does not arise. It arises the moment the same code answers over a
+// network, which it now does in two places: `electron/server/desk_api.js` for
+// a browser on the school Wi-Fi, and `host/server.js`, which is this
+// application deployed to the INTERNET. Counting per account alone there is a
+// denial of service anybody can arrange from anywhere — guess five times at the
+// head teacher's username every minute and the head teacher never signs in
+// again.
+//
+// So an attacker from one address locks out that address, the real person on
+// their own connection is unaffected, and a guess spread across many addresses
+// still meets the backstop at a threshold no honest person reaches. It is the
+// scheme the online service already arrived at, for the same reason — see
+// cloud-python/app/school/session.py.
+//
+// With no source given — the office PC's own window — both keys collapse onto
+// the username and the behaviour is exactly what it was.
+const MAX_LOGIN_FAILURES = 5;          // from one source, against one account
+const MAX_ACCOUNT_FAILURES = 50;       // from anywhere, against one account
 const LOCKOUT_MS = 60 * 1000;
 const loginFailures = new Map();
 
-function loginLock(username) {
-  const rec = loginFailures.get(username);
-  if (!rec || rec.count < MAX_LOGIN_FAILURES) return { locked: false };
-  const remaining = rec.until - Date.now();
-  if (remaining <= 0) { loginFailures.delete(username); return { locked: false }; }
-  return { locked: true, seconds: Math.ceil(remaining / 1000) };
+function failureKeys(username, source) {
+  const name = String(username || '').toLowerCase();
+  return { sourceKey: `${name}|${source || 'local'}`, accountKey: `${name}|*` };
 }
 
-function recordLoginFailure(db, username, reason) {
-  const rec = loginFailures.get(username) || { count: 0, until: 0 };
+function lockedSeconds(key, threshold) {
+  const rec = loginFailures.get(key);
+  if (!rec || rec.count < threshold) return 0;
+  const remaining = rec.until - Date.now();
+  if (remaining <= 0) { loginFailures.delete(key); return 0; }
+  return Math.ceil(remaining / 1000);
+}
+
+function loginLock(username, source) {
+  const { sourceKey, accountKey } = failureKeys(username, source);
+  const seconds = lockedSeconds(sourceKey, MAX_LOGIN_FAILURES)
+    || lockedSeconds(accountKey, MAX_ACCOUNT_FAILURES);
+  return seconds ? { locked: true, seconds } : { locked: false };
+}
+
+function bumpFailure(key) {
+  const rec = loginFailures.get(key) || { count: 0, until: 0 };
   rec.count++;
   rec.until = Date.now() + LOCKOUT_MS;
-  loginFailures.set(username, rec);
+  loginFailures.set(key, rec);
   // Keep the map from growing without bound on a long-running install.
-  if (loginFailures.size > 500) {
+  if (loginFailures.size > 2000) {
     const now = Date.now();
     for (const [k, v] of loginFailures) if (v.until < now) loginFailures.delete(k);
   }
+  return rec.count;
+}
+
+function recordLoginFailure(db, username, reason, source) {
+  const { sourceKey, accountKey } = failureKeys(username, source);
+  bumpFailure(accountKey);
+  const count = bumpFailure(sourceKey);
   try {
     db.prepare(`
       INSERT INTO audit_log (entity_type, entity_id, action, user_id, justification, severity)
       VALUES ('security', NULL, 'login_failed', NULL, ?, ?)
-    `).run(`Failed sign-in for "${username}" (${reason})`, rec.count >= MAX_LOGIN_FAILURES ? 'high' : 'normal');
+    `).run(`Failed sign-in for "${username}" (${reason})`, count >= MAX_LOGIN_FAILURES ? 'high' : 'normal');
   } catch (_) { /* audit is best-effort */ }
+  return count;
 }
 
-function clearLoginFailures(username) { loginFailures.delete(username); }
+function clearLoginFailures(username, source) {
+  const { sourceKey } = failureKeys(username, source);
+  loginFailures.delete(sourceKey);
+}
+
+/** Testing seam, and what a restart does anyway. */
+function resetLoginThrottle() { loginFailures.clear(); }
 
 // ── Signing in ──────────────────────────────────────────
 // Checking a name and a password against the school's own users, and the
@@ -58,12 +105,12 @@ function clearLoginFailures(username) { loginFailures.delete(username); }
 // What it does not do is decide who this process thinks is signed in. That is
 // the caller's business, and the two callers answer it differently — see
 // auth:login below and electron/server/desk_api.js.
-function authenticate(db, { username, password }) {
+function authenticate(db, { username, password, source }) {
   // Office machines are shared. Without a throttle, anyone left alone with a
   // logged-out app could guess another member of staff's password at full
   // speed, which is how a teacher account becomes a Proprietor account.
   const uname = String(username || '');
-  const lock = loginLock(uname);
+  const lock = loginLock(uname, source);
   if (lock.locked) {
     return { ok: false, error: `Too many failed attempts. Try again in ${lock.seconds}s.` };
   }
@@ -75,12 +122,16 @@ function authenticate(db, { username, password }) {
     WHERE u.username = ? AND u.is_active = 1
   `).get(username);
 
-  if (!user) { recordLoginFailure(db, uname, 'unknown_user'); return { ok: false, error: 'Invalid username or password.' }; }
+  if (!user) { recordLoginFailure(db, uname, 'unknown_user', source); return { ok: false, error: 'Invalid username or password.' }; }
   if (!user.password_hash) return { ok: false, error: 'Account not set up. Contact administrator.' };
 
   const match = bcrypt().compareSync(String(password || ''), user.password_hash);
-  if (!match) { recordLoginFailure(db, uname, 'bad_password'); return { ok: false, error: 'Invalid username or password.' }; }
-  clearLoginFailures(uname);
+  if (!match) { recordLoginFailure(db, uname, 'bad_password', source); return { ok: false, error: 'Invalid username or password.' }; }
+  clearLoginFailures(uname, source);
+
+  // The one moment the password is both known and known to be right, which is
+  // the only moment an old hash can be upgraded. See ipc/_hashing.js.
+  hashing.rehashIfStale(db, { table: 'users', id: user.id, hash: user.password_hash, password });
 
   // Build effective permissions: designation defaults + overrides
   const desigPerms = user.designation_id
@@ -144,7 +195,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existing) return { ok: false, error: 'Username already exists.' };
 
-    const hash = bcrypt().hashSync(password, 10);
+    const hash = hashing.hashPassword(password);
     // The designation was renamed from "Administrator" to "Super Admin"; a
     // database restored from an older backup may still carry the old name, and
     // a bootstrap that cannot find the row would create the school's first
@@ -213,7 +264,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     }
     const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
     if (existing) return { ok: false, error: 'Username already taken.' };
-    const hash = bcrypt().hashSync(password, 10);
+    const hash = hashing.hashPassword(password);
     db.prepare(`
       INSERT INTO users (username, password_hash, full_name, designation_id, staff_id, is_active, must_change_password)
       VALUES (?, ?, ?, ?, ?, 1, 1)
@@ -233,7 +284,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
       if (String(newPassword).length < 6) {
         return { ok: false, error: 'Password must be at least 6 characters.' };
       }
-      const hash = bcrypt().hashSync(newPassword, 10);
+      const hash = hashing.hashPassword(newPassword);
       db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, id);
     }
     db.prepare('UPDATE users SET full_name = ?, designation_id = ?, is_active = ? WHERE id = ?')
@@ -267,7 +318,7 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
     const target = db.prepare('SELECT id, username FROM users WHERE id = ?').get(targetUserId);
     if (!target) return { ok: false, error: 'User not found.' };
 
-    const hash = bcrypt().hashSync(newPassword, 10);
+    const hash = hashing.hashPassword(newPassword);
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?')
       .run(hash, targetUserId);
 
@@ -621,3 +672,4 @@ function resolveEffectivePermissions(db, userId) {
 // Export the resolver for use in security middleware
 module.exports.resolveEffectivePermissions = resolveEffectivePermissions;
 module.exports.authenticate = authenticate;
+module.exports.resetLoginThrottle = resetLoginThrottle;

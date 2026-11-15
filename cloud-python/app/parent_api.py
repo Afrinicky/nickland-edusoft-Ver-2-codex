@@ -94,32 +94,14 @@ async def signin(request: Request):
             "school": {"id": school_id, "name": db.get_setting("school_name", "School")}}
 
 
+# Self-registration is gone — see app/school/parents.py. The route is kept and
+# answers a plain refusal, because a phone running an older build of the app
+# still has the button, and a 404 reads as "the school's system is broken"
+# while this reads as what it is. It consults no setting: there is no longer a
+# setting that can turn it back on.
 @router.post("/register")
 async def register(request: Request):
-    body = await _json(request)
-    school_id = str(body.get("school_id") or "").strip()
-    if not school_id:
-        return _err(400, "Which school?")
-    # Registration is a lookup against every pupil's guardian contacts, so an
-    # unthrottled one is a way to ask "is this number a parent at this school?"
-    # a thousand times a minute.
-    if ratelimit.limited(request, "parent-register", body.get("phone") or body.get("email")):
-        return _err(429, "Too many attempts. Try again shortly.")
-    try:
-        db = sdb.SchoolDb(school_id)
-        if not db.exists():
-            return _err(400, "Which school?")
-    except ValueError:
-        return _err(400, "Which school?")
-    result = parents.register(db, body.get("full_name"), body.get("phone"),
-                              body.get("email"), body.get("password"))
-    if not result.get("ok"):
-        return _err(result.get("status", 400), result["error"])
-    signed = session.parent_sign_in(db, body.get("phone") or body.get("email"),
-                                    body.get("password"))
-    return {"ok": True, "linked": result["linked"],
-            "token": f'{school_id}.{signed["token"]}' if signed.get("ok") else None,
-            "parent": signed.get("parent")}
+    return _err(403, "Ask the school to set up your account.")
 
 
 @router.get("/me")

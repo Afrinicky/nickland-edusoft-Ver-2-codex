@@ -92,7 +92,6 @@ module.exports = function registerMobileHandlers(ipcMain, db) {
     port: serverPort || parseInt(getSetting(db, 'mobile_server_port', '4747'), 10),
     bind: getSetting(db, 'mobile_server_bind', 'lan'),
     enabled: getSetting(db, 'mobile_server_enabled', 'false') === 'true',
-    self_register: getSetting(db, 'mobile_parent_self_register', 'true') === 'true',
     addresses: lanAddresses(),
     error: serverError,
     device_count: db.prepare('SELECT COUNT(*) c FROM api_tokens WHERE revoked = 0').get().c,
@@ -123,7 +122,7 @@ module.exports = function registerMobileHandlers(ipcMain, db) {
     return await stopServer();
   });
 
-  ipcMain.handle('mobile:set-config', async (_e, { port, bind, selfRegister }) => {
+  ipcMain.handle('mobile:set-config', async (_e, { port, bind }) => {
     if (!security.checkPermission(db, 'settings', 'edit')) return { ok: false, error: 'Access denied.' };
     if (port !== undefined) {
       const p = parseInt(port, 10);
@@ -136,7 +135,6 @@ module.exports = function registerMobileHandlers(ipcMain, db) {
       if (!['lan', 'localhost'].includes(bind)) return { ok: false, error: 'Bind must be "lan" or "localhost".' };
       setSetting(db, 'mobile_server_bind', bind, 'mobile');
     }
-    if (selfRegister !== undefined) setSetting(db, 'mobile_parent_self_register', !!selfRegister, 'mobile');
     // Restart if running so new port/bind take effect. The stop must complete
     // before the new bind, or the restart fails with the port still in use.
     if (serverInstance) {

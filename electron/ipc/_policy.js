@@ -50,6 +50,30 @@ const STK = ['studentId', 'student_id', 'id'];
 
 // ── the table ───────────────────────────────────────────────────────────────
 const POLICY = {
+  // ── who works here, and what they may do ──
+  //
+  // These four were reached by NOTHING. `auth` is not in PREFIX_MODULE, so
+  // `fallbackRule` answered null for them, and _guard.js runs a handler it has
+  // no rule for — so any signed-in account, a class teacher included, could
+  // list every user in the school, read every designation's permission matrix,
+  // and see who is answerable for every class. At the office PC, over the
+  // school Wi-Fi, and through /desk/call.
+  //
+  // The other seven unruled `auth:` channels all defend themselves inside the
+  // handler, and two of them — add/remove-user-assignment — admit a HEAD
+  // TEACHER through `mayAssign()`. That is why `auth` is still not in
+  // PREFIX_MODULE: a blanket prefix rule would demand `settings` create and
+  // delete for those two and lock head teachers out of setting teaching
+  // assignments, which is their job. Four named rules, no collateral.
+  //
+  // A new `auth:` channel added later is still unruled, which is a real gap and
+  // not one this table can close by itself — see the audit in _guard.js, which
+  // makes it loud instead of silent.
+  'auth:list-users':                    ['settings', 'view', null],
+  'auth:list-designations':             ['settings', 'view', null],
+  'auth:get-designation-permissions':   ['settings', 'view', null],
+  'auth:class-teachers':                ['settings', 'view', null],
+
   // ── students ──
   // Admitting, editing and deleting a pupil is a school-office act. A class
   // teacher marks a register; they do not create or remove records, which is

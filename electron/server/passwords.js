@@ -16,6 +16,7 @@
 //   finish. The approver never sets or sees the new password.
 
 const crypto = require('crypto');
+const hashing = require('../ipc/_hashing');
 
 let _bcrypt = null;
 function bcrypt() { return _bcrypt || (_bcrypt = require('bcryptjs')); }
@@ -183,7 +184,7 @@ function completeReset(db, { username, code, newPassword }) {
 
   // must_change_password is cleared: the person has just chosen this password
   // themselves, so asking them to change it at the next screen is a loop.
-  const hash = bcrypt().hashSync(String(newPassword), 10);
+  const hash = hashing.hashPassword(newPassword);
   db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, req.user_id);
   db.prepare("UPDATE password_reset_requests SET status = 'used', used_at = datetime('now') WHERE id = ?").run(req.id);
   projectClaim(db, req.id);
@@ -213,7 +214,7 @@ function changeOwnPassword(db, userId, { oldPassword, newPassword, source }) {
     return { ok: false, error: 'The new password must be different from the current one.' };
   }
 
-  const hash = bcrypt().hashSync(String(newPassword), 10);
+  const hash = hashing.hashPassword(newPassword);
   db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, userId);
   if (source && source !== 'desktop') {
     audit(db, userId, 'password_changed_remotely', userId,

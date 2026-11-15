@@ -224,13 +224,6 @@ export default function MobileApp() {
               <option value="localhost">This computer only</option>
             </select>
           </div>
-          <div className="form-group">
-            <label className="label">Parent self-registration</label>
-            <select className="select" value={status?.self_register ? 'on' : 'off'} onChange={e => setConfig({ selfRegister: e.target.value === 'on' })}>
-              <option value="on">Allowed (phone must match a student)</option>
-              <option value="off">Off — admin creates parent accounts</option>
-            </select>
-          </div>
         </div>
       </div>
 

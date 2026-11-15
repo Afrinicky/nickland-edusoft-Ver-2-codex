@@ -13,10 +13,10 @@ than discover.
 
 | | What it is | Answers |
 |---|---|---|
-| **The installed application** | The school's own computer | all 408 |
-| **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 381 of 408 (93%) |
-| **Hosted — the installer's own code** | The internet, running host/server.js | 381 of 408 (93%) |
-| **Hosted — the Python service** | The internet, running cloud-python | 107 of 408 (26%) |
+| **The installed application** | The school's own computer | all 409 |
+| **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 382 of 409 (93%) |
+| **Hosted — the installer's own code** | The internet, running host/server.js | 382 of 409 (93%) |
+| **Hosted — the Python service** | The internet, running cloud-python | 108 of 409 (26%) |
 
 There are two ways to be hosted and they are not equal. **host/server.js**
 runs the installed application's own handlers on a server — the same code, so
@@ -540,10 +540,11 @@ The school's own computer only.
 
 ## Settings
 
-6 of 21 online.
+7 of 22 online.
 
 | Channel | Hosted |
 |---|---|
+| `settings:clear-secret` | ✓ online |
 | `settings:delete-class` | not yet |
 | `settings:delete-subject` | not yet |
 | `settings:get-all` | ✓ online |

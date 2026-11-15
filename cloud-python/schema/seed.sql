@@ -8,7 +8,7 @@
 -- exactly the designations, classes, subjects, grading bands and settings a
 -- school provisioned on a desktop does.
 --
--- 391 rows across 10 tables.
+-- 390 rows across 10 tables.
 
 -- designations (10)
 INSERT INTO designations (id, name, description, is_system) VALUES (1, 'Proprietor', 'Overall owner/director of the school. Full access to all modules.', 1) ON CONFLICT DO NOTHING;
@@ -289,7 +289,7 @@ INSERT INTO notification_templates (id, name, channel, body, category, is_active
 INSERT INTO notification_templates (id, name, channel, body, category, is_active) VALUES (5, 'Report Card Ready', 'sms', 'Dear parent, the End of Term Report for {student_name} is ready. Please collect from the school. -{school_name}', 'academic', 1) ON CONFLICT DO NOTHING;
 SELECT setval(pg_get_serial_sequence('notification_templates', 'id'), (SELECT COALESCE(MAX(id), 1) FROM notification_templates));
 
--- settings (139)
+-- settings (138)
 INSERT INTO settings (key, value, category, description) VALUES ('vacation_date', '', 'signatures', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('reopening_date', '', 'signatures', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('current_exam_title', '', 'signatures', NULL) ON CONFLICT DO NOTHING;
@@ -312,7 +312,6 @@ INSERT INTO settings (key, value, category, description) VALUES ('resend_api_key
 INSERT INTO settings (key, value, category, description) VALUES ('mobile_server_enabled', 'false', 'mobile', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('mobile_server_port', '4747', 'mobile', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('mobile_server_bind', 'lan', 'mobile', NULL) ON CONFLICT DO NOTHING;
-INSERT INTO settings (key, value, category, description) VALUES ('mobile_parent_self_register', 'true', 'mobile', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('mobile_token_ttl_days', '30', 'mobile', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('payment_gateway', 'none', 'payments', NULL) ON CONFLICT DO NOTHING;
 INSERT INTO settings (key, value, category, description) VALUES ('payment_currency', 'GHS', 'payments', NULL) ON CONFLICT DO NOTHING;

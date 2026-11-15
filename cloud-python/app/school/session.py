@@ -79,9 +79,48 @@ def verify_password(password, stored):
         return False
 
 
+# The cost factor a new hash is made at. 12, not the 10 this used to use, for
+# the reason electron/ipc/_hashing.js gives at length: 10 was the sensible
+# default when bcrypt was young, and hardware has not stood still.
+#
+# The offline system uses the same figure, which matters here more than it
+# looks: a staff password is bcrypt on the desktop and is verified here as-is,
+# so the two halves of one school must agree about what "stored properly"
+# means. A cost is recorded inside each hash, so every hash made at 10 keeps
+# verifying and nobody is locked out — and `_rehash_if_stale` below moves them
+# up one sign-in at a time.
+BCRYPT_COST = 12
+
+
 def hash_password(password):
     import bcrypt
-    return bcrypt.hashpw(str(password).encode(), bcrypt.gensalt(10)).decode()
+    return bcrypt.hashpw(str(password).encode(), bcrypt.gensalt(BCRYPT_COST)).decode()
+
+
+def _bcrypt_cost(stored):
+    """The cost a stored hash was made at, or None. Format: $2<x>$<cost>$..."""
+    import re
+    m = re.match(r"^\$2[aby]?\$(\d{2})\$", str(stored or ""))
+    return int(m.group(1)) if m else None
+
+
+def _rehash_if_stale(db, table, user_id, stored, password):
+    """Move one account up to the current cost, having just proved the password.
+
+    Never raises: a failed upgrade must not fail the sign-in that prompted it.
+    The account stays where it is and is offered the upgrade again next time.
+    """
+    try:
+        cost = _bcrypt_cost(stored)
+        if cost is None or cost >= BCRYPT_COST or not password:
+            return False
+        if table not in ("users", "parents"):      # never anything but a literal
+            return False
+        db.run(f"UPDATE {table} SET password_hash = %s WHERE id = %s",
+               (hash_password(password), user_id))
+        return True
+    except Exception:
+        return False
 
 
 # ── throttling ──────────────────────────────────────────────────────────────
@@ -155,6 +194,8 @@ def sign_in(db, username, password, device=None, platform=None, source=None):
     # is left alone: if fifty wrong guesses are in flight against somebody, the
     # fact that one of them finally worked is not a reason to stop counting.
     _clear_failures(source_key)
+    # The one moment the password is both known and known to be right.
+    _rehash_if_stale(db, "users", user["id"], user["password_hash"], password)
     token = issue_token(db, user["id"], device=device, platform=platform)
     db.run("UPDATE users SET last_login = %s WHERE id = %s", (_now_text(), user["id"]))
     security.audit(db, {"user_id": user["id"]}, "security", user["id"], "login",

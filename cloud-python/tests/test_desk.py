@@ -178,6 +178,76 @@ def with_a_school(client):
                            headers={"Authorization": f'Bearer {who["token"]}'},
                            json={"channel": channel, "args": list(args)})
 
+    # ── the school's credentials are not readable by its staff ─────────────
+    #
+    # settings:get-all is declared with module=None, which in require() means
+    # authenticate and check nothing further. It has to stay that way: the
+    # sign-in screen draws the school's crest and colours from it before
+    # anybody holds a token. What it must not also do is hand out the keys that
+    # move the school's money and spend its SMS credits — which it did, to any
+    # account that could sign in, over the internet.
+    #
+    # The "every channel declares its module" assertion above does not catch
+    # this: it excludes the settings:get* prefix by name. That exclusion is the
+    # blind spot, so the leak is tested directly instead.
+    planted = {
+        "paystack_secret_key": "sk_live_PLANTED",
+        "payment_gateway_credentials": '{"secret_key": "sk_live_PLANTED_BLOB"}',
+        "sms_api_key": "PLANTED_ARKESEL",
+        "resend_api_key": "re_PLANTED",
+        "email_smtp_pass": "PLANTED_SMTP",
+        "school_api_key": "PLANTED_SCHOOL_KEY",
+    }
+    for key, value in planted.items():
+        db.set_setting(key, value, "payments")
+
+    r = call(teacher, "settings:get-all")
+    ck("a class teacher can still read the school's settings", r.status_code == 200)
+    body = __import__("json").dumps(r.json().get("result") or {})
+    for key, value in planted.items():
+        ck(f"...and {key} is not in the answer", value not in body)
+    ck("...and nothing that looks like the gateway secret survives anywhere in it",
+       "sk_live_PLANTED" not in body)
+    ck("...while the screen is still told which credentials are set",
+       (r.json().get("result") or {}).get("_secrets_configured", {}).get("sms_api_key") is True)
+
+    # Not even the Super Admin, who outranks everybody inside the school. The
+    # key is write-only to the SYSTEM, not merely to the junior staff: an
+    # account takeover of the head teacher must not yield the gateway secret.
+    r = call(admin, "settings:get-all")
+    ck("not even the Super Admin reads a credential back",
+       r.status_code == 200 and "sk_live_PLANTED" not in __import__("json").dumps(r.json()["result"]))
+
+    # And the half that makes redaction safe: the screens write every field
+    # back on Save, so an empty secret must mean "keep the saved one".
+    #
+    # paystack_secret_key and not sms_api_key, because only the first is in
+    # this route's SETTINGS_WRITABLE — the SMS key is set through the
+    # integrations API, not the settings screen. A key the route refuses
+    # outright would have proved nothing about the empty-value rule.
+    call(admin, "settings:set", {"key": "paystack_secret_key", "value": ""})
+    ck("an empty secret does not wipe the stored one",
+       db.get_setting("paystack_secret_key", "") == "sk_live_PLANTED")
+    call(admin, "settings:set", {"key": "paystack_secret_key", "value": "sk_live_REPLACED"})
+    ck("...and a real one still replaces it",
+       db.get_setting("paystack_secret_key", "") == "sk_live_REPLACED")
+    # A secret this route does not accept at all is simply not written, which
+    # is a narrower surface and worth pinning down so it is not widened by
+    # accident.
+    call(admin, "settings:set", {"key": "sms_api_key", "value": "VIA_SETTINGS"})
+    ck("the SMS key cannot be set through the settings screen at all",
+       db.get_setting("sms_api_key", "") == "PLANTED_ARKESEL")
+
+    # Removing one stays possible, and stays deliberate.
+    r = call(admin, "settings:clear-secret", "paystack_secret_key")
+    ck("a credential can be removed on purpose",
+       r.status_code == 200 and db.get_setting("paystack_secret_key", "") == "")
+    r = call(admin, "settings:clear-secret", "school_name")
+    ck("...and clearing something that is not a credential is refused",
+       r.status_code == 200 and r.json()["result"]["ok"] is False)
+    r = call(teacher, "settings:clear-secret", "sms_api_key")
+    ck("...and a class teacher cannot clear one at all", r.status_code == 403)
+
     # ── the same rules as the office PC ─────────────────────────────────────
     r = call(bursar, "students:list", {})
     ck("an accountant may read the roll",

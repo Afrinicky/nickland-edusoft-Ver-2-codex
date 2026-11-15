@@ -48,8 +48,8 @@ from fastapi.responses import JSONResponse
 from . import ratelimit
 from .school import (academics, admin, calendar as school_calendar, canteen,
                      communications, dashboards, db as sdb, fees, finance,
-                     homework, media, office, payroll, security, session,
-                     staff, stores, students, timetable)
+                     homework, media, office, payroll, secrets_policy,
+                     security, session, staff, stores, students, timetable)
 from .school_api import Denied, require, _err
 
 router = APIRouter(prefix="/api/v1/desk")
@@ -145,15 +145,29 @@ def _list_subjects(db, actor, args):
 
 @channel("settings:get-all")
 def _settings_all(db, actor, args):
+    """Every setting the school has, minus every credential it has.
+
+    Ungated on purpose — the sign-in screen draws the school's crest, name and
+    colours from here before anybody has a token, and `module=None` is what
+    lets it. That is also how this channel came to hand the school's Paystack
+    secret, its SMS key and its cloud sync key to any account that could sign
+    in, over the internet. The permission is not the thing to change; the
+    answer is. See school/secrets_policy.py.
+    """
     grouped = {}
     for row in db.all("SELECT key, value, category FROM settings"):
         grouped.setdefault(row["category"], {})[row["key"]] = row["value"]
-    return grouped
+    return secrets_policy.redact_grouped(grouped)
 
 
 @channel("settings:set", module="settings", action="edit")
 def _settings_set(db, actor, args):
     return admin.save_settings(db, actor, {_f(args, 0, "key"): _f(args, 0, "value")})
+
+
+@channel("settings:clear-secret", module="settings", action="delete")
+def _clear_secret(db, actor, args):
+    return admin.clear_secret(db, actor, _arg(args, 0))
 
 
 @channel("settings:get-class-subjects")

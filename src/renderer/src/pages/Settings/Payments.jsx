@@ -86,6 +86,19 @@ export default function Payments() {
   useEffect(() => { setData(settings.payments || {}); }, [settings]);
   const set = (k, v) => setData(prev => ({ ...prev, [k]: v }));
 
+  // Which credentials are saved. The values themselves never reach this screen
+  // — settings:get-all redacts them (electron/ipc/_secrets.js) — so this is
+  // how a field says "a key is already set" without carrying it.
+  const savedSecrets = settings._secrets_configured || {};
+
+  async function removeSecret(key, label) {
+    const r = await window.api.settings.clearSecret(key);
+    if (!r || !r.ok) { showToast((r && r.error) || 'Could not remove that key', 'error'); return; }
+    setData(prev => ({ ...prev, [key]: '' }));
+    await loadSettings();
+    showToast(`${label} removed`, 'success');
+  }
+
   async function save() {
     for (const [k, v] of Object.entries(data)) await window.api.settings.set(k, v);
     await loadSettings();
@@ -136,10 +149,18 @@ export default function Payments() {
                 className="input"
                 type={secret ? 'password' : 'text'}
                 value={data[key] || ''}
-                placeholder={placeholder}
+                // A saved secret is never sent to this screen, so the box is
+                // empty even when a key is set. Say which, or the screen reads
+                // as "no key" and somebody pastes a second one in to be sure.
+                placeholder={secret && savedSecrets[key] ? '•••••••••• (saved)' : placeholder}
                 autoComplete="off"
                 onChange={e => set(key, e.target.value)}
               />
+              {secret && savedSecrets[key] ? (
+                <button type="button" className="btn-link" onClick={() => removeSecret(key, label)}>
+                  Remove saved {label.toLowerCase()}
+                </button>
+              ) : null}
               {hint ? <div className="text-xs text-muted" style={{ marginTop: 4 }}>{hint}</div> : null}
             </div>
           ))}

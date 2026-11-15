@@ -24,9 +24,19 @@ const ck = (n, c, extra) => {
 };
 
 if (!process.env.DATABASE_URL) {
-  console.log('DATABASE_URL is not set — skipping the Postgres adapter.');
+  // Skipping is right on a laptop with no Postgres. It is NOT right in CI,
+  // where this suite is the only thing standing between "the handlers work
+  // against Neon" and a hope — and where `process.exit(0)` made the whole run
+  // report success having tested none of it. So CI sets EDUSOFT_REQUIRE_PG=1
+  // and a missing database becomes the failure it is there.
+  const required = process.env.EDUSOFT_REQUIRE_PG === '1';
+  console.log(`DATABASE_URL is not set — ${required ? 'FAILING' : 'skipping'} the Postgres adapter.`);
   console.log('  Provision a throwaway database, then:');
   console.log('  DATABASE_URL=… DATABASE_SCHEMA=school node test/host_postgres.js');
+  if (required) {
+    console.log('\n0 passed, 1 failed');
+    process.exit(1);
+  }
   process.exit(0);
 }
 

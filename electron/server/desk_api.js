@@ -288,7 +288,10 @@ function registerDeskRoutes({ add, db, json, API, rateLimited, userDataPath }) {
     if (rateLimited(ip, body.username)) {
       return json(res, 429, { ok: false, error: 'Too many attempts. Try again shortly.' });
     }
-    const r = auth.authenticate(db, { username: body.username, password: body.password });
+    // The source address, so the throttle counts per (account, source) rather
+    // than per account — otherwise anybody on the internet could lock a
+    // bursar out of the hosted office application. See electron/ipc/auth.js.
+    const r = auth.authenticate(db, { username: body.username, password: body.password, source: ip });
     if (!r.ok) return json(res, 401, r);
 
     const t = tokens.issueToken(db, 'user', r.user.id, {

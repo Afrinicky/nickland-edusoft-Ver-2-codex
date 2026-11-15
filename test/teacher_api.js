@@ -150,27 +150,46 @@ function req(base, method, p, { token, body } = {}) {
   r = await req(base, 'GET', `/api/v1/students/${outside}`, { token });
   ck('a pupil in another class answers not-found, not forbidden', r.status === 404);
 
-  r = await req(base, 'GET', '/api/v1/attendance?classId=2&date=2026-08-24', { token });
+  // ── the register's dates are relative to today, and have to be ──────────────
+  //
+  // These were four fixed days in August 2026. The register itself did not care
+  // — it takes the date it is given — but `GET /attendance/history?days=30`
+  // filters on `date >= date('now', '-30 days')` (electron/server/staff_api.js),
+  // so once the calendar moved past September the fixture's own marks fell
+  // outside the window it was asserting on, and three checks began failing on
+  // every run for a reason that had nothing to do with the code under test.
+  //
+  // A test that passes only in the month it was written is not a test. The four
+  // days are now the four before today, which keeps them inside every window
+  // this file asks about and keeps their ORDER, which the late/absent/reason
+  // sequence below depends on.
+  const dayBefore = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  const DAY_1 = dayBefore(4);   // the register is taken
+  const DAY_2 = dayBefore(3);   // a pupil is late, with a reason
+  const DAY_3 = dayBefore(2);   // absent with a reason, then changed to late
+  const DAY_4 = dayBefore(1);   // a mark the register does not take
+
+  r = await req(base, 'GET', `/api/v1/attendance?classId=2&date=${DAY_1}`, { token });
   ck('another class\'s register is refused', r.status === 403);
 
   r = await req(base, 'POST', '/api/v1/attendance', {
-    token, body: { date: '2026-08-24', marks: [{ student_id: outside, status: 'present' }] },
+    token, body: { date: DAY_1, marks: [{ student_id: outside, status: 'present' }] },
   });
   ck('and so is marking a pupil in it', r.status === 403);
 
   // A batch is refused whole rather than half-saved.
   r = await req(base, 'POST', '/api/v1/attendance', {
-    token, body: { date: '2026-08-24', marks: [{ student_id: p1, status: 'present' }, { student_id: outside, status: 'absent' }] },
+    token, body: { date: DAY_1, marks: [{ student_id: p1, status: 'present' }, { student_id: outside, status: 'absent' }] },
   });
   ck('a batch reaching outside the class is refused whole', r.status === 403);
   ck('with none of it written',
-    db.prepare('SELECT COUNT(*) c FROM student_attendance WHERE date = ?').get('2026-08-24').c === 0);
+    db.prepare('SELECT COUNT(*) c FROM student_attendance WHERE date = ?').get(DAY_1).c === 0);
 
   // ── the register ──
   r = await req(base, 'POST', '/api/v1/attendance', {
     token,
     body: {
-      date: '2026-08-24',
+      date: DAY_1,
       marks: [{ student_id: p1, status: 'present' }, { student_id: p2, status: 'absent', notes: 'Sick' }],
     },
   });
@@ -191,36 +210,36 @@ function req(base, method, p, { token, body } = {}) {
   // shows up.
   r = await req(base, 'POST', '/api/v1/attendance', {
     token,
-    body: { date: '2026-08-25', marks: [{ student_id: p3, status: 'late', notes: 'Funeral at Techiman' }] },
+    body: { date: DAY_2, marks: [{ student_id: p3, status: 'late', notes: 'Funeral at Techiman' }] },
   });
   ck('a pupil can be marked late', r.json.ok && r.json.saved === 1);
   ck('...and the reason for the lateness is kept, not thrown away',
     db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?')
-      .get(p3, '2026-08-25').notes === 'Funeral at Techiman');
+      .get(p3, DAY_2).notes === 'Funeral at Techiman');
 
   // Re-marking the same day present clears the reason: a note explaining an
   // absence that did not happen is how a printout ends up lying.
   r = await req(base, 'POST', '/api/v1/attendance', {
-    token, body: { date: '2026-08-25', marks: [{ student_id: p3, status: 'present' }] },
+    token, body: { date: DAY_2, marks: [{ student_id: p3, status: 'present' }] },
   });
   ck('marking them present afterwards clears the reason',
     db.prepare('SELECT notes FROM student_attendance WHERE student_id = ? AND date = ?')
-      .get(p3, '2026-08-25').notes === null);
+      .get(p3, DAY_2).notes === null);
 
   // Re-marking absent WITHOUT retyping keeps what was already there, so a
   // correction to the mark does not silently discard the reason.
   await req(base, 'POST', '/api/v1/attendance', {
-    token, body: { date: '2026-08-26', marks: [{ student_id: p3, status: 'absent', notes: 'At the clinic' }] },
+    token, body: { date: DAY_3, marks: [{ student_id: p3, status: 'absent', notes: 'At the clinic' }] },
   });
   await req(base, 'POST', '/api/v1/attendance', {
-    token, body: { date: '2026-08-26', marks: [{ student_id: p3, status: 'late' }] },
+    token, body: { date: DAY_3, marks: [{ student_id: p3, status: 'late' }] },
   });
   ck('changing the mark without retyping keeps the reason already given',
     db.prepare('SELECT status, notes FROM student_attendance WHERE student_id = ? AND date = ?')
-      .get(p3, '2026-08-26').notes === 'At the clinic');
+      .get(p3, DAY_3).notes === 'At the clinic');
 
   r = await req(base, 'POST', '/api/v1/attendance', {
-    token, body: { date: '2026-08-27', marks: [{ student_id: p3, status: 'wandering' }] },
+    token, body: { date: DAY_4, marks: [{ student_id: p3, status: 'wandering' }] },
   });
   ck('a mark the register does not take is refused', r.status === 400);
 

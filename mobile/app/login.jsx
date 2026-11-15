@@ -36,18 +36,22 @@ import { colors, spacing, shadow, type } from '../src/theme';
 const DEVICE = Platform.OS === 'web' ? 'web browser' : Platform.OS + ' app';
 
 export default function Login() {
-  const { mode: conn, signIn } = useAuth();
+  const { signIn } = useAuth();
   const layout = useLayout();
   const brand = useBranding();
-  const isCloud = conn === 'cloud';
   // Whose sign-in page this is. A parent opening a link should recognise their
   // child's school immediately; falling back to the product's own name is for
   // the first run, before a connection has been made.
   const schoolName = brand.school?.name || 'Nickland Edusoft';
 
-  // 'signin' | 'register' | 'forgot' | 'claim'
+  // 'signin' | 'forgot' | 'claim'
+  //
+  // There was a 'register' stage. A parent typed the phone number the school
+  // had for their child and got an account linked to it — which proved only
+  // that they knew the number. Accounts are created by the school now; see
+  // electron/server/parents.js.
   const [stage, setStage] = useState('signin');
-  const [form, setForm] = useState({ identifier: '', password: '', full_name: '', phone: '', email: '' });
+  const [form, setForm] = useState({ identifier: '', password: '' });
   const [reset, setReset] = useState({ username: '', reason: '', code: '', next: '', confirm: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -61,19 +65,14 @@ export default function Login() {
   async function submit() {
     setBusy(true); setError(null);
     try {
-      const res = stage === 'register'
-        ? await api.parentRegister({
-            full_name: form.full_name, phone: form.phone, email: form.email,
-            password: form.password, device: DEVICE,
-          })
-        : await api.signIn(form.identifier, form.password, DEVICE);
+      const res = await api.signIn(form.identifier, form.password, DEVICE);
 
       // Over the internet, staff and parents have separate `me` endpoints and
       // the token does not say which it is. Set the role from what the sign-in
       // just told us, before asking — otherwise a teacher's token is presented
       // to the parent endpoint and comes back 401, which reads as a bad
       // password all over again.
-      const role = stage === 'register' ? 'parent' : (res.role === 'staff' ? 'staff' : 'parent');
+      const role = res.role === 'staff' ? 'staff' : 'parent';
       setRole(role);
       const me = await api.me(res.token);
       await signIn(res.token, me);
@@ -194,31 +193,7 @@ export default function Login() {
                           Forgot password
                         </Text>
                       </TouchableOpacity>
-                      {!isCloud && (
-                        <>
-                          <View style={{ width: 3, height: 3, borderRadius: 2, backgroundColor: colors.faint }} />
-                          <TouchableOpacity onPress={() => goto('register')} accessibilityRole="button">
-                            <Text style={{ ...type.small, color: colors.textSoft, fontWeight: '600' }}>
-                              New parent
-                            </Text>
-                          </TouchableOpacity>
-                        </>
-                      )}
                     </View>
-                  </>
-                )}
-
-                {stage === 'register' && (
-                  <>
-                    <Title style={{ fontSize: 24 }}>New parent</Title>
-                    <Muted>Use the phone number the school has for your child.</Muted>
-                    <Field label="Your name" value={form.full_name} onChangeText={v => set('full_name', v)} autoCapitalize="words" icon="user" />
-                    <Field label="Phone" value={form.phone} onChangeText={v => set('phone', v)} keyboardType="phone-pad" placeholder="0244…" icon="phone" />
-                    <Field label="Email (optional)" value={form.email} onChangeText={v => set('email', v)} keyboardType="email-address" icon="mail" />
-                    <Field label="Choose a password" value={form.password} onChangeText={v => set('password', v)} secureTextEntry placeholder="At least 6 characters" icon="lock" />
-                    <ErrorNote message={error} />
-                    <Button title={busy ? 'Please wait…' : 'Create account'} onPress={submit} busy={busy} size="lg" />
-                    <BackToSignIn onPress={() => goto('signin')} />
                   </>
                 )}
 
