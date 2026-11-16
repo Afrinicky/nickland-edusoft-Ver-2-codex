@@ -18,6 +18,7 @@
 // DevTools and calling the channel directly lands here just the same.
 
 const security = require('./_security');
+const syncContext = require('../db/sync_context');
 const scopes = require('./_scope');
 const { POLICY, ALWAYS_ALLOWED, fallbackRule } = require('./_policy');
 const licence = require('../licence');
@@ -136,6 +137,11 @@ function guardedIpcMain(ipcMain, db) {
       return ipcMain.handle(channel, (event, ...args) => {
         // Nobody signed in: only the channels that get somebody signed in.
         const userId = security.getCurrentUserId();
+
+        // Tell the journal who is writing, before anything writes. One row,
+        // once per call — the journalling triggers read it back, because a
+        // SQLite trigger cannot read a session variable. See db/sync_context.js.
+        try { syncContext.stamp(db, { userId, source: security.isScopedCall() ? 'lan' : 'ipc' }); } catch (_) {}
         if (!userId) {
           return ALWAYS_ALLOWED.has(channel)
             ? handler(event, ...args)

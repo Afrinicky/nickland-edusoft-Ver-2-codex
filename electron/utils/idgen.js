@@ -63,6 +63,14 @@ function getSchoolAbbreviation(db) {
 }
 
 function getNextRollNumber(db) {
+  const lease = leased(db, 'admission');
+  // A suffixed admission number would end up inside an index number like
+  // AVE/26/00042-A7F3, which is not a shape the parser accepts
+  // (parseIndexNumber expects digits), so an exhausted lease falls through to
+  // the local counter here rather than producing one. Admission numbers are
+  // issued a handful of times a term, so a block does not run out the way a
+  // receipt block can.
+  if (lease && !lease.suffixed) return parseInt(lease.value, 10);
   return parseInt(getSetting(db, 'next_roll_number', '1'), 10);
 }
 
@@ -70,7 +78,29 @@ function setNextRollNumber(db, next) {
   db.prepare("UPDATE settings SET value = ? WHERE key = 'next_roll_number'").run(String(next));
 }
 
+// ── Leased first, local counter second ──────────────────────────────────────
+//
+// A machine that has been granted a block of numbers by the cloud draws from
+// it, so two machines working offline cannot both issue receipt 101 — see
+// db/leases.js for why that matters more than it sounds.
+//
+// A machine holding NO lease falls back to the counter below and behaves
+// exactly as every existing installation does today. That is the whole
+// compatibility story: nothing changes for a school until the cloud grants it
+// a block, and the fallback is not a collision risk for a school that only
+// ever has one database.
+function leased(db, kind) {
+  try {
+    const leases = require('../db/leases');
+    if (!leases.get(db, kind)) return null;
+    const r = leases.take(db, kind);
+    return r && r.ok ? r : null;
+  } catch (_) { return null; }
+}
+
 function getNextReceiptNumber(db) {
+  const lease = leased(db, 'receipt');
+  if (lease) return lease.value;
   const current = parseInt(getSetting(db, 'receipt_counter', '1'), 10);
   // Upsert, not a bare UPDATE: a plain UPDATE is a silent no-op when the
   // receipt_counter row doesn't exist, so the counter never advances and every

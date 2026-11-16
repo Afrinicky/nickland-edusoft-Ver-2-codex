@@ -1809,6 +1809,17 @@ function createApiServer(db, opts = {}) {
       if (!ctx) return json(res, 401, { ok: false, error: 'Account not found' });
     }
 
+    // The LAN REST routes do not pass through ipc/_guard.js — they check
+    // permissions themselves with can() — so this is where they tell the
+    // journal who is writing. Without it, every register marked and every
+    // payment taken from a phone would be journalled with no user against it.
+    try {
+      require('../db/sync_context').stamp(db, {
+        userId: ctx && ctx.user ? ctx.user.id : null,
+        source: 'lan',
+      });
+    } catch (_) { /* an unattributed entry beats a refused request */ }
+
     let body = {};
     let rawBody = null;
     if (req.method === 'POST' || req.method === 'PUT') {

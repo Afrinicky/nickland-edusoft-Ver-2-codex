@@ -46,6 +46,7 @@ const OUT = resolve(ROOT, 'cloud-python/schema/school.sql');
 const SEED_OUT = resolve(ROOT, 'cloud-python/schema/seed.sql');
 
 const { SCHEMA, runMigrations, seedDefaults } = require(resolve(ROOT, 'electron/db/database.js'));
+const { SYNCED: SYNCED_TABLES } = require(resolve(ROOT, 'electron/db/sync_tables.js'));
 
 // ── build the offline database, exactly as a school's PC does ────────────────
 function buildOffline() {
@@ -192,7 +193,70 @@ function render(db) {
 
 `;
 
+  // ── Identity, on the Postgres side ────────────────────────────────────────
+  //
+  // The desktop fills record_uid with a trigger, because SQLite cannot put a
+  // non-constant DEFAULT on a column added by ALTER TABLE. Postgres can, so it
+  // does — a default is cheaper than a trigger, cannot be bypassed, and
+  // applies to every insert from every one of the cloud's own modules without
+  // any of them knowing about it.
+  //
+  // Without this, rows created IN THE CLOUD have no identity at all, and a
+  // record with no identity cannot be synced to anything. That is not a
+  // theoretical gap: before this was added, every one of a freshly provisioned
+  // school's seeded rows had a NULL record_uid.
+  //
+  // UUIDv7 and not gen_random_uuid(), so ids made here sort and index the same
+  // way as ids made on a school's PC. Same layout as electron/utils/uid.js:
+  // 48 bits of Unix milliseconds, version 7, variant 10, the rest random.
+  const uuidFn = `-- ── record identity ──
+-- UUIDv7 as TEXT, matching electron/utils/uid.js in layout so an id made in
+-- the cloud and an id made on a school's PC are the same kind of thing:
+-- 48 bits of Unix milliseconds, version 7, variant 10, the rest random.
+--
+-- Built from gen_random_uuid(), which is CORE Postgres from 13 onwards. The
+-- first attempt used gen_random_bytes() and failed to provision at all, because
+-- that one needs the pgcrypto extension — and a schema that depends on an
+-- extension being installed is a schema that does not provision on a managed
+-- Postgres where it is not.
+--
+-- NOT declared IMMUTABLE, because it is not; a wrong volatility marker would
+-- let the planner hoist one call out of an UPDATE and give a whole table the
+-- same identity, which is exactly the bug the SQLite side already hit once.
+CREATE OR REPLACE FUNCTION edusoft_uuidv7() RETURNS text AS $$
+  SELECT lpad(to_hex((extract(epoch FROM clock_timestamp()) * 1000)::bigint), 12, '0')
+         || '-7' || substr(replace(gen_random_uuid()::text, '-', ''), 2, 3)
+         || '-8' || substr(replace(gen_random_uuid()::text, '-', ''), 6, 3)
+         || '-' || substr(replace(gen_random_uuid()::text, '-', ''), 10, 12);
+$$ LANGUAGE sql VOLATILE;
+
+-- The 12-hex timestamp fills the 8-4 of the 8-4-4-4-12 shape, so it is split
+-- on the way out rather than carried with a dash already in it.
+CREATE OR REPLACE FUNCTION edusoft_record_uid() RETURNS text AS $$
+  SELECT substr(u, 1, 8) || '-' || substr(u, 9, 4) || substr(u, 13)
+    FROM (SELECT edusoft_uuidv7() AS u) q;
+$$ LANGUAGE sql VOLATILE;
+`;
+
+  // Every synced table's record_uid takes the default, and rows that predate
+  // it are backfilled. Written as a DO block so re-applying the schema to a
+  // school that already has it is a no-op rather than an error.
+  const syncedTables = tables.map(t => t.name).filter(n => SYNCED_TABLES.includes(n));
+  const identity = [
+    '',
+    '-- ── record_uid: a default for new rows, a backfill for old ones ──',
+    'DO $$ DECLARE t text; BEGIN',
+    `  FOR t IN SELECT unnest(ARRAY[${syncedTables.map(n => `'${n}'`).join(', ')}]) LOOP`,
+    '    BEGIN',
+    "      EXECUTE format('ALTER TABLE %I ALTER COLUMN record_uid SET DEFAULT edusoft_record_uid()', t);",
+    "      EXECUTE format('UPDATE %I SET record_uid = edusoft_record_uid() WHERE record_uid IS NULL', t);",
+    '    EXCEPTION WHEN undefined_column OR undefined_table THEN NULL; END;',
+    '  END LOOP;',
+    'END $$;',
+  ].join('\n');
+
   const body = [
+    uuidFn,
     ...converted.map(c => c.table),
     '',
     '-- ── how the school ties together ──',
@@ -204,6 +268,7 @@ function render(db) {
     '',
     '-- ── indexes ──',
     ...indexes.map(i => convertIndex(i.sql)),
+    identity,
   ].join('\n');
 
   return head + body + '\n';
@@ -237,10 +302,23 @@ function quote(v) {
 // So a timestamp column that the table fills in for itself is left out of the
 // INSERT. Postgres then writes the moment the SCHOOL was provisioned, which is
 // both reproducible here and truer there.
+//
+// `record_uid` is left out for the same reason and a sharper one. It is
+// generated when the generator runs, so writing it out made this file differ
+// from itself on every regeneration — but worse, a FIXED uid in a committed
+// seed file would be handed to every school provisioned from it, so a thousand
+// schools would share one identity for their Proprietor designation. The whole
+// point of a record_uid is that it names one row in the world.
+//
+// Each database fills its own instead. The desktop does not mint competing
+// ones, because a desktop no longer seeds a school: schools are created in the
+// cloud by the Super Admin, and activation brings the school's own records
+// down (see docs/CLOUD_FIRST_AUDIT.md).
 function selfFilling(db, table) {
   try {
     return new Set(db.prepare(`PRAGMA table_info(${table})`).all()
-      .filter(c => /^(created_at|updated_at)$/i.test(c.name) && c.dflt_value !== null)
+      .filter(c => (/^(created_at|updated_at)$/i.test(c.name) && c.dflt_value !== null)
+                   || c.name === 'record_uid')
       .map(c => c.name));
   } catch (_) {
     return new Set();

@@ -2268,6 +2268,27 @@ function runMigrations(db) {
        WHERE name = 'Administrator'
     `).run();
   });
+
+  // ── Stable record identity and the transaction journal ────────────────────
+  //
+  // Last, deliberately: it reads the live column list of every table it
+  // touches to build the journal's before/after images, so it has to run after
+  // every migration above has finished adding columns. Run it earlier and a
+  // column added in this same upgrade would be missing from the journal and
+  // therefore from everything that syncs.
+  //
+  // Idempotent and resumable — see db/sync_schema.js. A failure on one table
+  // is recorded and the rest continue, because a school left half-migrated by
+  // one bad table is worse off than one told which table it was.
+  safe(() => {
+    const report = require('./sync_schema').applySyncSchema(db);
+    for (const err of report.errors) {
+      try {
+        db.prepare(`INSERT INTO system_log (level, source, message, detail)
+                    VALUES ('warn', 'sync-schema', 'A table could not be prepared for sync', ?)`).run(err);
+      } catch (_) { /* best effort */ }
+    }
+  });
 }
 
 function initDatabase(userDataPath, getResourcePath) {
