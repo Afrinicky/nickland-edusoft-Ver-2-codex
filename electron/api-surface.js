@@ -166,14 +166,6 @@ function buildApi(invoke) {
       paidSummary:       (termId)              => invoke('payroll:paid-summary', { termId }),
     },
 
-    // ── Mobile Sync (scaffold — companion app not yet released) ──
-    mobileSync: {
-      generateToken:     ()                    => invoke('mobile-sync:generate-token'),
-      status:            ()                    => invoke('mobile-sync:status'),
-      revokeDevice:      (deviceId)            => invoke('mobile-sync:revoke-device', deviceId),
-      testServer:        ()                    => invoke('mobile-sync:test-server'),
-    },
-
     // ── Mobile API host (embedded server for the mobile client) ──
     mobile: {
       status:            ()                    => invoke('mobile:status'),

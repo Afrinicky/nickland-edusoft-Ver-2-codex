@@ -13,10 +13,10 @@ than discover.
 
 | | What it is | Answers |
 |---|---|---|
-| **The installed application** | The school's own computer | all 409 |
-| **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 382 of 409 (93%) |
-| **Hosted — the installer's own code** | The internet, running host/server.js | 382 of 409 (93%) |
-| **Hosted — the Python service** | The internet, running cloud-python | 108 of 409 (26%) |
+| **The installed application** | The school's own computer | all 405 |
+| **A browser on the school network** | Any machine on the school Wi-Fi, and the installed application in client mode | 378 of 405 (93%) |
+| **Hosted — the installer's own code** | The internet, running host/server.js | 378 of 405 (93%) |
+| **Hosted — the Python service** | The internet, running cloud-python | 108 of 405 (27%) |
 
 There are two ways to be hosted and they are not equal. **host/server.js**
 runs the installed application's own handlers on a server — the same code, so
@@ -378,17 +378,6 @@ The school's own computer only.
 | `mobile:start` | office PC |
 | `mobile:status` | office PC |
 | `mobile:stop` | office PC |
-
-## Mobile sync
-
-0 of 4 online.
-
-| Channel | Hosted |
-|---|---|
-| `mobile-sync:generate-token` | not yet |
-| `mobile-sync:revoke-device` | not yet |
-| `mobile-sync:status` | not yet |
-| `mobile-sync:test-server` | not yet |
 
 ## Notifications
 

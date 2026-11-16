@@ -14,8 +14,6 @@
 // blindfold.
 //
 //   node scripts/run-tests.mjs                 the Node suites
-//   node scripts/run-tests.mjs --cloud         the cloud/ reference suites too
-//   node scripts/run-tests.mjs --cloud-only    only those
 //   node scripts/run-tests.mjs --only licence  one suite, by name
 //
 // The Python suites are a separate runtime and stay in `npm run test:online`.
@@ -50,18 +48,17 @@ function nodeSuites() {
   }));
 }
 
-function cloudSuites() {
-  return readdirSync(path.join(ROOT, 'cloud', 'test'))
-    .filter(f => f.endsWith('.js'))
-    .sort()
-    .map(f => ({ name: `cloud/${f.replace(/\.js$/, '')}`, file: path.join('cloud', 'test', f) }));
-}
 
 const args = process.argv.slice(2);
 const only = args.includes('--only') ? args[args.indexOf('--only') + 1] : null;
 
-let suites = args.includes('--cloud-only') ? [] : [...nodeSuites()];
-if (args.includes('--cloud') || args.includes('--cloud-only')) suites = [...suites, ...cloudSuites()];
+// `--cloud` and `--cloud-only` used to add the suites under cloud/, the Node
+// reference implementation of the cloud service. That service is gone — its own
+// README called the Python port "the going-forward implementation" and itself
+// "reference", and a second implementation of the cloud is exactly the
+// duplication this release is removing. The flags are accepted and ignored so a
+// stale CI invocation does not fail.
+let suites = [...nodeSuites()];
 if (only) suites = suites.filter(s => s.name === only || s.name.endsWith(`/${only}`));
 
 if (!suites.length) {

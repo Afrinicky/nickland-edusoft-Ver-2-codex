@@ -48,7 +48,6 @@ const registerOnboardingHandlers = require('./ipc/onboarding');
 const registerCanteenExtraHandlers = require('./ipc/canteen_extra');
 const registerStaffHrHandlers = require('./ipc/staff_hr');
 const registerPayrollHandlers = require('./ipc/payroll');
-const registerMobileSyncHandlers = require('./ipc/mobile_sync');
 const registerDiscountsHandlers = require('./ipc/fees_discounts');
 const registerBooksHandlers = require('./ipc/books');
 const registerFeesBulkPayHandlers = require('./ipc/fees_bulk_pay');
@@ -125,7 +124,6 @@ function registerModules({ ipcMain, db, userDataPath, getResourcePath, app, logg
   mount('canteen.extra', () => registerCanteenExtraHandlers(guarded, db));
   mount('staff.hr', () => registerStaffHrHandlers(guarded, db, userDataPath));
   mount('payroll', () => registerPayrollHandlers(guarded, db));
-  mount('mobile.sync', () => registerMobileSyncHandlers(guarded, db));
   mount('fees.discounts', () => registerDiscountsHandlers(guarded, db));
   mount('books', () => registerBooksHandlers(guarded, db));
   mount('fees.bulkPay', () => registerFeesBulkPayHandlers(guarded, db));

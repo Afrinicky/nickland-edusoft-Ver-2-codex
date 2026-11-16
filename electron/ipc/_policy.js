@@ -302,7 +302,7 @@ const PREFIX_MODULE = {
   finance: 'finance', workbook: 'finance', inventory: 'finance', transport: 'finance',
   notifications: 'notifications', messages: 'notifications', announcements: 'notifications',
   settings: 'settings', access: 'settings', backup: 'settings', cloud: 'settings',
-  mobile: 'settings', 'mobile-sync': 'settings', session: 'settings',
+  mobile: 'settings', session: 'settings',
   onboarding: 'settings',
   dashboard: 'dashboard',
 };

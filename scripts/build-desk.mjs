@@ -9,7 +9,6 @@
 //   resources/desk/       picked up by electron-builder, so the installed host
 //                         serves it at /desk over the school Wi-Fi
 //   cloud-python/desk/    the hosted service, when it serves it too
-//   cloud/desk/           likewise, for the Node service
 //
 // Options:
 //   --host <url>     bake in the school host this build talks to. Only needed
@@ -42,7 +41,6 @@ const onlyBuild = argv.includes('--only-build');
 
 const TARGETS = [
   path.join(repo, 'resources', 'desk'),
-  path.join(repo, 'cloud', 'desk'),
   path.join(repo, 'cloud-python', 'desk'),
 ];
 

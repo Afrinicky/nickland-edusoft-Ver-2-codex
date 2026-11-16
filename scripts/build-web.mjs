@@ -9,7 +9,6 @@
 //                          Vercel deploy uploads
 //   resources/webapp/      picked up by electron-builder, so the desktop host
 //                          serves it over the school Wi-Fi with no internet
-//   cloud/webapp/          the Node cloud service, when it serves the app too
 //   cloud-python/webapp/   the FastAPI service, likewise
 //
 // Options:
@@ -74,7 +73,6 @@ if (process.env.VERCEL && !portal && !sameOrigin) {
 
 const TARGETS = [
   path.join(repo, 'resources', 'webapp'),
-  path.join(repo, 'cloud', 'webapp'),
   path.join(repo, 'cloud-python', 'webapp'),
 ];
 

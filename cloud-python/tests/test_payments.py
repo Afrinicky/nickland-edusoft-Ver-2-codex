@@ -19,6 +19,16 @@ import sys
 import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# The parent/student portal is OFF for this release (app/release.py), and most
+# of what this suite covers is the parent payment path — a parent seeing a
+# balance, declaring a bank payment, reading a receipt. The code is switched
+# off, not removed, so the suite runs with it switched back ON: that is what
+# keeps the coverage honest about whether the path still works when the portal
+# returns, rather than quietly deleting the tests along with the surface.
+#
+# test/release_surface.js is the other half, and asserts the opposite: that
+# with the flag at its release default a parent cannot sign in at all.
+os.environ["EDUSOFT_PARENT_PORTAL"] = "1"
 os.environ.setdefault("ALLOW_DEV_SECRET", "1")
 # Licences are signed in every suite, so the service boots exactly as it does in
 # production rather than down a path only tests take. A FIXED key: a generated

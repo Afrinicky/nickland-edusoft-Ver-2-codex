@@ -25,6 +25,16 @@
 //   Mr Tetteh    Security        — no module at all; an account and a payslip
 //   Mrs Ansu     a parent        — one child, and nothing else at all
 
+// The parent/student portal is OFF for this release (electron/release.js), and
+// part of what this suite covers is the parent surface. The code is switched
+// off, not removed, so the suite runs with it switched back ON: that keeps the
+// coverage honest about whether those paths still work when the portal
+// returns, rather than deleting the tests along with the surface.
+//
+// test/release_surface.js asserts the opposite — that at the release default a
+// parent cannot sign in, no parent route answers, and every staff surface is
+// untouched.
+process.env.EDUSOFT_PARENT_PORTAL = '1';
 const http = require('http');
 const path = require('path');
 

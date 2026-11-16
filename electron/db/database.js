@@ -1209,8 +1209,6 @@ function seedDefaults(db) {
     ['feature_canteen_enabled', 'true', 'features'],
     ['feature_notifications_enabled', 'true', 'features'],
     // Mobile companion app sync (scaffolding only — desktop is the host)
-    ['mobile_sync_enabled', 'false', 'mobile'],
-    ['mobile_sync_port', '4747', 'mobile'],
     ['mobile_device_pairing_token', '', 'mobile'],
     ['mobile_paired_devices', '[]', 'mobile'],
     ['mobile_last_sync_at', '', 'mobile'],

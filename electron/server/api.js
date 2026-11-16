@@ -27,6 +27,7 @@ const { registerPaymentRoutes, onlinePaymentsEnabled } = require('./payments_api
 const { registerDeskRoutes } = require('./desk_api');
 const portals = require('../ipc/_portals');
 const licence = require('../licence');
+const release = require('../release');
 // Required at call-time (not destructured at load) to avoid a load-order
 // circular-dependency warning: auth.js attaches resolveEffectivePermissions
 // to module.exports after its main export.
@@ -163,6 +164,12 @@ function rateLimited(ip, identifier) {
 
 function subjectContext(db, subject) {
   if (subject.subject_type === 'parent') {
+    // The parent/student portal is off for this release (electron/release.js).
+    // Refused HERE rather than route by route: every parent route resolves its
+    // caller through this function, so one gate closes all of them — including
+    // any added later — and an already-issued parent token stops working
+    // instead of quietly outliving the decision.
+    if (!release.parentPortalEnabled()) return null;
     const p = db.prepare('SELECT id, full_name, phone, email FROM parents WHERE id = ?').get(subject.subject_id);
     if (!p) return null;
     return { role: 'parent', parent: p, student_ids: parents.studentIdsForParent(db, p.id) };
@@ -537,6 +544,9 @@ function createApiServer(db, opts = {}) {
   }, { public: true });
 
   add('POST', `${API}/auth/parent/login`, async (ctx, req, res, params, body, ip) => {
+    if (!release.parentPortalEnabled()) {
+      return json(res, 403, { ok: false, error: release.PARENT_PORTAL_OFF });
+    }
     if (rateLimited(ip, body.identifier)) return json(res, 429, { ok: false, error: 'Too many attempts.' });
     // The source address is what keeps the throttle from being a way to lock a
     // parent out: failures are counted per (account, source). See
@@ -592,6 +602,14 @@ function createApiServer(db, opts = {}) {
       return json(res, 401, { ok: false, error: 'Those details did not match an account. Check and try again.' });
     }
 
+    // The single sign-in box tries staff, then parents. With the portal off
+    // there is no parent half to try, so it stops at the same generic refusal
+    // a wrong password gets — which is also the right answer for a parent
+    // typing a number that is in the system: it says nothing about whether the
+    // account exists.
+    if (!release.parentPortalEnabled()) {
+      return json(res, 401, { ok: false, error: 'Those details did not match an account. Check and try again.' });
+    }
     const r = parents.loginParent(db, { identifier, password: body.password, source: ip });
     if (r.throttled) return json(res, 429, { ok: false, error: r.error });
     if (r.ok) {

@@ -123,17 +123,11 @@ jobs:
       - name: The office application over the network
         run: node test/desk_api.js
 
-      - name: Cloud sync end-to-end (Node cloud + real desktop client)
-        run: node cloud/test/e2e.js
 
-      - name: Parent portal (Node cloud)
-        run: node cloud/test/portal.js
 
       # The teacher-off-LAN round trip: the desktop projects itself, a teacher
       # signs into the cloud with the desktop offline, marks a register, and
       # the desktop applies it when it comes back — exactly once.
-      - name: Staff over the internet (Node cloud + real desktop client)
-        run: node cloud/test/staff.js
 
       - name: Install Python cloud dependencies
         run: pip install -r cloud-python/requirements.txt httpx

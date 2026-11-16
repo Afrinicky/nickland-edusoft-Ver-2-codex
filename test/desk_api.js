@@ -295,8 +295,14 @@ const call = (base, token, channel, ...args) =>
     return tokens.issueToken(db, 'parent', pid, { deviceName: 'phone' }).token;
   })();
   r = await call(base, parentToken, 'students:list', {});
+  // 401 or 403, and the difference is not the point. With the parent portal ON
+  // the token resolves to a parent and the office refuses it as the wrong kind
+  // of account (403). With the portal OFF for this release the token does not
+  // resolve at all (401). Either way a parent cannot open the school office,
+  // which is the property worth asserting — pinning the exact code would make
+  // this test fail on a release decision rather than on a security regression.
   ck('a parent cannot open the school office with the app they were given',
-    r.status === 403);
+    r.status === 403 || r.status === 401, `got ${r.status}`);
 
   // Every setting IS reachable once somebody has signed in and holds settings,
   // exactly as on the office PC. The curation above is about the screen that

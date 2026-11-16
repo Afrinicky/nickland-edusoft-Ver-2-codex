@@ -18,6 +18,16 @@
 //      whose. This server ignored it entirely until this branch, so every check
 //      that a second class stays invisible is guarding a fault that was real.
 
+// The parent/student portal is OFF for this release (electron/release.js), and
+// part of what this suite covers is the parent surface. The code is switched
+// off, not removed, so the suite runs with it switched back ON: that keeps the
+// coverage honest about whether those paths still work when the portal
+// returns, rather than deleting the tests along with the surface.
+//
+// test/release_surface.js asserts the opposite — that at the release default a
+// parent cannot sign in, no parent route answers, and every staff surface is
+// untouched.
+process.env.EDUSOFT_PARENT_PORTAL = '1';
 const http = require('http');
 const path = require('path');
 

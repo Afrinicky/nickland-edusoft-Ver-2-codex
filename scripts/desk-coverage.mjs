@@ -112,7 +112,7 @@ const MODULE_TITLES = {
   workbook: 'Finance workbook', onboarding: 'Onboarding', session: 'Term and session',
   app: 'The machine itself',
   'lesson-notes': 'Lesson notes', 'staff-activities': 'Staff activities',
-  'mobile-sync': 'Mobile sync', mobile: 'Mobile app', cloud: 'Cloud sync',
+  mobile: 'Mobile app', cloud: 'Cloud sync',
   payments: 'The payment desk',
 };
 

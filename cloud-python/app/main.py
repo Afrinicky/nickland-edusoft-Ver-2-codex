@@ -26,6 +26,7 @@ from . import portal_auth as pauth
 from . import portals as portal_model
 from . import platform_api
 from . import public_api
+from . import release
 from . import ratelimit
 from . import site as site_files
 from . import staff as staff_api
@@ -256,7 +257,13 @@ def create_app(store=None) -> FastAPI:
     # The office application's own contract — the same browser build a school's
     # computer serves at /desk, pointed here instead. See app/desk_api.py.
     app.include_router(desk_api.router)
-    app.include_router(parent_api.router)
+    # The parent/student portal is off for this release — see app/release.py
+    # for why it is a flag and not a deletion. The webhook router stays
+    # mounted either way: it carries the payment-gateway callback, which is how
+    # money a school has already taken gets confirmed, and dropping it would
+    # lose settlements rather than hide a surface.
+    if release.parent_portal_enabled():
+        app.include_router(parent_api.router)
     app.include_router(parent_api.webhook_router)
 
     if os.environ.get("EDUSOFT_QUIET_BOOT") != "1":
