@@ -29,6 +29,8 @@ HERE = Path(__file__).resolve().parent
 NEEDS_DB = {
     "test_saas", "test_school", "test_payments",
     "test_licensing", "test_attack", "test_dashboards",
+    # The enrolment rehearsal provisions real schemas and signs in to them.
+    "test_enrolment",
 }
 
 TALLY = re.compile(r"(\d+) passed, (\d+) failed")

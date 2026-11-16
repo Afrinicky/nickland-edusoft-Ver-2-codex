@@ -140,7 +140,12 @@ def _list_terms(db, actor, args):
 
 @channel("settings:list-subjects")
 def _list_subjects(db, actor, args):
-    return db.all("SELECT * FROM subjects WHERE is_active = TRUE ORDER BY name")
+    # `= 1`, not `= TRUE`. These flag columns are BIGINT in the generated
+    # Postgres schema, because the offline schema they are rendered from
+    # declares them INTEGER and SQLite has no boolean. Comparing one to TRUE
+    # raises `operator does not exist: bigint = boolean` and the screen gets a
+    # 500 — which is what a school opening Subjects on the web actually got.
+    return db.all("SELECT * FROM subjects WHERE is_active = 1 ORDER BY name")
 
 
 @channel("settings:get-all")
