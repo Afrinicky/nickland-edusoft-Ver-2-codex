@@ -44,4 +44,33 @@ function parentPortalEnabled() {
 const PARENT_PORTAL_OFF =
   'The parent app is not available in this release. The school office can give you your child’s records.';
 
-module.exports = { parentPortalEnabled, PARENT_PORTAL_OFF };
+// ── A desktop no longer creates a school ────────────────────────────────────
+//
+// Schools are set up online by the Super Admin, who registers the school, does
+// the initial configuration and hands the school's administrator their first
+// credentials. The desktop then ACTIVATES against that existing setup
+// (electron/licence/refresh.js → POST /api/v1/activate), which hands this
+// machine its own device credential, the school's id and a signed licence.
+//
+// So the first-run "Create Super Admin Account" screen is gone, and the
+// `auth:bootstrap` channel behind it refuses. That is the single largest
+// simplification in this release, and it follows from one sentence: if every
+// school was created in the cloud, a desktop never has to be able to create
+// one — which removes a whole second way for a school to come into existence,
+// and with it the question of what happens when the two disagree about who the
+// school's administrator is.
+//
+// EDUSOFT_ALLOW_LOCAL_SETUP=1 re-enables it, for a support engineer recovering
+// a school whose cloud record is gone.
+function localSetupEnabled() {
+  return flag('EDUSOFT_ALLOW_LOCAL_SETUP', false);
+}
+
+const LOCAL_SETUP_OFF =
+  'This school is set up online. Open Settings → Cloud Sync and activate this ' +
+  'computer with the administrator’s Edusoft email and password.';
+
+module.exports = {
+  parentPortalEnabled, PARENT_PORTAL_OFF,
+  localSetupEnabled, LOCAL_SETUP_OFF,
+};

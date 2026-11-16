@@ -30,6 +30,7 @@ rather than a state somebody discovers later:
 """
 import datetime
 import re
+import secrets
 
 from . import platform_api
 from .billing import audit as billing_audit
@@ -177,6 +178,20 @@ def register(store, data, actor="public", remote_addr=None):
     email = norm_email(data.get("email"))
     password = str(data.get("password") or "")
     username = str(data.get("username") or "").strip().lower() or _username_from(email)
+
+    # Whether the administrator chose this password or somebody at Nickland did.
+    # Anything other than the public form is an operator acting on a school's
+    # behalf, which means a password two parties know — see
+    # _create_administrator for why that decides must_change_password.
+    chose_own_password = actor == "public"
+
+    # An operator enrolling a school over the phone should not have to invent a
+    # password, and should not be able to choose a weak one on somebody else's
+    # behalf. Left blank, one is generated from the CSPRNG and handed back once.
+    generated_password = None
+    if not password and not chose_own_password:
+        generated_password = secrets.token_urlsafe(9)
+        password = generated_password
     plan_id = str(data.get("plan_id") or "").strip() or platform_settings.get(repo, "default_plan", "pro")
 
     if len(school_name) < 3:
@@ -210,7 +225,8 @@ def register(store, data, actor="public", remote_addr=None):
 
     try:
         db = sdb.SchoolDb(school_id)
-        _create_administrator(db, username, password, full_name, email)
+        _create_administrator(db, username, password, full_name, email,
+                              chose_own_password=chose_own_password)
         _record_contact(db, school_name, email, data)
     except Exception as exc:
         # The tenant exists and has no administrator — which is a school nobody
@@ -262,7 +278,16 @@ def register(store, data, actor="public", remote_addr=None):
         # they may install later; it is stored as a hash and is reissued rather
         # than recovered.
         "sync_key": provisioned.get("api_key"),
-        "administrator": {"username": username, "full_name": full_name, "email": email},
+        "administrator": {
+            "username": username, "full_name": full_name, "email": email,
+            # Shown ONCE, and only when the Super Admin did not choose one —
+            # there is nowhere to read it back from, because only its hash is
+            # stored. The console shows it for handover and the school's
+            # administrator is required to replace it at first sign-in
+            # (must_change_password, see _create_administrator).
+            "temporary_password": generated_password,
+            "must_change_password": not chose_own_password,
+        },
         "token": f'{school_id}.{signed_in["token"]}' if signed_in.get("ok") else None,
         "expires_at": signed_in.get("expires_at"),
         "subscription": subscription,
@@ -286,14 +311,22 @@ def _username_from(email):
     return cleaned if len(cleaned) >= 3 else f"admin{cleaned}"
 
 
-def _create_administrator(db, username, password, full_name, email):
+def _create_administrator(db, username, password, full_name, email, chose_own_password=True):
     """The school's first account: a Super Admin, inside the school's own schema.
 
-    `must_change_password` is 0, and that is the difference between this and
-    `admin.create_user`: there, somebody else chose the password and the owner
-    has to replace it. Here the person typed their own at the registration form
-    thirty seconds ago, and asking them to change it immediately is the kind of
-    thing that makes a product feel like it was not written for a person.
+    `must_change_password` turns on WHO CHOSE THE PASSWORD, and getting that
+    round the wrong way is a real hole rather than an inconvenience.
+
+    When the person typed it themselves at a registration form thirty seconds
+    ago, it is 0 — asking them to change it immediately is the kind of thing
+    that makes a product feel like it was not written for a person.
+
+    When the SUPER ADMIN chose it, on the school's behalf, it is 1. That
+    password has been read by somebody at Nickland, written in a handover note
+    and very likely sent over WhatsApp, so it is a password two parties know
+    and the school's administrator must replace it at first sign-in. For this
+    release that is the ONLY way a school comes into existence, so it is also
+    the normal case rather than the exception.
     """
     row = db.one("SELECT id FROM designations WHERE name = 'Super Admin'")
     designation_id = row["id"] if row else None
@@ -303,7 +336,7 @@ def _create_administrator(db, username, password, full_name, email):
         "full_name": full_name,
         "designation_id": designation_id,
         "is_active": 1,
-        "must_change_password": 0,
+        "must_change_password": 0 if chose_own_password else 1,
     })
     # The administrator's own email is deliberately NOT written into the
     # school's `users` table. That table is the offline system's, column for

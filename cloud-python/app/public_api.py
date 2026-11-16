@@ -20,7 +20,8 @@ for enumerating a platform's customers.
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from . import identity, platform_api, ratelimit
+from . import identity
+from . import release, platform_api, ratelimit
 from .billing import devices as device_lib
 from .billing import engine, entitlements, plans as plan_lib
 from .billing import provider as billing_provider
@@ -119,6 +120,13 @@ async def public_register(request: Request):
     # Throttled by source. Registration creates a Postgres schema with
     # eighty-one tables in it, so it is the most expensive unauthenticated
     # route on the platform and the one most worth a limit.
+    # Schools are set up by the Super Admin for this release — see
+    # app/release.py. Refused before the rate limiter and before anything is
+    # written, because the expensive irreversible part of a registration is
+    # creating a Postgres schema with eighty-odd tables in it.
+    if not release.self_registration_enabled():
+        return _err(403, "Schools are set up by Nickland. Get in touch and we "
+                         "will create yours and send you your sign-in details.")
     if ratelimit.limited(request, "register", body.get("email")):
         return _err(429, "Too many attempts. Try again shortly.")
     result = identity.register(_store(request), body, actor="public",

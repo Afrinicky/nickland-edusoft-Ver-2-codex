@@ -11,7 +11,8 @@ const passwords = require('../server/passwords');
 const security = require('./_security');
 const { SUPER_ADMIN, isElevated, isSupervisor } = require('./_portals');
 const hashing = require('./_hashing');
-const { setSetting } = require('../utils/idgen');
+const { setSetting, getSetting } = require('../utils/idgen');
+const release = require('../release');
 
 // ── Failed-login throttling ─────────────────────────────
 //
@@ -173,7 +174,20 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // ── Bootstrap check ───────────────────────────────────
   ipcMain.handle('auth:bootstrap-status', () => {
     const val = db.prepare("SELECT value FROM settings WHERE key = 'bootstrap_done'").get();
-    return { done: val && val.value === 'true' };
+    const done = !!(val && val.value === 'true');
+    // A school is set up online now, so a desktop with nothing in it is NOT a
+    // school waiting to be created — it is a machine waiting to be activated
+    // against one that already exists. The first-run screen needs to know
+    // which, because the two ask the person for completely different things:
+    // one invents an administrator, the other proves they already are one.
+    let anyUser = 0;
+    try { anyUser = db.prepare('SELECT COUNT(*) c FROM users').get().c; } catch (_) {}
+    const activated = !!getSetting(db, 'cloud_school_id', '');
+    return {
+      done,
+      needs_activation: !done && anyUser === 0 && !activated && !release.localSetupEnabled(),
+      local_setup_allowed: release.localSetupEnabled(),
+    };
   });
 
   // ── Create first admin account (bootstrap) ────────────
@@ -182,6 +196,12 @@ module.exports = function registerAuthHandlers(ipcMain, db) {
   // setup is complete — otherwise anyone able to reach this channel could mint
   // themselves a full-access account on a live school database.
   ipcMain.handle('auth:bootstrap', (_e, { fullName, username, password }) => {
+    // Creating a school on a desktop is gone — see electron/release.js. The
+    // channel stays and refuses rather than disappearing, so an older renderer
+    // shows a sentence a school can act on instead of a dead button.
+    if (!release.localSetupEnabled()) {
+      return { ok: false, needs_activation: true, error: release.LOCAL_SETUP_OFF };
+    }
     const done = db.prepare("SELECT value FROM settings WHERE key = 'bootstrap_done'").get();
     const anyUser = db.prepare('SELECT COUNT(*) c FROM users').get().c;
     if ((done && done.value === 'true') || anyUser > 0) {

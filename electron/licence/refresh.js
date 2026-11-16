@@ -112,6 +112,51 @@ async function ensure(db, opts = {}) {
 //
 // On success the machine has its own credential — not the school's shared key
 // — so deactivating it from Billing cuts off this computer and nothing else.
+
+// Create (or refresh) the local account for the administrator who activated
+// this machine. Idempotent: activating twice updates the row rather than
+// failing on the unique username, which is what a school re-activating after a
+// reinstall actually does.
+//
+// Never throws out: a desktop that is attached, licensed and missing its first
+// account is recoverable — the administrator signs in again or the sync brings
+// the staff down — whereas an activation that fails at the last step leaves a
+// seat claimed on the school's subscription for a machine that is not set up.
+function materialiseAdministrator(db, body, password) {
+  const user = body && body.user;
+  const username = user && String(user.username || '').trim().toLowerCase();
+  if (!username || !password) return false;
+
+  const hashing = require('../ipc/_hashing');
+  const hash = hashing.hashPassword(String(password));
+  const designation = String((body.designation || (user && user.designation) || '')).trim();
+
+  // Match the school's own ladder by NAME, because the integer ids are each
+  // database's own and the cloud's id means nothing here. Falls back to Super
+  // Admin: whoever activates a school is its administrator.
+  const row = db.prepare(`
+    SELECT id FROM designations
+     WHERE name = ? OR name IN ('Super Admin', 'Administrator')
+     ORDER BY (name = ?) DESC, name = 'Super Admin' DESC LIMIT 1
+  `).get(designation, designation);
+
+  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+  const mustChange = body.must_change_password ? 1 : 0;
+  if (existing) {
+    db.prepare(`UPDATE users SET password_hash = ?, full_name = ?, designation_id = ?,
+                       is_active = 1, must_change_password = ? WHERE id = ?`)
+      .run(hash, (user.fullName || user.full_name || username), row ? row.id : null,
+           mustChange, existing.id);
+    return true;
+  }
+  db.prepare(`INSERT INTO users (username, password_hash, full_name, designation_id,
+                                 is_active, must_change_password)
+              VALUES (?, ?, ?, ?, 1, ?)`)
+    .run(username, hash, (user.fullName || user.full_name || username),
+         row ? row.id : null, mustChange);
+  return true;
+}
+
 async function activate(db, { email, password, schoolId, label } = {}) {
   const base = (getSetting(db, 'cloud_base_url', '') || '').replace(/\/+$/, '');
   if (!base) return { ok: false, error: 'no_portal', message: 'Enter the school portal address first.' };
@@ -155,6 +200,27 @@ async function activate(db, { email, password, schoolId, label } = {}) {
   setSetting(db, 'school_api_key', body.device_token || '', 'cloud');
   if (body.token) licence.install(db, body.token, body.licence);
 
+  // ── The one account an activated desktop starts with ─────────────────────
+  //
+  // Activation attaches the machine to a school. On its own that leaves a
+  // desktop with a school id, a licence and NOBODY TO SIGN IN AS — the staff
+  // arrive with the first sync, and until then the login screen has no
+  // accounts to accept. The first version of this did exactly that, and
+  // because activation also never marked the installation as set up, the
+  // first-run screen came back on the next launch and asked to activate a
+  // machine that already had.
+  //
+  // So the administrator the cloud just authenticated is materialised locally.
+  // This is NOT the desktop creating a school: the school exists, the Super
+  // Admin made it, and the person's identity has been verified against it
+  // seconds ago. The password is the one they typed, so the local hash is
+  // derived from it and they can sign in offline from here on.
+  try { materialiseAdministrator(db, body, password); } catch (_) { /* below */ }
+
+  // Said last, and only on success: an installation that is attached to a
+  // school is set up, and must stop being offered the first-run screen.
+  setSetting(db, 'bootstrap_done', true, 'system');
+
   return {
     ok: true,
     school: body.school || null,
@@ -164,4 +230,7 @@ async function activate(db, { email, password, schoolId, label } = {}) {
   };
 }
 
-module.exports = { refresh, fetchPublicKey, ensure, endpoint, activate };
+module.exports = {
+  // The local half of activate(), for test/provisioning.js. The network half
+  // needs a live cloud; what it WRITES is what matters and is pinned there.
+  __materialiseAdministratorForTest: materialiseAdministrator, refresh, fetchPublicKey, ensure, endpoint, activate };

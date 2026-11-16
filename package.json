@@ -90,11 +90,33 @@
       }
     ],
     "win": {
-      "target": "nsis",
+      "target": [
+        {
+          "target": "nsis-web",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "resources/icon.ico",
       "artifactName": "Nickland-Edusoft-Setup-${version}.${ext}"
     },
     "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Nickland Edusoft"
+    },
+    "nsisWeb": {
+      "appPackageUrl": "https://downloads.nicklandsales.com/edusoft/",
+      "artifactName": "Nickland-Edusoft-Web-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,

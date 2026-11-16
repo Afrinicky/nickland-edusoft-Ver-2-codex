@@ -609,6 +609,7 @@ jobs:
             dist-app/*.exe
             dist-app/*.blockmap
             dist-app/latest.yml
+            dist-app/*.nsis.7z
           retention-days: 1
           if-no-files-found: error
 

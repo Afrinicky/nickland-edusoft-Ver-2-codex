@@ -26,6 +26,12 @@ import uuid
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# This suite needs two schools in order to prove one cannot reach the other,
+# and it makes them through the registration machinery. Schools are set up by
+# the Super Admin for this release, so the public front door is closed
+# (app/release.py) — the machinery behind it is what this opens, because
+# tenant isolation has to keep being tested whichever door created the tenant.
+os.environ["EDUSOFT_SELF_REGISTRATION"] = "1"
 os.environ.setdefault("ALLOW_DEV_SECRET", "1")
 os.environ["EDUSOFT_QUIET_BOOT"] = "1"
 os.environ["PLATFORM_ADMIN_KEY"] = "pk_test_" + ("x" * 32)

@@ -1226,6 +1226,18 @@ def create_app(store=None) -> FastAPI:
             "device_token": claimed["token"],
             "device": claimed["device"],
             "returning": bool(claimed.get("returning")),
+            # WHO activated. The desktop needs this to create the one local
+            # account it starts with: the administrator has just been
+            # authenticated here, against the school the Super Admin created,
+            # so the desktop can materialise them locally from a verified
+            # identity rather than asking them to invent a second one.
+            #
+            # Without it an activated desktop has a school id, a licence and no
+            # account — nobody to sign in as, and nothing to do until the sync
+            # engine brings the staff down.
+            "user": signed_in.get("user"),
+            "designation": signed_in.get("designation"),
+            "must_change_password": signed_in.get("must_change_password"),
             "licence": lease.get("licence"),
             "token": lease.get("token"),
             "entitlement": signed_in.get("entitlement"),

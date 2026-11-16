@@ -30,6 +30,17 @@ import uuid
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Schools are set up by the Super Admin for this release, so the public
+# website's self-registration front door is CLOSED (app/release.py). What this
+# suite exercises is the registration machinery behind that door — the tenant,
+# the schema, the administrator, the plan, the subscription — which the console
+# still calls on an operator's behalf and which therefore still has to work.
+#
+# So it runs with the door open. test/provisioning.js asserts the opposite: at
+# the release default the public route refuses before anything is written, and
+# an administrator the Super Admin created must replace the password somebody
+# else chose for them.
+os.environ["EDUSOFT_SELF_REGISTRATION"] = "1"
 os.environ.setdefault("ALLOW_DEV_SECRET", "1")
 # Licences are signed in every suite, so the service boots exactly as it does in
 # production rather than down a path only tests take. A FIXED key: a generated

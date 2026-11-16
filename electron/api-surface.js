@@ -166,6 +166,23 @@ function buildApi(invoke) {
       paidSummary:       (termId)              => invoke('payroll:paid-summary', { termId }),
     },
 
+    // ── This installation's licence, and activating it ──────────────────
+    //
+    // All three of these were registered in ipc/cloud_sync.js and named
+    // NOWHERE on this surface, so no renderer and no browser could call them.
+    // Activation — the act by which a desktop attaches itself to a school the
+    // Super Admin already created — was therefore unreachable from the user
+    // interface entirely, which is why the first-run screen still offered to
+    // create a school instead.
+    licence: {
+      status:            ()      => invoke('licence:status'),
+      refresh:           ()      => invoke('licence:refresh'),
+      // { email, password, schoolId? } — the school administrator's own
+      // Edusoft credentials. Answers { ok, school, licence } or, when that
+      // email runs more than one school, { choose: true, schools: [...] }.
+      activate:          (data)  => invoke('licence:activate', data),
+    },
+
     // ── Mobile API host (embedded server for the mobile client) ──
     mobile: {
       status:            ()                    => invoke('mobile:status'),

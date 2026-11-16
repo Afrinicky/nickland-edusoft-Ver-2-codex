@@ -44,8 +44,31 @@ def parent_portal_enabled():
     return _flag("EDUSOFT_PARENT_PORTAL", False)
 
 
+def self_registration_enabled():
+    """Whether a school can create ITSELF from the public website.
+
+    False for this release. Schools are set up online by the Super Admin, who
+    registers the school, does the initial configuration and hands the
+    school's administrator their first credentials. The school then adds its
+    own staff.
+
+    That is a deliberate narrowing rather than a missing feature. Every school
+    on the platform having been set up by somebody at Nickland is what makes
+    "the desktop only ever connects to a setup that already exists" true — and
+    that sentence is the whole reason the desktop no longer has to be able to
+    create a school, which is the single largest simplification in this
+    release.
+
+    The machinery is untouched: identity.register still does the whole act, and
+    the console calls it. What is off is the unauthenticated front door.
+    EDUSOFT_SELF_REGISTRATION=1 reopens it.
+    """
+    return _flag("EDUSOFT_SELF_REGISTRATION", False)
+
+
 def summary():
     """For the boot report, so a deployment says out loud what it is serving."""
     return {
         "parent_portal": parent_portal_enabled(),
+        "self_registration": self_registration_enabled(),
     }
